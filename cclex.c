@@ -12,6 +12,7 @@
 #include "ccchar.h"
 #include "cclex.h"	/* Get stuff shared with CCINP */
 #include <stddef.h>	/* ptrdiff_t */
+int strcmp (const char *, const char *);
 
 /* Imported functions */
 extern SYMBOL *symfind(char *, int);	/* CCSYM */
@@ -22,12 +23,17 @@ extern void pushpp(void);		/* CCPP */
 void lexinit(void);		/* Initializes the lexer (CC) */
 int nextoken(void);	/* Reads and parses next token(CCDECL,CCERR,CCSTMT) */
 void tokpush(int t, SYMBOL *s);	/*Pushes back a token (like ungetc) (",",") */
+long lex_take_gnuattrs(void);
 
 /* Internal functions */
 static int trident(void), trintcon(void), trfltcon(void),
 	trstrcon(void), trchrcon(void);
 static int spcident(char *, char *, int), cchar(char **);
 static int zerotok(void), dzerotok(void), szerotok(void);
+static int strctok(char *), skipgnuattr(void), skipcxxattr(void),
+	attralignval(char *);
+static long gnuattr_pending;
+static char *stripintseps(char *, char *, int);
 
 /* Globals used */
 extern int savelits;	/* Set 0 by CC main parsing loop for each toplevel
@@ -106,6 +112,7 @@ static char slcpool[CPOOLSIZE];	/* String literal character pool */
 void
 lexinit(void)
 {
+    gnuattr_pending = 0;
     tokstack = 0;
     savelits = 0;		/* OK to reset string literal char pool */
     if (!prepf)
@@ -164,6 +171,12 @@ nextoken (void)
 		
 		case T_IDENT:
 		    token = trident();	/* Identifier */
+		    if (token == T_ATTRIBUTE || token == T_ATTRIBUTE2)
+			{
+			if (!skipgnuattr())
+			    error("Bad __attribute__ syntax");
+			continue;
+			}
 		    break;		/* switch */
 	
 
@@ -184,6 +197,11 @@ nextoken (void)
 
 		case T_SCONST:
 		    token = trstrcon();	/* String constant */
+		    break;		/* switch */
+
+		case T_LBRACK:
+		    if (skipcxxattr())
+			continue;
 		    break;		/* switch */
 		    
 		/*
@@ -233,7 +251,7 @@ nextoken (void)
 */
 
 static int
-trident()
+trident(void)
 {
     char ident[IDENTSIZE+4];	/* Identifier big enuf to trigger trunc */
     char *cp;
@@ -248,6 +266,10 @@ trident()
 	int_error("trident: no string");	/* No string for T_IDENT */
 	return zerotok();
 	}
+    if ((!strcmp(cp, "__func__") || !strcmp(cp, "__FUNCTION__")
+      || !strcmp(cp, "__PRETTY_FUNCTION__")) && curfn != NULL)
+	return strctok(curfn->Sname);
+
     if ((csymbol = cursym) != 0)
 	switch (csymbol->Sclass)
 	    {
@@ -255,6 +277,7 @@ trident()
 		return token = (int) csymbol->Stoken;
 	    case SC_MACRO:		/* Paranoia check on CCPP */
 		int_error("trident: Escaped macro %S", csymbol);
+	    /* FALLTHROUGH */
 	    default:		/* Normal symbol, just return identifier */
 #if SYS_CSI /* KAR-11/91, usage bef. init. code */
 	    /* KAR-11/91, added check for v1=v2=v3...; code */
@@ -319,9 +342,7 @@ trident()
 **	First char of "frm" string is '`'.
 */
 static int
-spcident(to, frm, cnt)
-char *to, *frm;
-int cnt;
+spcident(char * to, char * frm, int cnt)
 {
     register int c;
     register char *s = to;
@@ -335,6 +356,7 @@ int cnt;
 		if (!*++frm)	/* Yes, string must stop now! */
 		    break;	/* Won! */
 		/* Drop thru to flag as error */
+	    /* FALLTHROUGH */
 	    case 0:
 		int_error("spcident: Bad string for %s %Q", to, token);
 		return 0;		/* Leave loop */
@@ -343,6 +365,7 @@ int cnt;
 		c = cchar(&frm);	/* Get escaped char */
 		--frm;			/* Back up so ++ gets next */
 					/* and drop thru to default */
+	    /* FALLTHROUGH */
 	    default:
 		if (c == UNDERSCORE_MAPCHR) /* Check symbol chars */
 		    c = '_';
@@ -364,16 +387,314 @@ int cnt;
     return 1;
 }
 
+
 static int
-zerotok()
+attralignval(char *cp)
+{
+    int base, c, d, v;
+
+    if (cp == NULL || *cp == '\0')
+	return 0;
+    base = 10;
+    if (*cp == '0')
+	{
+	++cp;
+	if (*cp == 'x' || *cp == 'X')
+	    {
+	    base = 16;
+	    ++cp;
+	    }
+	else
+	    base = 8;
+	}
+    v = 0;
+    while ((c = (unsigned char)*cp) != '\0')
+	{
+	if (c >= '0' && c <= '9')
+	    d = c - '0';
+	else if (c >= 'a' && c <= 'f')
+	    d = c - 'a' + 10;
+	else if (c >= 'A' && c <= 'F')
+	    d = c - 'A' + 10;
+	else
+	    break;
+	if (d >= base)
+	    break;
+	v = v * base + d;
+	if (v > 4)
+	    return v;
+	++cp;
+	}
+    return v;
+}
+
+static int
+skipgnuattr(void)
+{
+    int t, depth, inaligned;
+    int align;
+    char *name;
+
+    do
+	t = nextpp();
+    while (t == T_WSP || t == T_EOL);
+
+    if (t != T_LPAREN)
+	{
+	pushpp();
+	return 0;
+	}
+
+    depth = 1;
+    inaligned = 0;
+    while (depth > 0)
+	{
+	t = nextpp();
+	if (t == T_EOF)
+	    return 0;
+	if (t == T_LPAREN)
+	    ++depth;
+	else if (t == T_RPAREN)
+	    {
+	    --depth;
+	    if (depth < 3)
+		inaligned = 0;
+	    }
+	else if (t == T_COMMA && depth == 2)
+	    inaligned = 0;
+	else if (t == T_IDENT && depth == 2 && (name = curval.cp) != NULL)
+	    {
+	    inaligned = 0;
+	    if (!strcmp(name, "noreturn") || !strcmp(name, "__noreturn__"))
+		gnuattr_pending |= SF_NORETURN;
+	    else if (!strcmp(name, "noinline") || !strcmp(name, "__noinline__"))
+		gnuattr_pending |= SF_NOINLINE;
+	    else if (!strcmp(name, "packed") || !strcmp(name, "__packed__"))
+		gnuattr_pending |= SF_PACKED;
+	    else if (!strcmp(name, "aligned") || !strcmp(name, "__aligned__"))
+		{
+		/* GCC defaults to maximum useful target alignment when the
+		** argument is omitted.  PDP-10 GCC caps object alignment at
+		** one 36-bit word (four 9-bit C address units).
+		*/
+		gnuattr_pending &= ~SF_ALIGN2;
+		gnuattr_pending |= SF_ALIGN4;
+		inaligned = 1;
+		}
+	    }
+	else if (t == T_ICONST && depth == 3 && inaligned
+	      && curval.cp != NULL)
+	    {
+	    align = attralignval(curval.cp);
+	    if (align > 0)
+		{
+		gnuattr_pending &= ~(SF_ALIGN2 | SF_ALIGN4);
+		if (align == 2)
+		    gnuattr_pending |= SF_ALIGN2;
+		else if (align > 2)
+		    gnuattr_pending |= SF_ALIGN4;
+		}
+	    }
+	}
+    return 1;
+}
+
+long
+lex_take_gnuattrs(void)
+{
+    long flags = gnuattr_pending;
+    gnuattr_pending = 0;
+    return flags;
+}
+
+static int
+skipcxxattr(void)
+{
+    int t, last;
+
+    t = nextpp();
+    if (t != T_LBRACK)
+	{
+	pushpp();
+	return 0;
+	}
+
+    last = 0;
+    for (;;)
+	{
+	t = nextpp();
+	if (t == T_EOF)
+	    {
+	    error("Unterminated [[attribute]]");
+	    return 1;
+	    }
+	if (last == T_RBRACK && t == T_RBRACK)
+	    return 1;
+	last = t;
+	}
+}
+
+static char *
+stripintseps(char * src, char * buf, int siz)
+{
+    char *d = buf;
+
+    while (*src && siz > 1)
+	{
+	if (*src != '\'')
+	    {
+	    *d++ = *src;
+	    --siz;
+	    }
+	++src;
+	}
+    *d = '\0';
+    if (*src)
+	error("Integer constant too long");
+    return buf;
+}
+
+static int
+zerotok(void)
 {
     constant.ctype = inttype;
     constant.cvalue = 0;
+    constant.cwide = 0;
+    constant.chi = 0;
     return token = T_ICONST;
 }
 
 static int
-dzerotok()
+strctok(char * s)
+{
+    if (savelits++ == 0)
+	slcreset();
+    constant.ctype = strcontype;
+    constant.csptr = slcbeg();
+    while (*s)
+	(void)slcput(*s++);
+    if ((constant.cslen = slcend()) < 0)
+	{
+	error("Too many string literal chars, internal overflow");
+	return szerotok();
+	}
+    return token = T_SCONST;
+}
+
+#define WD36MASK ((unsigned long long)0777777777777ULL)
+#define DIMODE_LO35MASK ((unsigned long long)0377777777777ULL)
+
+#ifdef __COMPILER_KCC__
+static void
+widefromull(unsigned long long acc, INT *hi, INT *lo)
+{
+    constant.cwide = 1;
+    *lo = (INT)(acc & DIMODE_LO35MASK);
+    *hi = (INT)((acc >> 35) & WD36MASK);
+    constant.cvalue = *lo;
+    constant.chi = *hi;
+}
+
+static unsigned long long
+parsewide_decimal(char *cp)
+{
+    unsigned long long acc = 0;
+
+    while (isdigit(*cp))
+        {
+        acc = acc * 10ULL + (unsigned long long)(*cp - '0');
+        cp++;
+        }
+    return acc;
+}
+
+static unsigned long long
+parsewide_hex(char *cp)
+{
+    unsigned long long acc = 0;
+    int c;
+
+    while (isxdigit(c = *cp))
+        {
+        acc = (acc << 4) + (unsigned long long)toint((char)c);
+        cp++;
+        }
+    return acc;
+}
+
+static unsigned long long
+parsewide_binary(char *cp)
+{
+    unsigned long long acc = 0;
+
+    while (*cp == '0' || *cp == '1')
+        {
+        acc = (acc << 1) + (unsigned long long)(*cp - '0');
+        cp++;
+        }
+    return acc;
+}
+#else
+/*
+** Accumulate a target 71-bit integer without requiring a host integer wider
+** than 64 bits.  The low target word has 35 value bits and the high word 36.
+** Bases accepted by C integer tokens are at most 16, so each individual
+** multiply fits comfortably in hosted unsigned INT.
+*/
+static int
+wideaccum(INT *hip, INT *lop, int base, int digit)
+{
+    unsigned INT hi, lo, prod, carry;
+
+    hi = (unsigned INT)*hip;
+    lo = (unsigned INT)*lop;
+    prod = lo * (unsigned INT)base + (unsigned INT)digit;
+    carry = prod >> 35;
+    lo = prod & (unsigned INT)DIMODE_LO35MASK;
+    prod = hi * (unsigned INT)base + carry;
+    if (prod > (unsigned INT)WD36MASK)
+        return 0;
+    *hip = (INT)prod;
+    *lop = (INT)lo;
+    return 1;
+}
+
+static int
+parsewide_words(char *cp, int base, INT *hip, INT *lop)
+{
+    INT hi, lo;
+    int c, digit, ok;
+
+    hi = lo = 0;
+    ok = 1;
+    while ((c = *cp) != 0)
+        {
+        if (base == 16)
+            {
+            if (!isxdigit(c))
+                break;
+            digit = toint((char)c);
+            }
+        else
+            {
+            if (!isdigit(c))
+                break;
+            digit = c - '0';
+            if (digit >= base)
+                break;
+            }
+        if (!wideaccum(&hi, &lo, base, digit))
+            ok = 0;
+        cp++;
+        }
+    *hip = hi;
+    *lop = lo;
+    return ok;
+}
+#endif
+
+static int
+dzerotok(void)
 {
     constant.ctype = dbltype;
     constant.Cdouble = 0.0;
@@ -382,22 +703,26 @@ dzerotok()
 
 /* TRINTCON() - Transform PP-number integer constant
 */
-#define SIGN ((unsigned long)1<<(TGSIZ_LONG-1))
-#define MAXPOSLONG ((long)((~(unsigned long)0)>>1))
+#define SIGN ((unsigned INT)1<<(TGSIZ_LONG-1))
+#define MAXPOSLONG ((INT)((~(unsigned INT)0)>>1))
 
 static int
-trintcon()
+trintcon(void)
 {
     register char *cp;
     register int c;
-    register long v = 0;
+    register INT v = 0;
     int ovfl = 0;
+    char sepbuf[256];
+    char *numstart;
 
     if ((cp = curval.cp) == 0)
 	{
 	int_error("trintcon: no str");
 	return zerotok();
 	}
+    cp = stripintseps(cp, sepbuf, sizeof(sepbuf));
+    numstart = cp;
 
     if ((c = *cp) == '0')		/* Octal/Hex prefix? */
 	{
@@ -409,21 +734,42 @@ trintcon()
 		v = toint((char) c);			// FW KCC-NT
 		while (isxdigit(c = *++cp))
 		    {
-		    if (v & (017 << (TGSIZ_LONG-4)))
+		    if (v & ((unsigned INT)017 << (TGSIZ_LONG-4)))
 			ovfl++;
-		    v = ((unsigned long)v << 4) + toint((char) c); // FW KCC-NT
+		    v = ((unsigned INT)v << 4) + toint((char) c); // FW KCC-NT
 		    }
 		}
 	    else
 		error("Illegal hex const %s", curval.cp);
 	    }
+	else if (c == 'b' || c == 'B')	/* Binary (base 2), C23/GNU */
+	    {
+	    c = *++cp;
+	    if (c == '0' || c == '1')
+		{
+		v = c - '0';
+		while ((c = *++cp) == '0' || c == '1')
+		    {
+		    if (v & ((unsigned INT)01 << (TGSIZ_LONG-1)))
+			ovfl++;
+		    v = ((unsigned INT)v << 1) + c - '0';
+		    }
+		}
+	    else
+		error("Illegal binary const %s", curval.cp);
+	    if (isdigit(c))
+		{
+		error("Binary constant cannot have digits other than 0 or 1");
+		return zerotok();
+		}
+	    }
 	else			/* Octal (base 8) */
 	    {
 	    while (isodigit(c))
 		{
-		if (v & (07 << (TGSIZ_LONG-3)))
+		if (v & ((unsigned INT)07 << (TGSIZ_LONG-3)))
 		    ovfl++;
-		v = ((unsigned long)v << 3) + c - '0';
+		v = ((unsigned INT)v << 3) + c - '0';
 		c = *++cp;
 		}
 	    if (isdigit(c))		/* Helpful msg for common error */
@@ -443,7 +789,7 @@ trintcon()
 		v = v*10 + c - '0';	/* Can't overflow, do it fast */
 	    else			/* Slow unsigned multiply loop */
 		{
-		unsigned long pv, uv = v;
+		unsigned INT pv, uv = v;
 		do
 		    {
 		    pv = uv;			/* Remember prev value */
@@ -479,17 +825,25 @@ trintcon()
     *				  MVS, CSI, 6/27/90
     */
 
-    if (ovfl)
-	{
-	error("Integer constant overflow");
-	constant.ctype = ulongtype;		/* Set to biggest type */
-	}
+    constant.cwide = 0;
+    constant.chi = 0;
+
     if (c)
 	{
 	if ((c = toupper((char) c)) == 'L')	// FW KCC-NT
 	    {
 	    if (!*++cp)
 		constant.ctype = (ovfl||(v&SIGN)) ? ulongtype:longtype;
+	    else if (toupper(*cp) == 'L')
+		{
+		++cp;
+		if (!*cp)
+		    constant.ctype = (ovfl||(v&SIGN)) ? ulonglongtype:longlongtype;
+		else if (toupper(*cp) == 'U' && !*++cp)
+		    constant.ctype = ulonglongtype;
+		else
+		    c = -1;
+		}
 	    else if (toupper(*cp++) == 'U')
 		constant.ctype = ulongtype;
 	    else
@@ -499,8 +853,16 @@ trintcon()
 	    {
 	    if (!*++cp)
 		constant.ctype = (ovfl) ? ulongtype : uinttype;
-	    else if (toupper(*cp++) == 'L')
-		constant.ctype = ulongtype;
+	    else if (toupper(*cp) == 'L')
+		{
+		++cp;
+		if (!*cp)
+		    constant.ctype = (ovfl) ? ulongtype : longtype;
+		else if (toupper(*cp) == 'L' && !*++cp)
+		    constant.ctype = ulonglongtype;
+		else
+		    c = -1;
+		}
 	    else
 		c = -1;		/* Bad */
 	    }
@@ -517,17 +879,74 @@ trintcon()
 	    error("Bad integer constant suffix");
 	}
 
-    constant.cvalue = v;		/* Now set value */
+    if (constant.ctype == longlongtype || constant.ctype == ulonglongtype)
+	{
+	char *start = numstart;
+#ifdef __COMPILER_KCC__
+	unsigned long long acc;
+
+	if (*start == '0' && (start[1] == 'x' || start[1] == 'X'))
+	    acc = parsewide_hex(start + 2);
+	else if (*start == '0' && (start[1] == 'b' || start[1] == 'B'))
+	    acc = parsewide_binary(start + 2);
+	else if (*start == '0')
+	    {
+	    unsigned long long uv = 0;
+	    char *dp = start;
+
+	    while (isodigit(*dp))
+		uv = (uv << 3) + (unsigned long long)(*dp++ - '0');
+	    acc = uv;
+	    }
+	else
+	    acc = parsewide_decimal(start);
+	widefromull(acc, &constant.chi, &constant.cvalue);
+#else
+	{
+	INT hi, lo;
+	int base, ok;
+
+	if (*start == '0' && (start[1] == 'x' || start[1] == 'X'))
+	    { base = 16; start += 2; }
+	else if (*start == '0' && (start[1] == 'b' || start[1] == 'B'))
+	    { base = 2; start += 2; }
+	else if (*start == '0')
+	    base = 8;
+	else
+	    base = 10;
+	ok = parsewide_words(start, base, &hi, &lo);
+	if (!ok)
+	    error("Integer constant overflow");
+	constant.cwide = 1;
+	constant.chi = hi & (INT)WD36MASK;
+	constant.cvalue = lo & (INT)DIMODE_LO35MASK;
+	}
+#endif
+	}
+    else
+	{
+	if (ovfl)
+	    {
+	    error("Integer constant overflow");
+	    constant.ctype = ulongtype;
+	    }
+	constant.cvalue = v;
+	}
     return token = T_ICONST;
 }
 
 /* TRFLTCON() - Transform floating-point PP-number constant
 */
+#ifdef __COMPILER_KCC__
 static long maxdbl[2] = {MAXPOSLONG, MAXPOSLONG};
-#define MAXPOSDOUBLE (*(double *)maxdbl)	/* Gross hack for now */
+#define MAXPOSDOUBLE (*(double *)maxdbl)	/* Native 72-bit double layout. */
+#else
+#include <float.h>
+#define MAXPOSDOUBLE DBL_MAX
+#endif
 
 static int
-trfltcon()
+trfltcon(void)
 {
     register char *cp;
     register int c;
@@ -656,7 +1075,7 @@ trfltcon()
 static
 int
 trstrcon (void)
-    {
+{
     char*	cp;
     int		wideflg, escval;
 
@@ -720,6 +1139,7 @@ trstrcon (void)
 				break;	/* Hurray, resume main loop! */
 				/* Everything's been set up... */
 		    /* Can't concatenate next literal, drop thru */
+			/* FALLTHROUGH */
 			default:
 			    pushpp();		/* Push current token back */
 			    cp = NULL;		/* Say we're done */
@@ -782,7 +1202,7 @@ slcresize()
 #endif
 
 static int
-szerotok()
+szerotok(void)
 {
 #if 0	/* 5/91 Dynamic tables */
     constant.csptr = 0;		/* Set constant string ptr */
@@ -820,7 +1240,7 @@ trchrcon (void)
     val = 0;
     for (;;)
 	{
-	if (val & (-1<<(TGSIZ_INT-TGSIZ_CHAR)))
+	if (val & ~(((unsigned long)1 << (TGSIZ_INT-TGSIZ_CHAR)) - 1))
 	    error("Character constant overflow");
 	val <<= TGSIZ_CHAR;
 	val |= cchar(&cp) & ((1<<TGSIZ_CHAR)-1);	/* Put into word */
@@ -915,7 +1335,7 @@ cchar (char **acp)
 
 		    while (isxdigit (*++cp))
 			{
-			if (c & (017 << (TGSIZ_INT - 4)))
+			if (c & ((unsigned INT)017 << (TGSIZ_INT - 4)))
 			    ovfl++;
 
 			c = ((unsigned) c << 4) + toint (*cp);
@@ -972,6 +1392,7 @@ cchar (char **acp)
 
 		/* Else not doing KCC extensions, drop through to complain. */
 
+	    /* FALLTHROUGH */
 	    default:
 		error ("Unknown escape char (ignoring backslash): '\\%c'",*cp);
 	    }

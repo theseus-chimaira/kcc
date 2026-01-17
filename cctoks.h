@@ -98,6 +98,7 @@ tokdef(T_MACARG,0,	TKTY_NULL, 0)	/* Expand arg (in macro body) */
 tokdef(T_MACSTR,0,	TKTY_NULL, 0)	/* Stringize arg (in macro body) */
 tokdef(T_MACINS,0,	TKTY_NULL, 0)	/* Insert arg (in macro body) */
 tokdef(T_MACCAT,0,	TKTY_NULL, 0)	/* Concatenate op (in macro body) */
+tokdef(T_MACEMP,0,	TKTY_NULL, 0)	/* Empty ## argument placemarker */
 /* 10 */
 tokdef(T_MACEOF,0,	TKTY_NULL, 0)	/* Macro EOF reached */
 tokdef(T_ICONST,0,	TKTY_NULL, 0)	/* PP-number integer const */
@@ -138,7 +139,7 @@ tokdef(N_SCONST,0,TKTY_PRIMARY,	16)	/* String literal constant */
 tokdef(N_PCONST,0,TKTY_PRIMARY,	16)	/* Pointer-type constant */
 tokdef(N_VCONST,0,TKTY_PRIMARY,	16)	/* Void-type "constant" expr */
 tokdef(N_ECONST,0,TKTY_PRIMARY,	16)	/* Enum-type constant */
-tokdef(N_ACONST,0,TKTY_PRIMARY,	16)	/* Special - address constant??? */
+tokdef(N_ACONST,0,TKTY_PRIMARY,	16)	/* GNU label address (&&label) */
 /* 40 */
 /* no special op for subscript */	/* [k]	subscripting */
 tokdef(N_FNCALL,0,TKTY_PRIMARY,	16)	/* f()	function call */
@@ -214,12 +215,28 @@ tokdef(T_UNSIGNED,"unsigned",	TKTY_RWTYPE, 0)
 tokdef(T_SIGNED,"signed",	TKTY_RWTYPE, RWF_ANSI)	/* (ANSI addition) */
 tokdef(T_CONST,	"const",	TKTY_RWTYPE, RWF_ANSI)	/* (ANSI addition) */
 tokdef(T_VOLATILE,"volatile",	TKTY_RWTYPE, RWF_ANSI)	/* (ANSI addition) */
+tokdef(T_RESTRICT,"restrict",	TKTY_RWTYPE, RWF_ANSI)	/* C99: ignored qualifier */
+tokdef(T_BOOL,	"_Bool",	TKTY_RWTYPE, RWF_ANSI)	/* C99 boolean type */
+tokdef(T_INLINE,"inline",	TKTY_RWTYPE, RWF_ANSI)	/* C99: ignored function spec */
+tokdef(T_NORETURN,"_Noreturn",	TKTY_RWTYPE, RWF_ANSI)	/* C11: ignored function spec */
+tokdef(T_EXTENSION,"__extension__",TKTY_RWTYPE, RWF_KCC)	/* GNU: ignored extension marker */
+tokdef(T_ATTRIBUTE,"__attribute__",TKTY_RWTYPE, RWF_KCC)	/* GNU: ignored attribute marker */
+tokdef(T_ATTRIBUTE2,"__attribute",TKTY_RWTYPE, RWF_KCC)	/* GNU alias */
+tokdef(T_TYPEOF,"typeof",	TKTY_RWTYPE, RWF_KCC)	/* GNU typeof */
+tokdef(T_TYPEOF2,"__typeof",	TKTY_RWTYPE, RWF_KCC)	/* GNU alias */
+tokdef(T_TYPEOF3,"__typeof__",TKTY_RWTYPE, RWF_KCC)	/* GNU alias */
+tokdef(T_RESTRICT2,"__restrict",	TKTY_RWTYPE, RWF_KCC)	/* GNU alias */
+tokdef(T_RESTRICT3,"__restrict__",TKTY_RWTYPE, RWF_KCC)	/* GNU alias */
+tokdef(T_INLINE2,"__inline",	TKTY_RWTYPE, RWF_KCC)	/* GNU alias */
+tokdef(T_INLINE3,"__inline__",	TKTY_RWTYPE, RWF_KCC)	/* GNU alias */
 tokdef(T_CHAR6,	"_KCCtype_char6",TKTY_RWTYPE, RWF_KCC)	/* (KCC extension) */
 /* 100 */
 tokdef(T_CHAR7,	"_KCCtype_char7",TKTY_RWTYPE, RWF_KCC)	/* (KCC extension) */
 tokdef(T_CHAR8,	"_KCCtype_char8",TKTY_RWTYPE, RWF_KCC)	/* (KCC extension) */
 tokdef(T_CHAR9,	"_KCCtype_char9",TKTY_RWTYPE, RWF_KCC)	/* (KCC extension) */
 tokdef(T_CHAR18,"_KCCtype_char18",TKTY_RWTYPE, RWF_KCC)	/* (KCC extension) */
+tokdef(T_CHAR16,"_KCCtype_char16",TKTY_RWTYPE, RWF_KCC)	/* exact 16-bit KCC extension */
+tokdef(T_INT32,"_KCCtype_int32",TKTY_RWTYPE, RWF_KCC)	/* exact 32-bit KCC extension */
 
 #if SYS_CSI
 /* Type qualifiers for functions (KCC extensions) */
@@ -231,6 +248,8 @@ tokdef(T_INTERRUPT, "interrupt",TKTY_RWTYPE, RWF_KCC) /* FW 2A(52) */
 
 
 /* Reserved-Word: Storage Class */
+tokdef(T_STATIC_ASSERT,"_Static_assert",TKTY_RWSC, RWF_ANSI)	/* C11 declaration */
+tokdef(T_STATIC_ASSERT2,"static_assert",TKTY_RWSC, RWF_ANSI)	/* C23 spelling */
 tokdef(T_AUTO,	"auto",		TKTY_RWSC, 0)
 tokdef(T_EXTERN,"extern",	TKTY_RWSC, 0)
 tokdef(T_REGISTER,"register",	TKTY_RWSC, 0)
@@ -262,6 +281,7 @@ tokdef(Q_MUUO,	"imuuo",	TKTY_RWOP, RWF_KCC+16)  /* muuo()-KAR 12/90 */
 
 tokdef(Q_ASM,	"asm",		TKTY_RWOP, RWF_KCC+16)	/* asm() */
 tokdef(T_OFFSET,"_KCC_offsetof",TKTY_RWOP,RWF_ANSI+RWF_KCC+16) /* offsetof()*/
+tokdef(T_JFFO,	"_KCC_jffo",	TKTY_RWOP, RWF_KCC+16)	/* jffo(expr,label) */
 tokdef(T_SYMVAL,"_KCCx",	TKTY_RWOP, RWF_KCC+16)	/* Placeholder */
 tokdef(T_SYMFND,"_KCCy",	TKTY_RWOP, RWF_KCC+16)	/* Placeholder */
 
@@ -275,6 +295,8 @@ tokdef(N_DATA,	0,	TKTY_NULL, 0)	/* Data decl list, contains N_IZs */
 tokdef(N_IZ,	0,	TKTY_NULL, 0)	/* Identifier decl (w/optional init)*/
 tokdef(N_IZLIST,0,	TKTY_NULL, 0)	/* Initializer list (under N_IZ) */
 tokdef(N_LITIZ,0,	TKTY_NULL, 0)	/* Literal izer list */
+tokdef(N_COMPLIT,0, TKTY_PRIMARY, 0) /* C99 compound literal */
+tokdef(N_STMTEXPR,0,TKTY_PRIMARY, 0) /* GNU ({ statements; expr; }) */
 tokdef(N_NODE,	0,	TKTY_NULL, 0)	/* Random substructure node op */
 tokdef(N_ERROR,	0,	TKTY_NULL, 0)	/* Error placeholder (stmt or expr) */
 

@@ -1,0 +1,36 @@
+# make(1) build outputs
+/kcc
+*.o
+
+# kcc -S self-compile intermediates (runtime .s sources are tracked)
+/cc.s
+/ccasmb.s
+/cccreg.s
+/cccse.s
+/cccode.s
+/ccdata.s
+/ccdbug.s
+/ccdecl.s
+/ccerr.s
+/cceval.s
+/ccgen.s
+/ccgen1.s
+/ccgen2.s
+/ccgswi.s
+/ccjskp.s
+/cclex.s
+/ccnode.s
+/ccout.s
+/ccpp.s
+/ccreg.s
+/ccstmt.s
+/ccsym.s
+/cctype.s
+/ccopt.s
+
+# source-tar output
+/kcc-source.tar.gz
+
+# editor/reject leftovers
+*~
+*.rej

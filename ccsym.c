@@ -11,6 +11,7 @@
 #include "cc.h"
 #include "ccchar.h"
 #include <stdlib.h>	/* calloc, realloc, free */
+#include <string.h>
 
 /* Internal Data:
  *
@@ -25,8 +26,8 @@ static char scmap[] = {
 };
 
 /* Exported functions - Symbol stuff */
-void savesymtab();		/* CC */
-void syminit();
+void savesymtab(SYMBOL *);		/* CC */
+void syminit(void);
 SYMBOL *symfind(char *, int);
 SYMBOL *symftag(SYMBOL *), *symfmember(SYMBOL *, SYMBOL *),
 	*symflabel(SYMBOL *);
@@ -96,6 +97,7 @@ static int symdeb = 0;
 #endif
 
 #if 0
+/*
 		SYMBOL TABLE STRUCTURE
 
 The "symbol table" is implemented as a collection of dynamically allocated
@@ -207,6 +209,7 @@ Another external declaration of the same identifier needs to refer to
 the same symbol, which is why symfxext() exists to find it.  External
 declarations are handled in two places: CCDECL's funchk() and dodecl().
 
+*/
 #endif
 
 SYMBOL *lsymhead;	/* NULL at top level, else points to head of
@@ -236,9 +239,10 @@ static INT lastwd;			/* Mask for last byte in word */
 /* SYMINIT - Initialize symbol table stuff.
 */
 void
-syminit()
+syminit(void)
 {
-    register int i, f;
+    register int f;
+    size_t i;
     union
 	{
 	INT wd;
@@ -251,7 +255,7 @@ syminit()
     chmask[0] = 0;
     for (mask.wd = 0, i = 0; i < sizeof(INT); ++i)
 	{
-	mask.ch[i] = (char) ~0;				// FW KCC-NT
+	mask.ch[i] = (char) ~0;				/* FW KCC-NT */
 	chmask[i+1] = mask.wd;
 	}
     lastwd = ~chmask[sizeof(INT)-1];
@@ -299,8 +303,7 @@ syminit()
 }
 
 static void
-inisymlist(ahead, atail)
-SYMBOL **ahead, **atail;
+inisymlist(struct symbol ** ahead, struct symbol ** atail)
 {
     SYMBOL *s, *head;
 
@@ -349,9 +352,7 @@ SYMBOL **ahead, **atail;
 **	an identifier string that was truncated.
 */
 SYMBOL *
-symfind(str, creatf)
-char *str;
-int creatf;
+symfind(char * str, int creatf)
 {
     register SYMBOL *sym;
     int trunc;
@@ -389,8 +390,7 @@ int creatf;
 **		CCOUT: "`$$$CRT" and "`$$$CPU"
 */
 SYMBOL *
-symfidstr(str)
-char *str;
+symfidstr(char * str)
 {
     register SYMBOL *sym;
 
@@ -410,8 +410,7 @@ char *str;
 ** not an identifier string.
 */
 SYMBOL *
-symfnext(osym)
-SYMBOL *osym;
+symfnext(struct symbol * osym)
 {
     register SYMBOL *sym = osym;
     BUGMSG(("symfnext \"%s\"\n", sym->Sname))
@@ -430,8 +429,7 @@ SYMBOL *osym;
 **	than taking an identifier string.
 */
 SYMBOL *
-findgsym(osym)
-SYMBOL *osym;
+findgsym(struct symbol * osym)
 {
     register SYMBOL *sym = osym;
     BUGMSG(("findgsym \"%s\"\n", sym->Sname))
@@ -450,14 +448,12 @@ SYMBOL *osym;
 ** SYMFTAG - Find a struct/union/enum tag symbol.
 ** SYMFMEMBER - Find a structure member symbol.  Takes tag arg also.
 */
-SYMBOL *symflabel(sym)
-SYMBOL *sym;
+SYMBOL *symflabel(struct symbol * sym)
 {
     return symfflag(sym, SF_LABEL);
 }
 
-SYMBOL *symftag(sym)
-SYMBOL *sym;
+SYMBOL *symftag(struct symbol * sym)
 {
     return symfflag(sym, SF_TAG);
 }
@@ -469,8 +465,7 @@ SYMBOL *sym;
 **	we can skip the initial hash!
 */
 SYMBOL *
-symfflag(sym, flag)
-SYMBOL *sym;
+symfflag(struct symbol * sym, int flag)
 {
     register SYMBOL *s = sym;
     BUGMSG(("symfflag \"%s\"\n", s->Sname))
@@ -495,8 +490,7 @@ SYMBOL *sym;
 }
 
 SYMBOL *
-symfmember(sym, tag)
-SYMBOL *sym, *tag;
+symfmember(struct symbol * sym, struct symbol * tag)
 {
     register SYMBOL *s = sym;
     BUGMSG(("symfmember \"%s\"\n", s->Sname))
@@ -532,8 +526,7 @@ SYMBOL *sym, *tag;
 ** Only invoked by CCDECL's funchk() and dodecl().
 */
 SYMBOL *
-symfxext(sym)
-SYMBOL *sym;
+symfxext(struct symbol * sym)
 {
     register SYMBOL *s = sym;
     BUGMSG(("symfxext \"%s\"\n", s->Sname))
@@ -555,8 +548,7 @@ SYMBOL *sym;
 /*	free a symbol table location      */
 /* -------------------------------------- */
 void
-freesym(s)
-SYMBOL *s;
+freesym(struct symbol * s)
 {
     register SYMBOL *sym;
     int h;
@@ -590,8 +582,7 @@ SYMBOL *s;
 */
 
 SYMBOL *
-creatsym(id)
-char *id;
+creatsym(char * id)
 {
     SYMBOL *s;
     BUGMSG(("creatsym %s \"%s\"", (lsymhead?"local":"global"), id))
@@ -605,8 +596,7 @@ char *id;
 /* SYMGCREAT - create a global symbol table entry
 */
 SYMBOL *
-symgcreat(id)
-char *id;
+symgcreat(char * id)
 {
     BUGMSG(("symgcreat \"%s\"", id))
     return mksym(id, &symtail);
@@ -617,8 +607,7 @@ char *id;
 ** a new identifier, and it later needs to be made local instead.
 */
 static void
-makelsym(s)
-SYMBOL *s;
+makelsym(struct symbol * s)
 {
     /* Remove from global list */
     if (s == symtail)		/* If sym is most recent one on global list, */
@@ -641,8 +630,7 @@ SYMBOL *s;
 **	function prototype.
 */
 static void
-makegsym(s)
-SYMBOL *s;
+makegsym(struct symbol * s)
 {
     /* Remove from local list */
     if (s == loctail)		/* If sym is most recent one on global list, */
@@ -678,16 +666,14 @@ SYMBOL *s;
 ** these routines are called!
 */
 SYMBOL *
-uniqsym(s)
-SYMBOL *s;
+uniqsym(struct symbol * s)
 {
     if (s->Sclass != SC_UNDEF)	/* If sym is already defined, */
 	s->Srefs--;		/* correct its ref count. */
     return symqcreat(s);	/* Now create it quickly */
 }
 SYMBOL *
-symqcreat(s)
-SYMBOL *s;
+symqcreat(struct symbol * s)
 {
     if (s->Sclass != SC_UNDEF)	/* If sym already exists, */
 
@@ -711,8 +697,7 @@ SYMBOL *s;
  *	      if symbol is already defined, returns its address (ie. TRUE).
  */
 SYMBOL *
-isdupsym(sym)
-SYMBOL *sym;
+isdupsym(struct symbol * sym)
 {
     SYMBOL *ls;
 
@@ -741,9 +726,7 @@ SYMBOL *sym;
 **	Symbol will be added to whatever list is provided (locsym or symtail).
 */
 static SYMBOL *
-mksym(id, tailptr)
-char *id;
-SYMBOL **tailptr;
+mksym(char * id, struct symbol ** tailptr)
 {
     register SYMBOL *sym;
 
@@ -794,8 +777,7 @@ symmk(SYMBOL *s, int hval, SYMBOL **tailptr) /* Pre-computed hash value */
 ** Always returns its arg, for convenience.
 */
 SYMBOL *
-shmacsym(sym)
-SYMBOL *sym;
+shmacsym(struct symbol * sym)
 {
     register SYMBOL *s, *prev = NULL;
     int n;
@@ -818,8 +800,7 @@ SYMBOL *sym;
 /* GETSYM - allocate a symbol entry.
 */
 static SYMBOL *
-getsym(tailptr)
-SYMBOL **tailptr;
+getsym(struct symbol ** tailptr)
 {
     SYMBOL *newptr;
 
@@ -842,8 +823,7 @@ SYMBOL **tailptr;
 /* RETSYM - De-allocate a symbol entry.
 */
 static void
-retsym(syment)
-SYMBOL *syment;
+retsym(struct symbol * syment)
 {
     if (syment == symtail)
 	symtail = syment->Sprev;
@@ -862,8 +842,7 @@ SYMBOL *syment;
 **	Does not copy Snhash, Sprev, Snext, or Srefs.
 */
 void
-copysym(s,t)
-SYMBOL *s, *t;
+copysym(struct symbol * s, struct symbol * t)
 {			/* Use struct assignment since have unions inside */
     s->Scontents = t->Scontents;
 }
@@ -888,14 +867,9 @@ char *s, *t;
 **	Can do without count since symbol strings are null-terminated
 */
 static int
-symcmp(s1, s2)
-SYMBOL *s1, *s2;
+symcmp(struct symbol * s1, struct symbol * s2)
 {
-    register INT *p1 = s1->Sidwds, *p2 = s2->Sidwds;
-    for (; *p1 == *p2; ++p1, ++p2)	/* Do word compare */
-	if ((*p1 & lastwd) == 0)
-	    return 1;
-    return 0;
+    return strcmp(s1->Sname, s2->Sname) == 0;
 }
 
 
@@ -905,13 +879,11 @@ SYMBOL *s1, *s2;
 **	Bonus points: puts hash value in Svalue!
 */
 static int
-idcpy(s, cp)
-SYMBOL *s;
-char *cp;
+idcpy(struct symbol * s, char * cp)
 {
     register int i = IDENTSIZE;
     register char *to = s->Sname;
-    register int hash;
+    register unsigned int hash;
 
     if ((hash = *to = *cp) != 0)
 	{
@@ -927,16 +899,8 @@ char *cp;
 		}
 	}
 
-    /* Zap all remaining bits in last word. "i" has # bytes left, not
-    ** counting the terminating null char.  Get # bytes untouched in last wd.
-    */
-    if ((i = (IDENTSIZE - (i-1)) % sizeof(INT)) != 0)	/* # bytes in last word */
-#if __MSDOS__
-	*(INT *) (to-(i - 1))
-#else
-	*(INT *)to
-#endif
-		&= chmask[i];		/* Zap em if any */
+    while (--i > 0)
+	*++to = '\0';
     s->Svalue = hash & (MAXHSH-1);	/* Return hash value */
     return 0;				/* And say identifier length was OK */
 }
@@ -946,12 +910,12 @@ char *cp;
 **	The MAXHSH macro must have a value of 2^N.
 */
 int
-hash(s)
-register char *s;
+hash(char * s)
 {
-    register int i, count;
+    register unsigned int i;
+    register int count;
 
-    if ((i = *s) != 0)
+    if ((i = (unsigned char)*s) != 0)
 	{
 	count = IDENTSIZE-1;
 	while (--count > 0 && *++s)
@@ -963,13 +927,12 @@ register char *s;
 /* SYMHASH - Compute hash value for a symbol.
 */
 int
-symhash(s)
-SYMBOL *s;
+symhash(struct symbol * s)
 {
     register char *cp = s->Sname;
-    register int i;
+    register unsigned int i;
 
-    if ((i = *cp) != '\0')
+    if ((i = (unsigned char)*cp) != '\0')
 	while (*++cp)
 	    i += i + *cp;
     return (i & (MAXHSH-1));
@@ -985,7 +948,7 @@ SYMBOL *s;
 **	Only called by CCSTMT's compound() and CCDECL's funcdef().
 */
 SYMBOL *
-beglsym()
+beglsym(void)
 {
     SYMBOL *retsym;
     BUGMSG(("beglsym %lo => %lo\n", (INT) lsymhead, (INT) loctail))
@@ -1003,8 +966,7 @@ beglsym()
 **	Only called by CCSTMT's compound().
 */
 void
-endlsym(prevptr)
-SYMBOL *prevptr;
+endlsym(struct symbol * prevptr)
 {
     register SYMBOL *sym, *s;
 
@@ -1098,8 +1060,7 @@ SYMBOL *prevptr;
 **	but the top level parser in CCDECL also uses it for error recovery.
 */
 void
-ridlsym(prevptr)
-SYMBOL *prevptr;
+ridlsym(struct symbol * prevptr)
 {
     SYMBOL *beg;
 
@@ -1147,6 +1108,7 @@ SYMBOL *prevptr;
 		break;
 	    case SC_ULABEL:			 /* Undefined label? (fall through) */
 		error("Goto label %S never defined", loctail);
+	    /* FALLTHROUGH */
 	    case SC_ISTATIC:
 		freelabel(loctail->Ssym);	/* Flush no longer useful label */
 		break;
@@ -1222,7 +1184,7 @@ int	    maptused;	/* # elements actually used */
 static
 void
 smapinit (void)
-    {
+{
     if (maptab)
 	free ((char *)maptab);
 
@@ -1314,7 +1276,7 @@ mapextsym (SYMBOL* s)
 #ifdef __COMPILER_KCC__
 	val |= (INT) tosixbit (c) << (i -= 6);
 #else
-	val = (val * 050) + torad50((char) c); // FW KCC-NT
+	val = (val * 050) + torad50((char) c); /* FW KCC-NT */
 	i -= 6;
 #endif
 	}
@@ -1322,6 +1284,15 @@ mapextsym (SYMBOL* s)
     /* Update the symbol. */
 
     s->Smaplab = val;
+
+    /*
+     * In GNU-as style output, KCC is already in "long identifier" mode and
+     * outmiref() emits the original C identifier rather than this six-character
+     * mapped name.  Do not reject perfectly distinct external symbols just
+     * because their old MACRO/LINK-compatible six-character maps collide.
+     */
+    if (longidents)
+        return 1;
 
     /*
      * Pass the mangled identifier through the collision detector, and
@@ -1335,7 +1306,7 @@ mapextsym (SYMBOL* s)
 
 #if __MSDOS__
 INT	    rad50 (char *);
-#ifdef	sixbit							// FW KCC-NT
+#ifdef	sixbit							/* FW KCC-NT */
  #undef	sixbit
 #endif
 #define sixbit(c) rad50(c)
@@ -1406,10 +1377,18 @@ mapintsym (SYMBOL* s)
 
     if (i > 0)		/* Fill out rest of name with '0's */
 	{
-	while (--i >= 0)
-	    *++cp = '0';
+	/*
+	 * cp is currently pointing at the NUL terminator installed above.
+	 * Fill the remaining sixbit name slots in place, then reinstall the
+	 * terminator.  The old code preincremented cp for both the fill and
+	 * the final NUL; when exactly one slot remained that wrote sym6[7],
+	 * one byte past the seven-byte buffer.  Android's hardened allocator
+	 * reliably trips over the resulting corruption.
+	 */
+	while (i-- > 0)
+	    *cp++ = '0';
 
-	*++cp = 0;
+	*cp = 0;
 	}
 
     for (;;)
@@ -1456,7 +1435,7 @@ static int nlabels = 0;		/* # labels allocated */
 **	Called by SYMINIT at start of compilation for each file.
 */
 static void
-labinit()
+labinit(void)
 {
     maxlabel = 0;		/* Reset internal label numbering to 0 */
     cleanlabs();		/* Ensure no queued labels */
@@ -1473,7 +1452,7 @@ labinit()
 */
 
 SYMBOL *
-newlabel()
+newlabel(void)
 {
     SYMBOL *lab;
 
@@ -1501,8 +1480,7 @@ newlabel()
 ** The label may be NULL or not a SC_ILABEL; in that case nothing happens.
 */
 void
-reflabel(lab, count)
-SYMBOL * lab;
+reflabel(struct symbol * lab, int count)
 {
     if (lab != NULL && lab->Sclass == SC_ILABEL)
 	lab->Svalue += count;
@@ -1518,8 +1496,7 @@ SYMBOL * lab;
 ** This list chains through sprev rather than snext to keep things simple.
 */
 void
-freelabel(lab)
-SYMBOL *lab;
+freelabel(struct symbol * lab)
 {
     lab->Sprev = flprev;		/* chain old freelist onto it */
     flprev = lab;			/* it is now head of freelist */
@@ -1529,7 +1506,7 @@ SYMBOL *lab;
 */
 
 void
-cleanlabs()
+cleanlabs(void)
 {
     while (flprev != NULL)	/* peephole buffer is now empty */
 	{
@@ -1545,8 +1522,7 @@ cleanlabs()
 ** Note sprev must not be changed (see cleanlabs()).
 */
 static void
-realfreelabel(lab)
-SYMBOL *lab;
+realfreelabel(struct symbol * lab)
 {
     lab->Snext = fllist;		/* chain old freelist onto it */
     fllist = lab;			/* it is now head of freelist */
@@ -1748,12 +1724,13 @@ shohash()
 #endif
 
 static int maxtype = 0;	/* maximum types used */
+TYPE *booltype = NULL;
 
 /* TYPEINIT - Initialize things for support of C types.
 ** Mainly initializes the type table with the supported basic types.
 */
 static void
-typeinit()
+typeinit(void)
 {
     int i;
 
@@ -1772,6 +1749,7 @@ typeinit()
     /* Machine-dependent... clobber table so some types are equivalent */
     /* Someday clean this up and make it table-driven also */
     chartype = uchartype;	/* Say plain "char" is "unsigned char" */
+    booltype = findctype(TS_UINT, TF_BOOL | TF_BYTE | tgcsize, 1, (TYPE *)NULL);
     deftype = inttype;		/* Default type is "int" */
     strcontype = findtype(TS_PTR, chartype);	/* Type of string constant */
     voidptrtype = findtype(TS_PTR, voidtype);	/* (void *) */
@@ -1800,8 +1778,7 @@ typeinit()
 **	of a type pointer.
 */
 TYPE *
-findtype(tsp, subt)
-TYPE *subt;
+findtype(int tsp, struct type * subt)
 {
     return findctype(tsp,
 		    typbsiztab[tsp],	/* Use default flags and  # bits */
@@ -1828,8 +1805,7 @@ TYPE *subt;
 /* FINDUTYPE - Find or create the unqualified version of a given type.
 */
 TYPE *
-findutype(t)
-TYPE *t;
+findutype(struct type * t)
 {
     return !(t->Tflag&(TF_QUALS|TF_SIQUALS)) ? t /* No prob if no quals */
 	: findctype(t->Tspec, t->Tflag&(~(TF_QUALS|TF_SIQUALS)),
@@ -1840,9 +1816,7 @@ TYPE *t;
 **	The given qualifier flags are added into any that already exist.
 */
 TYPE *
-findqtype(t, quals)
-TYPE *t;
-INT quals;
+findqtype(struct type * t, INT quals)
 {
     return findctype(t->Tspec, t->Tflag|(quals & TF_QUALS),
 			t->Tsize, t->Tsubt);
@@ -1853,8 +1827,7 @@ INT quals;
 **	The two arguments are the return type and prototype list pointer.
 */
 TYPE *
-findftype(rtyp, plist)
-TYPE *rtyp, *plist;
+findftype(struct type * rtyp, struct type * plist)
 {
     return findctype(TS_FUNCT, 0,	/* Always function, no qualifiers */
 		    (unsigned INT) plist,			/* Param list - note type punning! */
@@ -1866,8 +1839,7 @@ TYPE *rtyp, *plist;
 **	the original type is used.
 */
 TYPE *
-findptype(tsp, plist, t)
-TYPE *plist, *t;
+findptype(int tsp, struct type * plist, struct type * t)
 {
     return findctype(tsp, 0,	/* Never any flags or qualifiers */
 	(unsigned INT) plist,			/* Param list - note type punning! */
@@ -1884,11 +1856,7 @@ TYPE *plist, *t;
 **	routine that allows setting the type-qualifier flags.
 */
 TYPE *
-findctype(tsp, flags, siz, subt)
-int tsp;
-INT flags;
-unsigned INT siz;
-TYPE *subt;
+findctype(int tsp, INT flags, unsigned INT siz, struct type * subt)
 {
     TYPE *t;
     int hash;
@@ -1939,8 +1907,7 @@ TYPE *subt;
 /* CMPTYPE - Compare two types for compatibility
 */
 int
-cmptype(t1, t2)
-TYPE *t1, *t2;
+cmptype(struct type * t1, struct type * t2)
 {
     return (t1 == t2 || tcomposite(t1, t2));
 }
@@ -1950,8 +1917,7 @@ TYPE *t1, *t2;
 **	top type's qualifiers must be ignored.
 */
 int
-cmputype(t, u)
-TYPE *t, *u;
+cmputype(struct type * t, struct type * u)
 {
     if (t == u)
 	return 1;
@@ -1969,6 +1935,7 @@ TYPE *t, *u;
 		if (t->Tsize && u->Tsize && (t->Tsize != u->Tsize))
 		    break;
 	    /* Sizes OK, fall thru to check element type */
+	    /* FALLTHROUGH */
 	    case TS_PTR:
 		return (t->Tsubt == u->Tsubt || tcomposite(t->Tsubt, u->Tsubt));
 
@@ -1990,8 +1957,7 @@ TYPE *t, *u;
 **	than constructing a new type.
 */
 TYPE *
-tcomposite(t1, t2)
-TYPE *t1, *t2;
+tcomposite(struct type * t1, struct type * t2)
 {
     TYPE *t;
 
@@ -2057,8 +2023,7 @@ TYPE *t1, *t2;
 **	Returns NULL if couldn't.
 */
 static TYPE *
-tcomproto(t1, t2)
-TYPE *t1, *t2;
+tcomproto(struct type * t1, struct type * t2)
 {
     TYPE *t;
 
@@ -2111,6 +2076,14 @@ sizetype(TYPE *t)
 	t = t->Tsubt;	/* and go to next in chain */
 	}
 
+    /* Packed aggregates are measured exactly in C address units. */
+    if (tispacked(t))
+        {
+        INT bperw = TGSIZ_WORD/TGSIZ_CHAR;
+        INT bytes = s * t->Tbytes;
+        return (bytes + bperw - 1) / bperw;
+        }
+
     /* Multiply that by size of base type */
     if (tisbyte(t))		/* Bytes are special case, round up. */
 	{
@@ -2129,10 +2102,11 @@ sizetype(TYPE *t)
 			t->Tsmtag);	/* Complain */
 	    break;
 
-	case TS_PTR:		/* Temporary check installed when changing to
-				** new type-size scheme, take out if never hit
-				** and just use default.
-				*/
+	case TS_PTR:
+	    /* Pointer objects are expected to use the target pointer size.
+	    ** If a malformed type carries a different size, report it and
+	    ** recover with the target default rather than propagating it.
+	    */
 	    if (t->Tsize != (unsigned int) typsiztab[TS_PTR])
 		{
 		int_error("bad pointer size: %d", (int) t->Tsize);
@@ -2152,9 +2126,29 @@ sizetype(TYPE *t)
 ** pointer then its "size" is expressed in terms of bytes.
 */
 INT
-sizeptobj(t)
-TYPE *t;
+sizeptobj(struct type * t)
 {
+    TYPE *p;
+
+    if (tisbitptr(t) && (p = t->Tsubt) != NULL)
+        {
+        INT bits;
+        if (tispacked(p))
+            return p->Tbytes * TGSIZ_CHAR;
+        bits = tbitsize(p);
+        if (bits > 0 && bits <= TGSIZ_WORD)
+            return ((bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR) * TGSIZ_CHAR;
+        }
+    if (t->Tspec == TS_PTR && (p = t->Tsubt) != NULL && tispacked(p))
+        return p->Tbytes;
+    if (tispackedptr(t) && (p = t->Tsubt) != NULL)
+        {
+        INT bits = tbitsize(p);
+        if (bits > 0 && bits <= TGSIZ_WORD)
+            return (bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR;
+        if (tispacked(p))
+            return p->Tbytes;
+        }
     return (tisbytepointer(t)		/* If byte pointer, handle specially */
 	? sizearray(t->Tsubt)		/* Bytes: either 1 or # elements */
 	: sizetype(t->Tsubt));		/* Words: use # words */
@@ -2165,8 +2159,7 @@ TYPE *t;
 **	This is used to find the # of bytes in a byte array.
 */
 INT
-sizearray(t)
-register TYPE *t;
+sizearray(struct type * t)
 {
     register INT s = 1;
 
@@ -2180,8 +2173,7 @@ register TYPE *t;
 
 /* ARYERR - Auxiliary for errors invoked by several following rtns */
 static void
-aryerr(s)
-char *s;
+aryerr(char * s)
 {
     int_error("%s: array of null", s);
 }
@@ -2191,8 +2183,7 @@ char *s;
 **	In particular, TS_VOID is zero even though it pretends to be a "byte".
 */
 int
-elembsize(t)
-TYPE *t;
+elembsize(struct type * t)
 {
     if (t->Tspec != TS_PTR && t->Tspec != TS_ARRAY)
 	return 0;
@@ -2200,7 +2191,7 @@ TYPE *t;
 	if (t->Tspec != TS_ARRAY)
 	    {
 	    if (tisstruct(t))
-		return TGSIZ_WORD;
+		return tispacked(t) ? TGSIZ_CHAR : TGSIZ_WORD;
 
 	    return (tisscalar(t) ? (int)tbitsize(t) : 0);
 	    }
@@ -2229,8 +2220,7 @@ TYPE *t;
 ** TISBYTEPOINTER - Likewise for bytes.
 */
 int
-tischarpointer(t)
-TYPE *t;
+tischarpointer(TYPE *t)
 {
     if (t->Tspec != TS_PTR && t->Tspec != TS_ARRAY)
 	return 0;
@@ -2242,14 +2232,15 @@ TYPE *t;
 }
 
 int
-tisbytepointer(t)
-TYPE *t;
+tisbytepointer(TYPE *t)
 {
+    if (tispackedptr(t))
+        return 1;
     if (t->Tspec != TS_PTR && t->Tspec != TS_ARRAY)
 	return 0;
     while ((t = t->Tsubt) != NULL)
 	if (t->Tspec != TS_ARRAY)
-	    return(tisbyte(t));
+	    return(tisbyte(t) || tispacked(t));
     aryerr("tisbytepointer");
     return 0;
 }
@@ -2259,8 +2250,7 @@ TYPE *t;
 ** TISBYTEARRAY - Similar, true if elements are "bytes" (smaller than words).
 */
 int
-tischararray(t)
-TYPE *t;
+tischararray(TYPE *t)
 {
     if (t->Tspec != TS_ARRAY)
 	return 0;
@@ -2272,14 +2262,13 @@ TYPE *t;
 }
 
 int
-tisbytearray(t)
-TYPE *t;
+tisbytearray(TYPE *t)
 {
     if (t->Tspec != TS_ARRAY)
 	return 0;
     while ((t = t->Tsubt) != NULL)
 	if (t->Tspec != TS_ARRAY)
-	    return tisbyte(t);
+	    return tisbyte(t) || tispacked(t);
     aryerr("tisbytearray");
     return 0;
 }
@@ -2438,8 +2427,6 @@ char*	    snames = NULL;
 static
 int	    snamesize = 1024;
 static
-char	    fnsymfile[]   = "KCCXXXXXX       ";
-static
 FILE*	    fsyms = NULL;
 extern
 FILE*	    out;
@@ -2466,20 +2453,20 @@ writesym (FILE *f, SYMBOL *s)		/* auxiliary for savesymtab */
     /*  don't have mapped (sixbit) symbol: must create one  */
 	{
 	mapextsym(s->Ssym);
-	fprintf(f, "%d %d %ld %d %ld ", nchars, s->Sclass,
+	fprintf(f, "%d %d %" INT_DFMT " %d %" INT_DFMT " ", nchars, s->Sclass,
 		s->Ssym->Svalue, (int) s->Sflags, (INT) (s->Stype));
 	}
     else if (s->Sclass == SC_AUTO || s->Sclass == SC_RAUTO)
     /*  compute (positive) runtime stack offset  */
-	fprintf(f, "%d %d %ld %d %ld ", nchars, s->Sclass,
+	fprintf(f, "%d %d %" INT_DFMT " %d %" INT_DFMT " ", nchars, s->Sclass,
 		(s->Svalue + 1) - maxauto, (int) s->Sflags, (INT) (s->Stype));
     else if (s->Sclass == SC_ARG || s->Sclass == SC_RARG)
     /*  compute (negative) runtime stack offset  */
-	fprintf(f, "%d %d %ld %d %ld ", nchars, s->Sclass,
+	fprintf(f, "%d %d %" INT_DFMT " %d %" INT_DFMT " ", nchars, s->Sclass,
 		- s->Svalue - maxauto, (int) s->Sflags, (INT) (s->Stype));
     else 
     /*  normal global or static variable  */
-	fprintf(f, "%d %d %ld %d %ld ", nchars, s->Sclass,
+	fprintf(f, "%d %d %" INT_DFMT " %d %" INT_DFMT " ", nchars, s->Sclass,
 		s->Svalue, (int) s->Sflags, (INT) (s->Stype));
 	
     /*
@@ -2533,8 +2520,9 @@ savesymtab (SYMBOL* table)	/* save copy of symtab for source debugger */
 	if ((snames = (char *) calloc (1, snamesize)) == NULL)
 	    efatal ("out of heap space");	/* claim heap for symnames */
 
-	tmpnam (fnsymfile);			/* create file for symbols */
-	fsyms = fopen ((fnsymfile), "w");
+	fsyms = tmpfile();			/* create file for symbols */
+	if (fsyms == NULL)
+	    efatal ("could not create temporary symbol file");
 	}
 
     if (curfn == NULL)			/* global external symtab call */
@@ -2590,8 +2578,8 @@ savesymtab (SYMBOL* table)	/* save copy of symtab for source debugger */
 
 
 void
-outsymtab (void)	/* source debugger: add symtab info to .MAC file */
-    {
+outsymtab (void)
+{
     /*
      * Called at end of module compilation, assembles saved symtab info,
      * formats, and adds to .MAC file as data.  In each .MAC file (module),
@@ -2676,6 +2664,8 @@ outsymtab (void)	/* source debugger: add symtab info to .MAC file */
 	    case TS_UCHAR:
 	    case TS_UINT:
 	    case TS_ULONG:
+	    case TS_LONGLONG:
+	    case TS_ULONGLONG:
 	    case TS_LNGDBL:
 		break;
 
@@ -2689,18 +2679,17 @@ outsymtab (void)	/* source debugger: add symtab info to .MAC file */
 
     typindex = 0;
 
-    fclose(fsyms);			/* rewind symbol temp file */
-    fsyms = fopen(fnsymfile, "r");
+    rewind(fsyms);			/* rewind symbol temp file */
     fprintf (out, "$$$$$1==.\t\t; function local symbols\n\n");
 
     for (idx = 0; !feof(fsyms);)	/* scan the symbol temp file */
 	{
 	int  sname, sclass, sflags;
-	long svalue;
+	INT svalue;
 	INT stype;
 
 
-	fscanf (fsyms, "%d %d %ld %d %ld ",		/* read a symbol */
+	fscanf (fsyms, "%d %d %" INT_DFMT " %d %" INT_DFMT " ",		/* read a symbol */
 		&sname, &sclass, &svalue, &sflags, &stype);
 
 	if (sname == -1)			/* mark: globals begin here */
@@ -2839,7 +2828,7 @@ outsymtab (void)	/* source debugger: add symtab info to .MAC file */
 
 	    default:
 		fprintf(out, " (18) $$$$$3 + "); /* ptr to type entry */
-		fprintf(out, "%d ", (((TYPE *) stype)->Tsize >> 18) * 2);
+		fprintf(out, "%ld ", (long) ((((TYPE *) stype)->Tsize >> 18) * 2));
 		break;
 	    }
 
@@ -2852,7 +2841,7 @@ outsymtab (void)	/* source debugger: add symtab info to .MAC file */
 	    case SC_RARG:
 	    case SC_REGISTER:	/* negative  offset */
 		fprintf(out, "\tBYTE  (4) %d (32)", sflags & SF_LOCAL);
-		fprintf(out, " %ld\t\t; stack offset\n", svalue);
+		fprintf(out, " %" INT_DFMT "\t\t; stack offset\n", svalue);
 		break;
 
 
@@ -2868,7 +2857,7 @@ outsymtab (void)	/* source debugger: add symtab info to .MAC file */
 	    case SC_MEMBER:
 	    case SC_ENUM:	/* positive offset */
 		fprintf(out, "\tBYTE  (4) %d (32)", sflags & SF_LOCAL);
-		fprintf(out, " %ld\t\t; offset/value\n",  svalue);
+		fprintf(out, " %" INT_DFMT "\t\t; offset/value\n", svalue);
 		break;
 
 
@@ -2999,6 +2988,16 @@ outsymtab (void)	/* source debugger: add symtab info to .MAC file */
 		break;
 
 
+	    case TS_LONGLONG:
+		str = "longlong";
+		break;
+
+
+	    case TS_ULONGLONG:
+		str = "ulonglong";
+		break;
+
+
 	    case TS_PARAM:
 	    case TS_PARINF:
 	    case TS_PARVOID:
@@ -3020,8 +3019,8 @@ outsymtab (void)	/* source debugger: add symtab info to .MAC file */
 		t->Tspec, (int) (t->Tflag >> 9) & 07777);
 	fprintf (out, "; (%d) %s: bits,Tspec,fl\n",
 		typindex++, str);
-	fprintf (out, "\tBYTE (18) %d, ",		/* words or elements*/
-		(int) t->Tsize & 0777777L);
+	fprintf (out, "\tBYTE (18) %ld, ",		/* words or elements*/
+		(long) (t->Tsize & 0777777L));
 
 	if (t->Tsubt == 0)
 	    fprintf(out, "0\t\t\t\t; size\n");
@@ -3031,13 +3030,13 @@ outsymtab (void)	/* source debugger: add symtab info to .MAC file */
 		case TS_STRUCT:
 		case TS_UNION:
 		case TS_ENUM:
-		    fprintf(out, "$$$$$1 + %d", t->Tsmtag->Svalue * 2);
+		    fprintf(out, "$$$$$1 + %ld", (long) (t->Tsmtag->Svalue * 2));
 		    fprintf(out, "\t\t; size, tagsym\n");	/* ptr to tag sym */
 		    break;
 
 
 		default:
-		    fprintf(out, "$$$$$3 + %d", (t->Tsubt->Tsize >> 18) * 2);
+		    fprintf(out, "$$$$$3 + %ld", (long) ((t->Tsubt->Tsize >> 18) * 2));
 		    fprintf(out, "\t\t; size, subtype\n");	/* ptr to subtype */
 		    break;
 		}

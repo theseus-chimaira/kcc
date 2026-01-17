@@ -44,6 +44,7 @@ enum systype {
 #define TGSIZ_SHORT	(TGSIZ_WORD/2)
 #define TGSIZ_INT	TGSIZ_WORD
 #define TGSIZ_LONG	TGSIZ_WORD
+#define TGSIZ_LONGLONG	71		/* 71-bit hardware integer model */
 #define TGSIZ_FLOAT	TGSIZ_WORD
 #define TGSIZ_DOUBLE	(TGSIZ_WORD*2)
 #define TGSIZ_LNGDBL	(TGSIZ_WORD*2)
@@ -60,7 +61,7 @@ enum systype {
 			/* see PPS 4516                                    */
 #endif
 #ifndef FNAMESIZE	/* CC, CCPP: Size of a filename string */
- #if SYS_CSI
+ #if SYS_CSI && !HOST_UNIX
   #define FNAMESIZE (48) /*cstdio:[123456,123456]#123456789012.#123456<123> */
  #else
   #define FNAMESIZE (40*4+10)	/*	TOPS-20 has biggest possible names */
@@ -70,9 +71,6 @@ enum systype {
 #if !SYS_CSI	/* 5/91 Dynamic tables */
  #ifndef MAXPPTOKS	/* CCPP: # of Preprocessor tokens active */
   #define MAXPPTOKS 4000
- #endif
- #ifndef MAXPOOLSIZE	/* CCPP: Size of char pool for PP tokens */
-  #define MAXPOOLSIZE 4000 /* Make dynamic later, see ccpp #if 0...#endif */
  #endif
 #endif
 
@@ -130,4 +128,12 @@ enum systype {
   #define MAXMLBUF 512 /*CC: size of mixed listing's dynamic output buffer */
  #endif
  #define TITLE_SIZE 48	/* #pragma module(title) and request_library(title) */
+#endif
+
+#ifndef MAXMLBUF
+ #define MAXMLBUF 512
+#endif
+
+#ifndef TITLE_SIZE
+ #define TITLE_SIZE 48
 #endif

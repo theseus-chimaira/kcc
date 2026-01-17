@@ -15,9 +15,7 @@
 
 /* Imported functions */
 extern PCODE *findrset(PCODE *, int);				/* CCOPT */
-extern int rincode(PCODE *, int), rinaddr(PCODE *, int),
-	rrchg(PCODE *, int),
-	findconst(PCODE *), localbyte(PCODE *, PCODE *);	/* CCOPT */
+extern int findconst(PCODE *), localbyte(PCODE *, PCODE *);	/* CCOPT */
 extern void foldbp(PCODE *), foldbyte(PCODE *),
 	foldplus(PCODE *),
 	foldboth(void), foldadjbp(PCODE *), optlsh(PCODE *);	/* CCOPT */
@@ -45,10 +43,11 @@ extern int rbinaddr (PCODE *);
 
 /* Exported functions */
 PCODE *before(PCODE *), *after(PCODE *);
-void fixprev(void), flushcode(void), dropinstr(PCODE *),
+void fixprev(void), flushcode(void), codefnreset(void), dropinstr(PCODE *),
     swappseudo(PCODE *, PCODE *);
 int codcreg(VREG *, VREG *), immedop(int op);
 void code0(int, VREG *, VREG *);
+void coderetmove(VREG *);
 void codek0(int, VREG *, VREG *);
 void code00(int, int, int);		/* Reg linkage, was static */
 void code1(int, VREG *, INT);
@@ -63,6 +62,7 @@ void code9(int, VREG *, double, int);
 void code10(int, VREG *, SYMBOL *, INT, INT);
 void code12(int, VREG *, INT);
 void code13(int, VREG *, INT);
+void code14(int, VREG *, int);
 void code15(int, SYMBOL *, INT, VREG *);
 void code16(int, VREG *, SYMBOL *, VREG *);
 void code17(INT);
@@ -92,6 +92,7 @@ static void rrpre3(PCODE *, PCODE *, int), rrpopt(PCODE *), rrpop2(PCODE *);
 static PCODE *chkref(PCODE *, PCODE *, int);
 static void foldxref(PCODE *);
 static void optjrst(PCODE *p);
+static void foldshiftmask(void);
 
 #if DEBUG_KCC		/* 5/91 KCC size */
 /* PEEPHOLER DEBUGGING ROUTINES */
@@ -350,10 +351,17 @@ FILE *f;
 */
 static int prvskip = 0;	/* Used by newcode/flushcode to remember if skipping */
 
+/* CODEFNRESET - Reset peephole state which must not cross functions. */
+void
+codefnreset(void)
+{
+    prvskip = 0;
+}
+
 #define OVERINC	20		/* Number of ops to force out on overflow */
 
 static PCODE *
-newcode(type, op, reg)
+newcode(int type, int op, int reg)
 {
     PCODE *p;
     int i;
@@ -381,8 +389,7 @@ newcode(type, op, reg)
 ** AFTER(p)  - Return live instruction succeeding this one.
 */
 PCODE *
-before(p)
-PCODE *p;
+before(struct pcode * p)
 {
     PCODE *b;
 
@@ -403,8 +410,7 @@ PCODE *p;
 }
 
 PCODE *
-after(p)
-PCODE *p;
+after(struct pcode * p)
 {
     PCODE *b = &codes[maxcode&(MAXCODE-1)];
 
@@ -426,8 +432,7 @@ PCODE *p;
 */
 
 void
-swappseudo(a,b)
-PCODE *a, *b;
+swappseudo(struct pcode * a, struct pcode * b)
 {
     PCODE temp;
 
@@ -455,12 +460,42 @@ fixprev(void)
 	}
 }
 
+/* FOLDSHIFTMASK - Drop an ANDI made redundant by a logical right shift.
+**
+** After LSH R,-N, only the low 36-N bits can be nonzero.  If a following
+** ANDI keeps all of those bits, it cannot change the value.  This helper is
+** called after register CSE because that is where an AND against a constant
+** register becomes the final immediate form.
+*/
+static void
+foldshiftmask(void)
+{
+    PCODE *a, *sh;
+    INT nbits, lowmask;
+
+    a = previous;
+    if (!optobj || a == NULL || a->Pop != P_AND
+      || a->Ptype != PTV_IMMED || prevskips(a))
+	return;
+    sh = before(a);
+    if (sh == NULL || sh->Pop != P_LSH || sh->Preg != a->Preg
+      || (sh->Ptype & PTF_ADRMODE) != PTA_RCONST
+      || sh->Pvalue > -18 || sh->Pvalue < -35 || prevskips(sh))
+	return;
+
+    nbits = 36 + sh->Pvalue;
+    lowmask = ((INT)1 << nbits) - 1;
+    if ((a->Pvalue & lowmask) == lowmask) {
+	dropinstr(a);
+	fixprev();
+    }
+}
+
 /* DROPINSTR(p) - Flush pseudo-code instruction (make it a NOP)
 ** FLSPREV() - Flush instruction that "previous" points to.
 */
 void
-dropinstr(p)
-PCODE *p;
+dropinstr(struct pcode * p)
 {
     if (p)
 	{
@@ -474,13 +509,513 @@ flsprev(void)
     dropinstr(previous);
 }
 
+/* REG_LIVE_BEFORE_CHANGE - Check whether REG is read before it is replaced.
+** The scan is bounded by the current peephole buffer and carries no state
+** between calls.
+*/
+static int
+reg_live_before_change(int start, int reg)
+{
+    int j;
+    PCODE *p;
+
+    for (j = start; j < maxcode; ++j) {
+        p = &codes[j & (MAXCODE-1)];
+        if (p->Pop == P_NOP)
+            continue;
+        if (rruse(p, reg))
+            return 1;
+        if (rrchg(p, reg))
+            break;
+    }
+    return 0;
+}
+
+/* FOLD_INDEX_DISPLACEMENT - Keep a constant index adjustment in the final EA.
+** Returns 1 for the three-instruction spelling, 2 for the spelling with an
+** inserted register copy, and 0 when no fold applies.
+*/
+static int
+fold_index_displacement(int i, PCODE *p, PCODE *q)
+{
+    PCODE *r3, *r4;
+
+    if (i + 2 < maxcode) {
+        r3 = &codes[(i+2) & (MAXCODE-1)];
+        if (p->Pop == P_ADD && p->Ptype == PTV_IMMED
+          && q->Pop == P_ADD && q->Preg == p->Preg
+          && !prevskips(p) && !prevskips(q)
+          && !rinaddr(q, p->Preg)
+          && r3->Pop == P_MOVE && !prevskips(r3)
+          && (r3->Ptype & ~PTF_SKIPPED) == PTA_MINDEXED
+          && r3->Pptr == NULL && r3->Pindex == p->Preg) {
+            r3->Poffset += p->Pvalue;
+            p->Pop = P_NOP;
+            return 1;
+        }
+    }
+
+    if (i + 3 < maxcode) {
+        r3 = &codes[(i+2) & (MAXCODE-1)];
+        r4 = &codes[(i+3) & (MAXCODE-1)];
+        if (p->Pop == P_ADD && p->Ptype == PTV_IMMED
+          && q->Pop == P_MOVE && !prevskips(p) && !prevskips(q)
+          && !rincode(q, p->Preg)
+          && r3->Pop == P_ADD && r3->Preg == p->Preg
+          && (r3->Ptype & ~PTF_SKIPPED) == PTA_REGIS
+          && r3->Pr2 == q->Preg && !prevskips(r3)
+          && r4->Pop == P_MOVE && !prevskips(r4)
+          && (r4->Ptype & ~PTF_SKIPPED) == PTA_MINDEXED
+          && r4->Pptr == NULL && r4->Pindex == p->Preg) {
+            r4->Poffset += p->Pvalue;
+            p->Pop = P_NOP;
+            return 2;
+        }
+    }
+    return 0;
+}
+
+/* FOLD_MASK_ZERO_TEST - Replace MOVE/ANDI/CAI-zero with a direct TRN/TLN. */
+static int
+fold_mask_zero_test(int i, PCODE *p, PCODE *q)
+{
+    PCODE *r3;
+
+    if (i + 2 >= maxcode)
+        return 0;
+    r3 = &codes[(i+2) & (MAXCODE-1)];
+    if (p->Pop != P_MOVE || p->Ptype != PTA_REGIS
+      || q->Pop != P_AND || q->Ptype != PTV_IMMED
+      || q->Preg != p->Preg || prevskips(p) || prevskips(q)
+      || (r3->Pop & POF_OPCODE) != P_CAI
+      || (r3->Pop & POF_OPSKIP) == 0
+      || (r3->Ptype & PTF_ADRMODE) != PTA_RCONST
+      || r3->Pvalue != 0 || r3->Preg != p->Preg || prevskips(r3)
+      || ((r3->Pop & POF_OPSKIP) != POS_SKPE
+       && (r3->Pop & POF_OPSKIP) != POS_SKPN))
+        return 0;
+
+    q->Pop = r3->Pop ^ (P_CAI ^ P_TRN);
+    q->Preg = p->Pr2;
+    q->Ptype = PTA_RCONST;
+    p->Pop = P_NOP;
+    r3->Pop = P_NOP;
+    return 1;
+}
+
 /* FLUSHCODE() - Flush peephole buffer (emit everything)
 */
 void
 flushcode(void)
 {
+    int i;
+    PCODE *p, *q;
+
     if (mincode < maxcode)
 	{
+	/* Late halfword fold.  A full-word AND which keeps only the left
+	** half is emitted as TRZ by CCOUT, too late for the ordinary
+	** peephole passes to combine it with the preceding MOVE.  Do the
+	** exact pair fold here while the final pseudo-code stream is still
+	** available.
+	*/
+	if (optobj)
+	    for (i = mincode; i + 1 < maxcode; ++i)
+		{
+		p = &codes[i & (MAXCODE-1)];
+		q = &codes[(i+1) & (MAXCODE-1)];
+	if (q->Pop == P_JRST)
+	    optjrst(q);
+		if (p->Pop == P_MOVE && q->Pop == P_AND
+		  && p->Preg == q->Preg && !prevskips(p) && !prevskips(q)
+		  && q->Ptype == (PTA_RCONST+PTF_IMM)
+		  && q->Pvalue == ((INT)0777777000000))
+		    {
+		    p->Pop = P_HLLZ;
+		    q->Pop = P_NOP;
+		    ++i;
+		    continue;
+		    }
+
+
+        /* Eliminate a dead register-copy temporary used only as the source
+        ** operand of the immediately following arithmetic/logical compare.
+        **
+        **     MOVE T,S
+        **     OP   R,T
+        **
+        ** becomes
+        **
+        **     OP   R,S
+        **
+        ** Do not do this when T is also R: in that case the MOVE replaces
+        ** the old destination value which OP may need.  This late fold is
+        ** deliberately adjacency-only and therefore needs no liveness state.
+        */
+        if (p->Pop == P_MOVE && p->Ptype == PTA_REGIS
+          && q->Ptype == PTA_REGIS && q->Pr2 == p->Preg
+          && q->Preg != p->Preg && !prevskips(p) && !prevskips(q))
+            {
+            switch (q->Pop & POF_OPCODE) {
+            case P_ADD:
+            case P_SUB:
+            case P_IMUL:
+            case P_AND:
+            case P_IOR:
+            case P_XOR:
+            case P_CAM:
+                q->Pr2 = p->Pr2;
+                p->Pop = P_NOP;
+                ++i;
+                continue;
+            default:
+                ;
+            }
+            }
+
+        /* A copied narrow signed value is commonly widened as
+        **
+        **     MOVE  T,S
+        **     TRNE  T,sign
+        **      TDOA T,[-width]
+        **      ANDI T,width-1
+        **
+        ** T remains live after the test, so the test-only copy fold below
+        ** must not discard the MOVE.  Replace the whole idiom instead with
+        ** an equally short, branchless sign extension.
+        */
+        if (i + 3 < maxcode && p->Pop == P_MOVE && p->Ptype == PTA_REGIS
+          && q->Pop == P_TRN+POF_ISSKIP+POS_SKPE
+          && q->Ptype == PTA_RCONST && q->Preg == p->Preg
+          && q->Pvalue > 0 && (q->Pvalue & (q->Pvalue - 1)) == 0
+          && !prevskips(p) && !prevskips(q)) {
+            PCODE *r3, *r4;
+            INT sign;
+            int shift;
+
+            r3 = &codes[(i+2) & (MAXCODE-1)];
+            r4 = &codes[(i+3) & (MAXCODE-1)];
+            sign = q->Pvalue;
+            if (r3->Pop == P_TRO+POF_ISSKIP+POS_SKPA
+              && (r3->Ptype & ~PTF_SKIPPED) == PTA_RCONST
+              && r3->Preg == p->Preg && r3->Pvalue == -(sign << 1)
+              && r4->Pop == P_AND
+              && (r4->Ptype & ~PTF_SKIPPED) == PTV_IMMED
+              && r4->Preg == p->Preg && r4->Pvalue == (sign << 1) - 1) {
+                shift = 35;
+                while (sign > 1) {
+                    sign >>= 1;
+                    --shift;
+                }
+                q->Pop = P_LSH;
+                q->Ptype = PTA_RCONST;
+                q->Pvalue = shift;
+                r3->Pop = P_ASH;
+                r3->Ptype = PTA_RCONST;
+                r3->Pvalue = -shift;
+                r4->Pop = P_NOP;
+                i += 2;
+                continue;
+            }
+        }
+
+        /* Test instructions do not alter their AC operand.  A temporary
+        ** copy used only to feed TRN/TLN can therefore be removed outright.
+        ** Keep the copy when its AC is read again before being replaced.
+        **
+        **     MOVE T,S
+        **     TRNx T,M       -> TRNx S,M
+        */
+        if (p->Pop == P_MOVE && p->Ptype == PTA_REGIS
+          && !prevskips(p) && !prevskips(q)
+          && ((q->Pop & POF_OPCODE) == P_TRN
+           || (q->Pop & POF_OPCODE) == P_TLN)
+          && q->Preg == p->Preg
+          && !reg_live_before_change(i + 2, p->Preg)) {
+            q->Preg = p->Pr2;
+            p->Pop = P_NOP;
+            ++i;
+            continue;
+        }
+
+        /* Eliminate a constant temporary used only by the immediately
+        ** following operation.  KCC represents the resulting immediate
+        ** arithmetic/logical form by keeping the opcode and setting PTF_IMM.
+        **
+        **     MOVEI T,C
+        **     OP    R,T
+        **
+        ** becomes OP+I R,C.
+        */
+        if (p->Pop == P_MOVE && p->Ptype == PTV_IMMED
+          && q->Ptype == PTA_REGIS && q->Pr2 == p->Preg
+          && q->Preg != p->Preg && !prevskips(p) && !prevskips(q))
+            {
+            switch (q->Pop & POF_OPCODE) {
+            case P_ADD:
+            case P_SUB:
+            case P_IMUL:
+            case P_AND:
+            case P_IOR:
+            case P_XOR:
+                q->Ptype = PTV_IMMED;
+                q->Pvalue = p->Pvalue;
+                p->Pop = P_NOP;
+                ++i;
+                continue;
+            default:
+                ;
+            }
+            }
+
+        /* Keep an index displacement in the final effective address. */
+        {
+            int folded;
+
+            folded = fold_index_displacement(i, p, q);
+            if (folded) {
+                if (folded == 1)
+                    ++i;
+                continue;
+            }
+        }
+
+        /* A copied, masked value tested only for zero can use TRN/TLN. */
+        if (fold_mask_zero_test(i, p, q)) {
+            ++i;
+            continue;
+        }
+
+        /* SETZB/SETOB already write the generated value to both the AC and
+        ** memory.  If the next instruction merely returns/copies that same
+        ** known value, put the BOTH result directly in the final AC.
+        */
+        if ((p->Pop == (P_SETZ + POF_BOTH)
+          || p->Pop == (P_SETO + POF_BOTH))
+          && !prevskips(p) && !prevskips(q))
+            {
+            if (q->Pop == P_MOVE && q->Ptype == PTA_REGIS
+              && q->Pr2 == p->Preg) {
+                p->Preg = q->Preg;
+                q->Pop = P_NOP;
+                ++i;
+                continue;
+            }
+            if (((p->Pop & POF_OPCODE) == P_SETZ && q->Pop == P_SETZ)
+              || ((p->Pop & POF_OPCODE) == P_SETO && q->Pop == P_SETO)) {
+                if (q->Ptype == PTA_ONEREG) {
+                    p->Preg = q->Preg;
+                    q->Pop = P_NOP;
+                    ++i;
+                    continue;
+                }
+            }
+            }
+
+        /* Fold a memory fetch consumed only by a following complement.
+        ** SETCM accepts the same ordinary effective-address forms as MOVE.
+        **
+        **     MOVE  T,M
+        **     SETCM R,T
+        **
+        ** becomes SETCM R,M.
+        */
+        if (p->Pop == P_MOVE && !prevskips(p) && !prevskips(q)
+          && q->Pop == P_SETCM && q->Ptype == PTA_REGIS
+          && q->Pr2 == p->Preg
+          && ((p->Ptype & PTF_ADRMODE) == PTA_MINDEXED
+           || (p->Ptype & PTF_ADRMODE) == PTA_RCONST))
+            {
+            q->Ptype = p->Ptype;
+            q->Pptr = p->Pptr;
+            q->Poffset = p->Poffset;
+            q->Pindex = p->Pindex;
+            q->Pbsize = p->Pbsize;
+            p->Pop = P_NOP;
+            ++i;
+            continue;
+            }
+
+        /* A copied address used only for the first half of a two-word
+        ** stack spill is redundant.
+        **
+        **     SETM  B,A
+        **     PUSH  SP,0(B)
+        **     PUSH  SP,1(A)
+        **
+        ** becomes two PUSHes indexed by A.  Keep the copy if B remains
+        ** live after the pair.
+        */
+        if (i + 2 < maxcode && p->Pop == P_SETM
+          && p->Ptype == PTA_REGIS && !prevskips(p) && !prevskips(q)) {
+            PCODE *r3;
+
+            r3 = &codes[(i+2) & (MAXCODE-1)];
+            if (q->Pop == P_PUSH && q->Ptype == PTA_MINDEXED
+              && q->Preg == R_SP && q->Pptr == NULL
+              && q->Pindex == p->Preg
+              && r3->Pop == P_PUSH && r3->Ptype == PTA_MINDEXED
+              && r3->Preg == R_SP && r3->Pptr == NULL
+              && r3->Pindex == p->Pr2
+              && r3->Poffset == q->Poffset + 1
+              && !prevskips(r3)
+              && !reg_live_before_change(i + 3, p->Preg)) {
+                q->Pindex = p->Pr2;
+                p->Pop = P_NOP;
+                i += 2;
+                continue;
+            }
+        }
+
+        /* A copied address used only to load the two halves of one
+        ** double word does not need a second index AC.
+        **
+        **     SETM  B,A
+        **     MOVE  R,0(B)
+        **     MOVE  R+1,1(A)
+        **
+        ** becomes DMOVE R,0(A).  Keep the copy if B remains live.
+        */
+        if (i + 2 < maxcode && p->Pop == P_SETM
+          && p->Ptype == PTA_REGIS && !prevskips(p) && !prevskips(q)) {
+            PCODE *r3;
+
+            r3 = &codes[(i+2) & (MAXCODE-1)];
+            if (q->Pop == P_MOVE && q->Ptype == PTA_MINDEXED
+              && q->Pptr == NULL && q->Pindex == p->Preg
+              && r3->Pop == P_MOVE && r3->Ptype == PTA_MINDEXED
+              && r3->Pptr == NULL && r3->Pindex == p->Pr2
+              && r3->Preg == q->Preg + 1
+              && r3->Poffset == q->Poffset + 1
+              && !prevskips(r3)
+              && !reg_live_before_change(i + 3, p->Preg)) {
+                q->Pop = P_DMOVE;
+                q->Pindex = p->Pr2;
+                p->Pop = P_NOP;
+                r3->Pop = P_NOP;
+                i += 2;
+                continue;
+            }
+        }
+
+        /* Adjacent register copies form one double-word copy.  The target
+        ** expansion already handles overlapping pairs on machines without
+        ** native DMOVE, so this does not require extra allocation state.
+        */
+        if (tgmachuse.dmovx
+          && p->Pop == P_MOVE && q->Pop == P_MOVE
+          && !prevskips(p) && !prevskips(q)
+          && p->Ptype == PTA_REGIS && q->Ptype == PTA_REGIS
+          && q->Preg == p->Preg + 1 && q->Pr2 == p->Pr2 + 1) {
+            p->Pop = P_DMOVE;
+            q->Pop = P_NOP;
+            ++i;
+            continue;
+        }
+
+        /* A reverse-ordered adjacent load can also use native DMOVE.
+        ** Keep this target-specific: on PDP-6/KA10, preserving the scalar
+        ** order gives the older peephole passes more useful opportunities.
+        */
+        if (tgmachuse.dmovx
+          && p->Pop == P_MOVE && q->Pop == P_MOVE
+          && !prevskips(p) && !prevskips(q)
+          && p->Ptype == PTA_MINDEXED && q->Ptype == PTA_MINDEXED
+          && p->Preg == q->Preg + 1 && p->Pptr == q->Pptr
+          && p->Pindex == q->Pindex && p->Poffset == q->Poffset + 1
+          && q->Pindex != q->Preg && q->Pindex != p->Preg) {
+            q->Pop = P_DMOVE;
+            p->Pop = P_NOP;
+            ++i;
+            continue;
+        }
+
+		/* Adjacent full-word pairs are native double-word transfers.
+		** On PDP-6/KA10 CCOUT expands these back into two ordered MOVEs;
+		** KI10 and later can use DMOVE/DMOVEM directly.
+		*/
+		if ((p->Pop == P_MOVE || p->Pop == P_MOVEM)
+		  && q->Pop == p->Pop && !prevskips(p) && !prevskips(q)
+		  && p->Ptype == PTA_MINDEXED && q->Ptype == PTA_MINDEXED
+		  && q->Preg == p->Preg + 1 && p->Pptr == q->Pptr
+		  && p->Pindex == q->Pindex && q->Poffset == p->Poffset + 1)
+		    {
+		    p->Pop = (p->Pop == P_MOVE) ? P_DMOVE : P_DMOVEM;
+		    q->Pop = P_NOP;
+		    ++i;
+		    continue;
+		    }
+
+		/* Reuse an immediately preceding full-word load of the same
+		** address.  Volatile accesses flush the peephole buffer, so they
+		** cannot reach this fold.
+		*/
+		if (p->Pop == P_MOVE && p->Ptype == PTA_MINDEXED
+		  && q->Ptype == PTA_MINDEXED && sameaddr(p, q, 0)
+		  && !prevskips(p) && !prevskips(q))
+		    {
+		    switch (q->Pop) {
+		    case P_MOVE:
+		    case P_ADD:
+		    case P_SUB:
+		    case P_IMUL:
+		    case P_AND:
+		    case P_IOR:
+		    case P_XOR:
+			q->Ptype = PTA_REGIS;
+			q->Pr2 = p->Preg;
+			break;
+		    default:
+			;
+		    }
+		    }
+
+		/* MOVE T,R followed by MOVEM T,M can store R directly.
+		** Effective-address evaluation precedes the store, so this remains
+		** valid even when R participates in M's address.
+		*/
+		if (p->Pop == P_MOVE && p->Ptype == PTA_REGIS
+		  && q->Pop == P_MOVEM && q->Preg == p->Preg
+		  && !prevskips(p) && !prevskips(q))
+		    {
+            /* Keep a copy whose value is still read before replacement. */
+            if (!reg_live_before_change(i + 2, p->Preg)) {
+                q->Preg = p->Pr2;
+                p->Pop = P_NOP;
+                ++i;
+                continue;
+            }
+		    }
+
+		/* AOS/SOS T,M followed by MOVE R,T can write R directly.
+		** AOS/SOS do not consume the old value of their AC field, so this
+		** is safe even when R participates in the effective address.
+		*/
+		if ((p->Pop == P_AOS || p->Pop == P_SOS)
+		  && q->Pop == P_MOVE && q->Ptype == PTA_REGIS
+		  && q->Pr2 == p->Preg && !prevskips(p) && !prevskips(q))
+		    {
+		    p->Preg = q->Preg;
+		    q->Pop = P_NOP;
+		    ++i;
+		    continue;
+		    }
+
+		/* MOVE/HRRZ R,X followed by LSH R,18 is exactly HRLZ R,X.
+		** Do this only here, after the ordinary halfword-store peepholes
+		** have finished, so it cannot hide an HRLM opportunity.
+		*/
+		if ((p->Pop == P_MOVE || p->Pop == P_HRRZ)
+		  && q->Pop == P_LSH && p->Preg == q->Preg
+		  && !prevskips(p) && !prevskips(q)
+		  && q->Ptype == PTA_RCONST && q->Pvalue == 022)
+		    {
+		    p->Pop = P_HRLZ;
+		    q->Pop = P_NOP;
+		    ++i;
+		    }
+		}
+
 	prvskip = (previous && isskip(previous->Pop))	/* If prev was skip, */
 			? PTF_SKIPPED : 0;	/* remember fact for newcode */
 
@@ -500,6 +1035,26 @@ flushcode(void)
     previous = NULL;
 }
 
+/* CODFALLTHROUGH - Drop only a trailing direct jump to the label that the
+** caller is about to emit immediately.  Unlike OPTLAB this performs no label
+** or fan-in restructuring; it is used for shared return epilogues whose
+** incoming jumps have historically made the general label optimizer unsafe.
+*/
+void
+codfallthrough(struct symbol * lab)
+{
+    PCODE *p;
+
+    p = previous;
+    if (!optobj || p == NULL || p->Pop != P_JRST
+      || (p->Ptype & (PTF_SKIPPED | PTF_IND)) != 0
+      || (p->Ptype & PTF_ADRMODE) != PTA_MINDEXED
+      || p->Pptr != lab || p->Pindex != 0 || p->Poffset != 0)
+        return;
+    reflabel(lab, -1);
+    dropinstr(p);
+}
+
 /* CODCREG - Change register.
 **	This is a CODxxx routine both for consistency and so that
 ** PHO debugging information can be output if desired.
@@ -508,8 +1063,7 @@ flushcode(void)
 ** Otherwise returns 0 and nothing was changed.
 */
 int
-codcreg(to, from)
-VREG *to, *from;
+codcreg(struct vreg * to, struct vreg * from)
 {
     int ret;
 
@@ -538,9 +1092,7 @@ VREG *to, *from;
 
 
 void
-codek0(op, r1, r2)	/* KEEP the second register!! */
-int op;
-VREG *r1, *r2;
+codek0(int op, struct vreg * r1, struct vreg * r2)
 {
     VREG *r3 = vrget();		/* Get another temp reg */
     int s = vrstoreal(r3, r2);		/* Ensure it and both regs real */
@@ -551,14 +1103,217 @@ VREG *r1, *r2;
     code00(op, r, s);
 }
 void
-code0(op, r1, r2)
-int op;
-VREG *r1, *r2;
+code0(int op, struct vreg * r1, struct vreg * r2)
 {
     int s = vrstoreal(r2, r1);		/* Make regs real ones */
     if (r1 != r2)
 	vrfree(r2);		/* flush operand for later */
     code00(op, vrreal(r1), s);
+}
+
+/* CODERETMOVE - Move a one-word result into AC1 at a return boundary.
+** If vrstoreal() has just materialized the result temporary with
+** MOVE temp,AC1, that temporary copy and the copy back to AC1 are both
+** dead.  Drop the temporary MOVE instead of emitting MOVE AC1,temp.
+** This deliberately applies only at the return boundary.
+*/
+void
+coderetmove(struct vreg * r)
+{
+    int s;
+    PCODE *p;
+
+    s = vrstoreal(r, VR_RETVAL);
+    if (r != VR_RETVAL)
+        vrfree(r);
+    p = previous;
+    if (p != NULL
+      && (p->Ptype & (PTF_ADRMODE | PTF_SKIPPED)) == PTA_REGIS
+      && p->Pop == P_MOVE && p->Preg == s && p->Pr2 == R_RETVAL) {
+        dropinstr(p);
+        return;
+    }
+    if (s != R_RETVAL && changereg(R_RETVAL, s, p))
+        return;
+    code00(P_MOVE, vrreal(VR_RETVAL), s);
+}
+
+/*
+** FOLDHALFSTORE - Fold a discarded packed-half update into a native
+** halfword store.  This is deliberately called only when the C assignment
+** result is discarded, so the full recombined word does not need to remain
+** available in a register after the store.
+**
+** Recognized right-half form:
+**     MOVE  D,M
+**     ANDI/AND D,777777000000
+**     ... produce S & 0777777 ...
+**     IOR   D,S
+**     MOVEM D,M
+** becomes:
+**     ... produce S & 0777777 ...
+**     HRRM  S,M
+**
+** Recognized left-half form:
+**     HRRZ  D,M
+**     ... produce S & 0777777 ...
+**     LSH   S,18
+**     IOR   D,S
+**     MOVEM D,M
+** becomes HRLM using the unshifted halfword source when the source
+** extraction is directly adjacent.
+*/
+void
+foldhalfstore(void)
+{
+    PCODE *st, *ior, *srcop, *srcget, *keep, *load, *mask;
+    int d, s;
+
+    st = previous;
+    if (!optobj || st == NULL || st->Pop != P_MOVEM
+      || (st->Ptype & PTF_ADRMODE) != PTA_MINDEXED)
+	return;
+
+    ior = before(st);
+    if (ior == NULL || ior->Pop != P_IOR
+      || (ior->Ptype & PTF_ADRMODE) != PTA_REGIS)
+	return;
+    d = st->Preg;
+    if (ior->Preg != d)
+	return;
+    s = ior->Pr2;
+
+    /* Right-half update. */
+    srcop = before(ior);
+
+    /* The source may already have been extracted as a clean right half:
+    **
+    **     MOVE D,M          MOVE D,M
+    **     TRZ  D,777777     AND  D,777777000000
+    **     HRRZ S,N          HRRZ S,N
+    **     IOR  D,S          IOR  D,S
+    **     MOVEM D,M         MOVEM D,M
+    **
+    ** In either case HRRM can consume S directly.  This is a strict local
+    ** fold: all participating instructions must be unskipped and the load
+    ** and store must address the same word.
+    */
+    if (srcop != NULL && srcop->Pop == P_HRRZ && srcop->Preg == s
+      && !prevskips(srcop)) {
+        keep = before(srcop);
+        mask = NULL;
+        load = (keep != NULL) ? before(keep) : NULL;
+        if (keep != NULL && keep->Preg == d && !prevskips(keep)) {
+            if (keep->Pop == P_AND && keep->Ptype == PTA_REGIS) {
+                mask = load;
+                load = (mask != NULL) ? before(mask) : NULL;
+                if (mask == NULL || mask->Pop != P_MOVE
+                  || mask->Ptype != PTV_IMMED || mask->Preg != keep->Pr2
+                  || mask->Pvalue != ((INT)0777777000000) || prevskips(mask))
+                    load = NULL;
+            } else if (!((keep->Pop == P_TRZ && keep->Ptype == PTA_RCONST
+                         && keep->Pvalue == 0777777L)
+                      || (keep->Pop == P_AND
+                         && keep->Ptype == (PTA_RCONST+PTF_IMM)
+                         && keep->Pvalue == ((INT)0777777000000))))
+                load = NULL;
+        } else
+            load = NULL;
+        if (load != NULL && load->Pop == P_MOVE && load->Preg == d
+          && !prevskips(load) && sameaddr(load, st, 0)) {
+            st->Pop = P_HRRM;
+            st->Preg = s;
+            dropinstr(ior);
+            dropinstr(keep);
+            dropinstr(load);
+            return;
+        }
+    }
+    if (srcop != NULL && srcop->Pop == P_HRRZ
+      && (srcop->Ptype & PTF_ADRMODE) == PTA_REGIS
+      && srcop->Preg == s && srcop->Pr2 == s)
+	{
+	srcget = before(srcop);
+	keep = (srcget != NULL) ? before(srcget) : NULL;
+	load = (keep != NULL) ? before(keep) : NULL;
+	if (srcget != NULL && srcget->Pop == P_MOVE
+	  && srcget->Preg == s
+	  && (srcget->Ptype & PTF_ADRMODE) == PTA_REGIS
+	  && keep != NULL && keep->Pop == P_AND && keep->Preg == d
+	  && keep->Ptype == (PTA_RCONST+PTF_IMM)
+	  && keep->Pvalue == ((INT)0777777000000)
+	  && load != NULL && load->Pop == P_MOVE && load->Preg == d
+	  && sameaddr(load, st, 0) && !prevskips(load))
+	    {
+	    st->Pop = P_HRRM;
+	    st->Preg = s;
+	    dropinstr(ior);
+	    dropinstr(keep);
+	    dropinstr(load);
+	    return;
+	    }
+	}
+
+    /* Left-half update with an independently produced source value:
+    **
+    **     HRRZ  D,M
+    **     <produce S>
+    **     LSH   S,18
+    **     IOR   D,S
+    **     MOVEM D,M
+    **
+    ** HRLM stores the right half of S into the left half of M, exactly
+    ** the bits that LSH S,18 would contribute to D.  When the one source
+    ** instruction between the old-half load and the shift does not use D,
+    ** the old-half load, shift, and IOR are all dead.
+    */
+    if (srcop != NULL && srcop->Pop == P_LSH && srcop->Preg == s
+      && (srcop->Ptype & PTF_ADRMODE) == PTA_RCONST
+      && srcop->Pvalue == 18 && !prevskips(srcop)) {
+        srcget = before(srcop);
+        load = (srcget != NULL) ? before(srcget) : NULL;
+        if (srcget != NULL && !prevskips(srcget)
+          && load != NULL && load->Pop == P_HRRZ && load->Preg == d
+          && !prevskips(load) && d != s && !rincode(srcget, d)
+          && sameaddr(load, st, 0)) {
+            st->Pop = P_HRLM;
+            st->Preg = s;
+            dropinstr(ior);
+            dropinstr(srcop);
+            dropinstr(load);
+            return;
+        }
+    }
+
+    /* Left-half update.  Require the canonical source sequence so the
+    ** shift can be removed and HRLM can consume the original low half.
+    */
+    if (srcop != NULL && srcop->Pop == P_LSH && srcop->Preg == s
+      && (srcop->Ptype & PTF_ADRMODE) == PTA_RCONST
+      && srcop->Pvalue == 18)
+	{
+	srcget = before(srcop);
+	if (srcget != NULL && srcget->Pop == P_HRRZ
+	  && (srcget->Ptype & PTF_ADRMODE) == PTA_REGIS
+	  && srcget->Preg == s && srcget->Pr2 == s)
+	    {
+	    PCODE *smove, *rload;
+	    smove = before(srcget);
+	    rload = (smove != NULL) ? before(smove) : NULL;
+	    if (smove != NULL && smove->Pop == P_MOVE && smove->Preg == s
+	      && (smove->Ptype & PTF_ADRMODE) == PTA_REGIS
+	      && rload != NULL && rload->Pop == P_HRRZ && rload->Preg == d
+	      && sameaddr(rload, st, 0) && !prevskips(rload))
+		{
+		st->Pop = P_HRLM;
+		st->Preg = s;
+		dropinstr(ior);
+		dropinstr(srcop);
+		dropinstr(rload);
+		return;
+		}
+	    }
+	}
 }
 
 void
@@ -575,20 +1330,87 @@ code00(int op, int r, int s)
 #endif
 
 
-    if (Register_Preserve(s) && op == P_MOVE && r == s)
+    if (op == P_MOVE && r == s)
 	return;		/* Don't create useless "MOVE R,R" */
 
-    if (Register_Nopreserve(s))
-    /* Simple pre-optimization. */
+    if (Register_Nopreserve(s) && (op & POF_OPCODE) != P_IBP)
+    /* Simple pre-optimization.  IBP modifies its second AC in place, so
+    ** substituting a CSE register for that operand would move the side
+    ** effect to the wrong physical register.
+    */
 	s = ufcreg(s);			/* Flush failed changereg for 2nd AC */
     if (Register_Nopreserve(r))
 	if ((op & POF_OPCODE) == P_CAM)	/* and other if comparison */
 	    r = ufcreg(r);
 
+    /* A plain register copy followed immediately by the reverse copy leaves
+    ** the second destination unchanged.  Do not fold across a skip, because
+    ** the first MOVE might not execute.
+    **
+    **     MOVE S,R
+    **     MOVE R,S     -> MOVE S,R
+    */
+    prev = previous;
+    if (optobj && op == P_MOVE && prev != NULL
+      && !prevskips(prev) && prev->Pop == P_MOVE
+      && (prev->Ptype & ~PTF_SKIPPED) == PTA_REGIS
+      && prev->Preg == s && prev->Pr2 == r)
+	return;
+
+    /* A register copy immediately overwritten by another register copy
+    ** has no observable effect.  Keep skipped instructions intact because
+    ** removing one would change the control-flow meaning of the skip.
+    **
+    **     MOVE R,S
+    **     MOVE R,T     -> MOVE R,T
+    */
+    prev = previous;
+    if (optobj && op == P_MOVE && prev != NULL
+      && !prevskips(prev)
+      && (prev->Ptype & ~PTF_SKIPPED) == PTA_REGIS
+      && prev->Pop == P_MOVE && prev->Preg == r)
+	dropinstr(prev);
+
     /* Now just add the instruction. */
     prev = previous;			/* Remember previous, if any */
     p = newcode(PTA_REGIS, op, r);
     p->Pr2 = s;
+
+    /* Fold a value move followed by self negation.
+    **
+    **     MOVE  R,X
+    **     MOVN  R,R     -> MOVN R,X
+    **
+    ** This also covers MOVEI/MOVNI.  MOVE and MOVN accept the same
+    ** effective-address forms, so the transformation is exact.
+    */
+    if (optobj && op == P_MOVN && r == s && prev != NULL
+      && !prevskips(prev) && prev->Pop == P_MOVE && prev->Preg == r)
+        {
+        prev->Pop = P_MOVN;
+        dropinstr(p);
+        return;
+        }
+
+    /* Fold a fetched word followed by a self halfword extraction.
+    **
+    **     MOVE  R,m
+    **     HRRZ  R,R
+    **
+    ** becomes HRRZ R,m (and likewise for HLRZ).  Keep this deliberately
+    ** local and restricted to ordinary memory addressing; it needs no
+    ** persistent analysis state and is exact on every PDP-10 target.
+    */
+    if (optobj && r == s && (op == P_HRRZ || op == P_HLRZ)
+      && prev != NULL && !prevskips(prev)
+      && prev->Pop == P_MOVE && prev->Preg == r
+      && ((prev->Ptype & PTF_ADRMODE) == PTA_MINDEXED
+       || (prev->Ptype & PTF_ADRMODE) == PTA_REGIS))
+	{
+	prev->Pop = op;
+	dropinstr(p);
+	return;
+	}
 
     /* Everything else is optimization hacks */
 
@@ -598,7 +1420,8 @@ code00(int op, int r, int s)
     ** Neither pushneg nor pnegreg creates or kills any instructions,
     ** so pointers remain safe.
     */
-    if (Register_Nopreserve(p->Preg) && Register_Nopreserve(p->Pr2) &&
+    if (prev != NULL &&
+	    Register_Nopreserve(p->Preg) && Register_Nopreserve(p->Pr2) &&
 	    Register_Nopreserve(prev->Preg) && Register_Nopreserve(prev->Pr2))
 	if (optobj)
 	    switch (op)
@@ -622,6 +1445,7 @@ code00(int op, int r, int s)
 			}
 		    p->Pop = P_MOVE;		/* Value negated! Change op to MOVE */
 					/* and drop thru to handle MOVE */
+		/* FALLTHROUGH */
 		case P_MOVE:
 		    if (changereg(r, s, prev))
 			flsprev();		/* Won, can flush instr we added */
@@ -641,6 +1465,8 @@ code00(int op, int r, int s)
 		    break;
 		}
 
+    foldshiftmask();
+
 #if DEBUG_KCC		/* 5/91 KCC size */
     /* Done, show updated buffer on debugging output if required */
     if (debpho)
@@ -654,18 +1480,13 @@ code00(int op, int r, int s)
 */
 
 void
-code1(op, vr, s)
-int op;
-VREG *vr;
-INT s;
+code1(int op, struct vreg * vr, INT s)
 {
     codr1(op, vrtoreal(vr), s);
 }
 
 void
-codr1(op, r, s)
-int op, r;
-INT s;
+codr1(int op, int r, INT s)
 {
     PCODE *p;
 
@@ -678,11 +1499,61 @@ INT s;
 #endif
     p = newcode(PTA_RCONST+PTF_IMM, op, r);
     p->Poffset = s;
+    /* Reuse an unsigned-ordering bias across the fall-through arm of a
+    ** short-circuit range test.  GBOOLOP emits unsigned comparisons as
+    ** MOVE/TLC/CAM.  In
+    **
+    **     MOVE A,S
+    **     TLC  A,400000
+    **     CAMx A,[C1]
+    **      JRST L
+    **     MOVE B,S
+    **     TLC  B,400000
+    **     CAMy B,[C2]
+    **
+    ** A is unchanged on the fall-through path, so the second MOVE/TLC is
+    ** redundant.  Keep this exact and local: both comparisons must be CAM
+    ** skips, the intervening instruction must be their skipped JRST, and
+    ** both source copies must be ordinary unskipped register moves.
+    */
+    if (optobj && (op & POF_OPCODE) == P_CAM)
+	{
+	PCODE *t2, *m2, *j, *c1, *t1, *m1;
+
+	t2 = before(p);
+	m2 = (t2 != NULL) ? before(t2) : NULL;
+	j = (m2 != NULL) ? before(m2) : NULL;
+	c1 = (j != NULL) ? before(j) : NULL;
+	t1 = (c1 != NULL) ? before(c1) : NULL;
+	m1 = (t1 != NULL) ? before(t1) : NULL;
+	if (t2 != NULL && t2->Pop == P_TLC && t2->Preg == r
+	  && t2->Ptype == PTA_RCONST && t2->Pvalue == 0400000L
+	  && !prevskips(t2)
+	  && m2 != NULL && m2->Pop == P_MOVE && m2->Preg == r
+	  && (m2->Ptype & ~PTF_SKIPPED) == PTA_REGIS && !prevskips(m2)
+	  && j != NULL && j->Pop == P_JRST
+	  && (j->Ptype & PTF_SKIPPED) != 0
+	  && c1 != NULL && (c1->Pop & POF_OPCODE) == P_CAM
+	  && isskip(c1->Pop)
+	  && t1 != NULL && t1->Pop == P_TLC
+	  && t1->Preg == c1->Preg && t1->Ptype == PTA_RCONST
+	  && t1->Pvalue == 0400000L && !prevskips(t1)
+	  && m1 != NULL && m1->Pop == P_MOVE && m1->Preg == t1->Preg
+	  && (m1->Ptype & ~PTF_SKIPPED) == PTA_REGIS && !prevskips(m1)
+	  && m1->Pr2 == m2->Pr2 && m1->Preg != m1->Pr2)
+	    {
+	    p->Preg = m1->Preg;
+	    dropinstr(t2);
+	    dropinstr(m2);
+	    }
+	}
 
     if (optobj)
 	{
 	foldplus(p);		/* now do post-optimizations */
 	foldmove(previous);	/* "previous" instead of "p", maybe changed */
+
+	foldshiftmask();
 	}
 #if DEBUG_KCC		/* 5/91 KCC size */
     if (debpho)
@@ -699,12 +1570,7 @@ INT s;
 */
 
 void
-codebp(op, r, b, i, sym, o)
-int op, r;		/* Note real, not vreg */
-INT b;
-int i;
-SYMBOL *sym;
-INT o;
+codebp(int op, int r, INT b, int i, struct symbol * sym, INT o)
 {
     PCODE *p;
 
@@ -741,9 +1607,7 @@ INT o;
 */
 
 void
-code3(op, vr, s)
-SYMBOL *s;
-VREG *vr;
+code3(int op, struct vreg * vr, struct symbol * s)
 {
     codrmdx(PTA_MINDEXED+PTF_IMM, op, vrtoreal(vr), s, 0, 0);
 }
@@ -762,8 +1626,7 @@ VREG *vr;
 */
 
 void
-code4(op, reg, idx)
-VREG *reg, *idx;
+code4(int op, struct vreg * reg, struct vreg * idx)
 {
     int r, s;
 
@@ -778,17 +1641,14 @@ static char *tmp_mnem;  /* KAR-2/91, static storage for imuuo mnemonic */
 extern int _chnl;	/* KAR-2/91, temporary storage for channel numbers */
 
 void
-code4m(op, reg, idx, mnem)
-int op;
-VREG *reg, *idx;
-char *mnem;
+code4m(int op, struct vreg * reg, struct vreg * idx, char * mnem)
 {
     int r, s;
 
     tmp_mnem = (char *) calloc(1, strlen(mnem) + 1);
     if (tmp_mnem == NULL)
 	jerr("Out of memory for imuuo mnemonic\n");
-    strcpy(tmp_mnem, mnem);
+    memcpy(tmp_mnem, mnem, strlen(mnem) + 1);
 
     r = reg ? vrstoreal(reg, idx) : 0;	/* Allow IBP/JRST 0, */
     s = ufcreg(vrtoreal(idx));
@@ -798,8 +1658,7 @@ char *mnem;
 }
 
 void
-codek4(op, reg, idx)
-VREG *reg, *idx;
+codek4(int op, struct vreg * reg, struct vreg * idx)
 {
     VREG *r3;
     int r, s;
@@ -814,10 +1673,7 @@ VREG *reg, *idx;
 }
 
 void
-code4s(op, reg, idx, keep, bsiz)
-int op;
-VREG *reg, *idx;
-INT bsiz;
+code4s(int op, struct vreg * reg, struct vreg * idx, int keep, INT bsiz)
 {
     VREG *r3;
     int r, s;
@@ -840,12 +1696,153 @@ INT bsiz;
 }
 
 void
-code40(op, r, s, bsiz)
-int op;
-int r, s;
-INT bsiz;
+code40(int op, int r, int s, INT bsiz)
 {
-    PCODE *p;
+    PCODE *p, *addp, *movp;
+    INT offset;
+
+    /* LSHC/ASHC take a signed constant count directly.  Do not keep a
+    ** one-use AC merely to hold a constant shift count.
+    **
+    **     MOVEI t,n       MOVEI t,n
+    **     LSHC  r,0(t)    MOVN  t,t
+    **                     ASHC  r,0(t)
+    **
+    ** become LSHC r,n and ASHC r,-n respectively.  code4() has already
+    ** released the index VREG, so the immediately preceding definition is
+    ** the complete lifetime of t. */
+    if (optobj && bsiz == 0 && (op == P_LSHC || op == P_ASHC)
+      && previous != NULL && !prevskips(previous)) {
+        PCODE *q;
+
+        if (previous->Pop == P_MOVE && previous->Preg == s
+          && (previous->Ptype & ~PTF_SKIPPED) == PTV_IMMED) {
+            offset = previous->Pvalue;
+            dropinstr(previous);
+            codr8(op, r, offset);
+            return;
+        }
+        if (previous->Pop == P_MOVN && previous->Preg == s
+          && (previous->Ptype & ~PTF_SKIPPED) == PTA_REGIS
+          && previous->Pr2 == s && (q = before(previous)) != NULL
+          && !prevskips(q) && q->Pop == P_MOVE && q->Preg == s
+          && (q->Ptype & ~PTF_SKIPPED) == PTV_IMMED) {
+            offset = -q->Pvalue;
+            dropinstr(previous);
+            dropinstr(q);
+            codr8(op, r, offset);
+            return;
+        }
+    }
+
+    offset = 0;
+    /* Fold a one-use address temporary into the PDP-10 indexed operand.
+    **
+    **     MOVE  t,base
+    **     ADDI  t,n
+    **     MOVE  r,0(t)     -> MOVE  r,n(base)
+    **
+    ** The same fold is safe for MOVEM when the stored value is not the
+    ** address temporary itself.  Restricting the transformation to these
+    ** two common operations keeps it local and avoids any liveness table.
+    */
+    if (optobj && previous != NULL
+      && (r != s || op == P_MOVE)) {
+        /* If the address was just copied out of another register, the
+        ** indexed operand can use that register directly.  UFCREG cannot
+        ** do this for preserved registers because it must conservatively
+        ** protect their values in general; here the temporary is consumed
+        ** immediately as an address, so the fold is exact.
+        */
+        movp = previous;
+        if ((movp->Ptype & ~PTF_SKIPPED) == PTA_REGIS
+          && movp->Pop == P_MOVE && movp->Preg == s
+          && !prevskips(movp)) {
+            s = movp->Pr2;
+            dropinstr(movp);
+        }
+
+        addp = previous;
+        movp = addp ? before(addp) : NULL;
+        if (movp != NULL
+          && (addp->Ptype & ~PTF_SKIPPED) == PTV_IMMED
+          && addp->Pop == P_ADD && addp->Preg == s
+          && !prevskips(addp)
+          && (movp->Ptype & ~PTF_SKIPPED) == PTA_REGIS
+          && movp->Pop == P_MOVE && movp->Preg == s
+          && !prevskips(movp)) {
+            offset = addp->Pvalue;
+            s = movp->Pr2;
+            dropinstr(addp);
+            dropinstr(movp);
+        }
+    }
+
+    /* Forward a recent store through a pure register-indexed address.
+    ** codemdx() handles the symbolic/indexed form; code40() is the path
+    ** for 0(AC) and folded displacement operands.  Look through a few
+    ** register-only operations, but stop at memory, control flow, skips,
+    ** or a change to the address index.
+    */
+    if (optobj && op == P_MOVE && previous != NULL) {
+        PCODE *q, *t;
+        int nscan;
+
+        for (q = previous, nscan = 0; q != NULL && nscan < 4;
+             q = before(q), ++nscan) {
+            int amode, changed, regmem;
+
+            amode = q->Ptype & PTF_ADRMODE;
+            regmem = (amode == PTA_MINDEXED && q->Pptr == NULL
+                      && q->Pindex == 0 && q->Poffset > 0
+                      && q->Poffset < NREGS);
+            if (prevskips(q) || isskip(q->Pop) || rrchg(q, s)
+              || (regmem && q->Poffset == s))
+                break;
+            if (q->Pop == P_MOVEM
+              && (q->Ptype & ~PTF_SKIPPED) == PTA_MINDEXED
+              && q->Pptr == NULL && q->Poffset == offset
+              && q->Pindex == s) {
+                changed = 0;
+                for (t = after(q); t != NULL; t = after(t)) {
+                    int tm = t->Ptype & PTF_ADRMODE;
+                    int trm = (tm == PTA_MINDEXED && t->Pptr == NULL
+                               && t->Pindex == 0 && t->Poffset > 0
+                               && t->Poffset < NREGS);
+                    if (rrchg(t, q->Preg) || (trm && (t->Pop & POF_BOTH)
+                                              && t->Poffset == q->Preg)) {
+                        changed = 1;
+                        break;
+                    }
+                    if (t == previous)
+                        break;
+                }
+                if (!changed) {
+                    code00(P_MOVE, r, q->Preg);
+                    return;
+                }
+                break;
+            }
+            if (((popflg[q->Pop & POF_OPCODE] & PF_MEMCHG) && !regmem)
+              || ((amode == PTA_MINDEXED || amode == PTA_BYTEPOINT)
+                  && !regmem))
+                break;
+            switch (q->Pop & POF_OPCODE) {
+            case P_JRST:
+            case P_JUMP:
+            case P_PUSHJ:
+            case P_POPJ:
+            case P_AOJ:
+            case P_SOJ:
+                q = NULL;
+                break;
+            default:
+                break;
+            }
+            if (q == NULL)
+                break;
+        }
+    }
 
 #if DEBUG_KCC		/* 5/91 KCC size */
     if (debpho)
@@ -858,9 +1855,54 @@ INT bsiz;
     /* First just add the instruction */
     p = newcode(PTA_MINDEXED, op, r);
     p->Pptr = NULL;
-    p->Poffset = 0;
+    p->Poffset = offset;
     p->Pindex = s;
     p->Pbsize = bsiz;
+
+    /* Drop an earlier store to the same pure indexed address when only
+    ** register/constant operations intervene.  The later MOVEM overwrites
+    ** the first value before memory can observe it.  Keep the scan short and
+    ** conservative: no skips, no memory operands, no memory-changing ops,
+    ** no control flow, and the address index must remain unchanged.
+    */
+    if (optobj && op == P_MOVEM && !prevskips(p)) {
+        PCODE *q;
+        int nscan;
+
+        for (q = before(p), nscan = 0; q != NULL && nscan < 4;
+             q = before(q), ++nscan) {
+            int amode;
+
+            if (prevskips(q))
+                break;
+            if (q->Pop == P_MOVEM
+              && (q->Ptype & PTF_ADRMODE) == PTA_MINDEXED
+              && q->Pptr == NULL && sameaddr(q, p, 0)) {
+                dropinstr(q);
+                break;
+            }
+            if ((popflg[q->Pop & POF_OPCODE] & PF_MEMCHG)
+              || isskip(q->Pop) || rrchg(q, p->Pindex))
+                break;
+            amode = q->Ptype & PTF_ADRMODE;
+            if (amode == PTA_MINDEXED || amode == PTA_BYTEPOINT)
+                break;
+            switch (q->Pop & POF_OPCODE) {
+            case P_JRST:
+            case P_JUMP:
+            case P_PUSHJ:
+            case P_POPJ:
+            case P_AOJ:
+            case P_SOJ:
+                q = NULL;
+                break;
+            default:
+                break;
+            }
+            if (q == NULL)
+                break;
+        }
+    }
 
 /*
  * KAR-1/92, use channel field for null ptr det. to store line number also
@@ -872,9 +1914,10 @@ INT bsiz;
 	    p->p_im.mnemonic = (char *) calloc(1, strlen(tmp_mnem) + 1);
 	    if (p->p_im.mnemonic == NULL)
 		jerr("Out of memory for null ptr detection mnemonic\n");
-	    strcpy(p->p_im.mnemonic, tmp_mnem);
+	    memcpy(p->p_im.mnemonic, tmp_mnem, strlen(tmp_mnem) + 1);
 	    free(tmp_mnem);
 	    tmp_mnem = NULL;
+	/* FALLTHROUGH */
 	case P_NULPTR:
 	    p->p_im.p_chnl = _chnl;
 	    _chnl = -1;	/* KAR-6/91, Changed empty signal to -1 from 0 */
@@ -891,6 +1934,131 @@ INT bsiz;
 #endif
 }
 
+/* FOLDRETPOPJ - Retarget a terminal return producer into AC1.
+**
+**     op    T,x
+**     MOVE  1,T
+**     POPJ  17,
+**
+** becomes:
+**
+**     op    1,x
+**     POPJ  17,
+**
+** Only pure value producers are accepted.  Arithmetic operations such as
+** ADD/SUB are excluded because their result depends on the old destination.
+*/
+static void
+foldretpopj(struct pcode * p)
+{
+    PCODE *m, *q;
+    int src, op;
+
+    if (p == NULL || p->Pop != P_POPJ
+      || (m = before(p)) == NULL || m->Pop != P_MOVE
+      || m->Ptype != PTA_REGIS || m->Preg != R_RETVAL
+      || prevskips(m))
+	return;
+
+    src = m->Pr2;
+    if (src == R_RETVAL || (q = before(m)) == NULL || q->Preg != src
+      || prevskips(q) || (q->Pop & POF_BOTH))
+	return;
+
+    op = q->Pop & POF_OPCODE;
+    switch (op)
+	{
+	case P_MOVE:
+	case P_MOVN:
+	case P_SETZ:
+	case P_SETO:
+	case P_HLRZ:
+	case P_HRRZ:
+	    break;
+	default:
+	    return;
+	}
+
+    q->Preg = R_RETVAL;
+    dropinstr(m);
+}
+
+/* FOLDRETCHAIN - Retarget a short terminal value chain into AC1.
+**
+**     setop T,x
+**     modop T,y
+**     MOVE  1,T
+**     POPJ  17,
+**
+** becomes:
+**
+**     setop 1,x
+**     modop 1,y
+**     POPJ  17,
+**
+** The first op must completely define T.  The modifying op may read T, but
+** must not otherwise reference AC1; otherwise retargeting the first op could
+** destroy a value used by the modifier.
+*/
+static void
+foldretchain(struct pcode * p)
+{
+    PCODE *m, *q, *d;
+    int src, op;
+
+    if (p == NULL || p->Pop != P_POPJ
+      || (m = before(p)) == NULL || m->Pop != P_MOVE
+      || m->Ptype != PTA_REGIS || m->Preg != R_RETVAL
+      || prevskips(m))
+	return;
+
+    src = m->Pr2;
+    if (src == R_RETVAL || (q = before(m)) == NULL || q->Preg != src
+      || prevskips(q) || (q->Pop & POF_BOTH) || rincode(q, R_RETVAL))
+	return;
+
+    op = q->Pop & POF_OPCODE;
+    switch (op)
+	{
+	case P_ADD:
+	case P_SUB:
+	case P_AND:
+	case P_IOR:
+	case P_XOR:
+	case P_TLC:
+	case P_TLO:
+	case P_TLZ:
+	case P_TRC:
+	case P_TRO:
+	case P_TRZ:
+	    break;
+	default:
+	    return;
+	}
+
+    if ((d = before(q)) == NULL || d->Preg != src || prevskips(d)
+      || (d->Pop & POF_BOTH))
+	return;
+
+    op = d->Pop & POF_OPCODE;
+    switch (op)
+	{
+	case P_MOVE:
+	case P_MOVN:
+	case P_SETZ:
+	case P_SETO:
+	case P_HLRZ:
+	case P_HRRZ:
+	    break;
+	default:
+	    return;
+	}
+
+    d->Preg = R_RETVAL;
+    q->Preg = R_RETVAL;
+    dropinstr(m);
+}
+
 /* CODE5 - Generate op using only a single register operand.
 **	OP reg,
 **
@@ -898,8 +2066,7 @@ INT bsiz;
 */
 
 void
-code5(op, reg)
-VREG *reg;
+code5(int op, struct vreg * reg)
 {
     PCODE *p, *q;
     int r;
@@ -914,6 +2081,12 @@ VREG *reg;
 #endif
 
     p = newcode(PTA_ONEREG, op, r);		/* Add the instruction */
+
+    if (optobj && op == P_POPJ)
+	{
+	    foldretpopj(p);
+	    foldretchain(p);
+	}
 
     if (optobj && (op == P_SETZ || op == P_SETO))
 	{
@@ -940,12 +2113,8 @@ VREG *reg;
 #endif
 }
 
-extern void free();
-
 void
-code5m(op, reg, mnem)
-VREG *reg;
-char *mnem;
+code5m(int op, struct vreg * reg, char * mnem)
 {
     PCODE *p, *q;
     int r;
@@ -968,7 +2137,7 @@ char *mnem;
 	p->p_im.mnemonic = (char *) calloc(1, strlen(mnem) + 1);
 	if (p->p_im.mnemonic == NULL)
 	    jerr("Out of memory for null ptr mnemonic\n");
-	strcpy(p->p_im.mnemonic, mnem);
+	memcpy(p->p_im.mnemonic, mnem, strlen(mnem) + 1);
 	p->p_im.p_chnl = _chnl;
 	_chnl = -1;	/* KAR-6/91, Changed sentinal value to -1 from 0 */
 	}
@@ -1005,9 +2174,7 @@ char *mnem;
 
 
 void
-code6(op, reg, s)
-SYMBOL *s;
-VREG *reg;
+code6(int op, struct vreg * reg, struct symbol * s)
 {
     PCODE *p;
     int r = reg ? vrtoreal(reg) : 0;	/* Handle JRST 0,lab */
@@ -1073,12 +2240,7 @@ VREG *reg;
 */
 
 void
-codemdx(op, rreg, pptr, poffset, rindex)
-int op;
-SYMBOL *pptr;
-int rreg;
-INT poffset;
-int rindex;		/* Not vregs! */
+codemdx(int op, int rreg, struct symbol * pptr, INT poffset, int rindex)
 {
     PCODE *p;
     int nreg;
@@ -1102,6 +2264,24 @@ int rindex;		/* Not vregs! */
 	return;
 	}
     nreg = ufcreg(rreg);		/* undo failed changereg */
+
+    /* Forward an immediately preceding store to the exact same address.
+    ** No memory analysis is needed because there is no intervening code.
+    **
+    **     MOVEM S,X
+    **     MOVE  R,X        -> MOVE R,S
+    */
+    if (optobj && op == P_MOVE && previous != NULL
+      && previous->Pop == P_MOVEM
+      && (previous->Ptype & ~PTF_SKIPPED) == PTA_MINDEXED
+      && previous->Pptr == pptr && previous->Poffset == poffset
+      && previous->Pindex == rindex && !prevskips(previous))
+	{
+	code00(P_MOVE, nreg, previous->Preg);
+	if (nreg != rreg)
+	    code00(P_MOVE, rreg, nreg);
+	return;
+	}
 
     /* too general for optimization, just add the code */
     p = newcode(PTA_MINDEXED, op, nreg);
@@ -1129,21 +2309,15 @@ int rindex;		/* Not vregs! */
 */
 
 void
-code8(op, reg, val)
-int op;
-VREG *reg;
-INT val;
+code8(int op, struct vreg * reg, INT val)
 {
     codr8(op, vrtoreal(reg), val);
 }
 
 static void
-codr8(op, r, val)
-int op;
-int r;
-INT val;
+codr8(int op, int r, INT val)
 {
-    PCODE *p;
+    PCODE *p, *q;
 
 #if DEBUG_KCC		/* 5/91 KCC size */
     if (debpho)
@@ -1166,6 +2340,30 @@ INT val;
 	    return;
 	    }
 	}
+
+    /* Fold a constant formed by clearing a register and then toggling
+    ** bits in its left half.
+    **
+    **     SETZ  R,
+    **     TLC   R,n
+    **
+    ** becomes a single MOVE of the corresponding 36-bit constant.
+    ** Later output optimization may fold that constant into its consumer.
+    */
+    if (optobj && op == P_TLC && previous != NULL) {
+	q = previous;
+	if (q->Pop == P_SETZ && q->Ptype == PTA_ONEREG
+	  && q->Preg == r && !prevskips(q)) {
+	    q->Pop = P_MOVE;
+	    q->Ptype = PTV_IMMED;
+	    q->Pvalue = (val & 0777777L) << 18;
+#if DEBUG_KCC
+	    if (debpho)
+		shocum();
+#endif
+	    return;
+	}
+    }
 
     p = newcode(PTA_RCONST, op, r);
     p->Pvalue = val;
@@ -1275,20 +2473,13 @@ code9(int op, VREG *vr, double value, int twowds)
 */
 
 void
-code10(op, vr, addr, bsize, offset)
-int op;
-VREG *vr;
-SYMBOL *addr;
-INT bsize, offset;
+code10(int op, struct vreg * vr, struct symbol * addr, INT bsize, INT offset)
 {
     codr10(op, vrtoreal(vr), addr, bsize, offset);
 }
 
 void
-codr10(op, r, addr, bsize, offset)
-int op, r;
-SYMBOL *addr;
-INT bsize, offset;
+codr10(int op, int r, struct symbol * addr, INT bsize, INT offset)
 {
     PCODE *p;
     int nreg;
@@ -1326,11 +2517,7 @@ INT bsize, offset;
 **	Note that the registers "reg" and "index" are real regs, not virtual.
 */
 static void
-codrmdx(type, op, reg, ptr, offset, index)
-int type, op, reg;
-SYMBOL *ptr;
-INT offset;
-int index;
+codrmdx(int type, int op, int reg, struct symbol * ptr, INT offset, int index)
 {
     PCODE *p;
 
@@ -1369,10 +2556,7 @@ int index;
 ** This is used only by CCREG to despill registers with MOVE or DMOVE.
 */
 void
-code12(op, vr, offset)
-int op;
-VREG *vr;
-INT offset;
+code12(int op, struct vreg * vr, INT offset)
 {
     codrmdx(PTA_MINDEXED, op, vrtoreal(vr), (SYMBOL *)NULL, offset, R_SP);
 }
@@ -1384,13 +2568,23 @@ INT offset;
 ** becomes an MOVEI of a stack location.
 */
 void
-code13(op, vr, offset)
-int op;
-VREG *vr;
-INT offset;
+code13(int op, struct vreg * vr, INT offset)
 {
     codrmdx(PTA_MINDEXED+PTF_IMM, op, vrtoreal(vr),
 					(SYMBOL *)NULL, offset, R_SP);
+}
+
+/* CODE14 - Generates an op whose effective address is an accumulator.
+**	OP reg,ac
+**
+** PDP-10 accumulators are memory locations 0 through 17.  This form is
+** distinct from 0(ac), which uses the accumulator as an index register.
+*/
+void
+code14(int op, struct vreg * vr, int addr)
+{
+    codrmdx(PTA_MINDEXED, op, vrtoreal(vr),
+					(SYMBOL *)NULL, (INT) addr, 0);
 }
 
 /* CODE15 - Generates op with indirect indexed local label
@@ -1399,10 +2593,7 @@ INT offset;
 ** Only used by CCGSWI with op JRST for switch jump tables.
 */
 void
-code15(op, lab, off, idx)
-SYMBOL *lab;
-INT off;
-VREG *idx;
+code15(int op, struct symbol * lab, INT off, struct vreg * idx)
 {
     codrmdx(PTA_MINDEXED+PTF_IND, op, 0, lab, off, vrtoreal(idx));
 }
@@ -1413,9 +2604,7 @@ VREG *idx;
 ** Only used by CCGSWI with op CAM for checking switch hash tables.
 */
 void
-code16(op, vr, lab, vs)
-SYMBOL *lab;
-VREG *vr, *vs;
+code16(int op, struct vreg * vr, struct symbol * lab, struct vreg * vs)
 {
     int r = vrstoreal(vr, vs);		/* Ensure both R and S in real regs */
     codrmdx(PTA_MINDEXED, op, r, lab, 0, vrreal(vs));
@@ -1427,8 +2616,7 @@ VREG *vr, *vs;
 */
 
 void
-code17(value)
-INT value;
+code17(INT value)
 {
     PCODE *p;
 #if DEBUG_KCC		/* 5/91 KCC size */
@@ -1449,9 +2637,7 @@ INT value;
 **	assembly language string.  This implements the asm() construction.
 */
 void
-codestr(s, len)
-char *s;
-int len;
+codestr(char * s, int len)
 {
     flushcode();		/* Ensure pcode buffer flushed */
     while (--len >= 0)
@@ -1470,8 +2656,7 @@ int len;
 ** the list of labels queued by freelabel().
 */
 void
-codlabel(lab)
-SYMBOL *lab;
+codlabel(struct symbol * lab)
 {
     INT after = 0;
 
@@ -1510,8 +2695,7 @@ SYMBOL *lab;
 ** These are not as well behaved as loop and if labels so we can't do as much.
 */
 void
-codgolab(lab)
-SYMBOL *lab;
+codgolab(struct symbol * lab)
 {
 #if DEBUG_KCC		/* 5/91 KCC size */
     if (debpho)
@@ -1537,6 +2721,7 @@ SYMBOL *lab;
 /*	return immediate version of boolean operator      */
 /* ------------------------------------------------------ */
 
+int
 immedop(int op)
 {
     switch (op & POF_OPCODE)
@@ -1568,8 +2753,7 @@ immedop(int op)
 **		just added; an OP R,S instr).
 */
 static void
-codrrx(prev, np)
-PCODE *prev, *np;
+codrrx(struct pcode * prev, struct pcode * np)
 {
     PCODE *q;
 
@@ -1609,8 +2793,7 @@ PCODE *prev, *np;
 ** Returns TRUE if an optimization change was made.
 */
 static int
-rrpre1(p)
-PCODE *p;
+rrpre1(struct pcode * p)
 {
     PCODE *q;
     int r, s;
@@ -1687,8 +2870,7 @@ PCODE *p;
 **		which makes various things safe.
 */
 static int
-rrpre2(p, np)
-PCODE *p, *np;		/* An existing instruction being examined */
+rrpre2(struct pcode * p, struct pcode * np)
 {
     int op = np->Pop;	/* OP R,S of new instruction we just added */
     int r = np->Preg;
@@ -1767,6 +2949,7 @@ PCODE *p, *np;		/* An existing instruction being examined */
 	    np->Pop = op;
 	/* Then drop through to following case */
 
+	/* FALLTHROUGH */
 	case P_DMOVE:
 	    switch (op)
 		{
@@ -1879,12 +3062,14 @@ PCODE *p, *np;		/* An existing instruction being examined */
 		    return 1;
 		}
 
+	/* FALLTHROUGH */
 	case P_SETO:			/* fall in from P_SETZ above */
 	/* fold: SETZ/SETO S, to MOVNI S,0/1 */
 	    p->Pvalue = (p->Pop == P_SETO ? 1 : 0);
 	    p->Pop = P_MOVN;
 	    p->Ptype = PTV_IMMED;		/* then drop through */
 
+	/* FALLTHROUGH */
 	case P_MOVN:
 	/* invert MOVN(*) to MOVE(*) for following optimization */
 
@@ -1944,6 +3129,7 @@ PCODE *p, *np;		/* An existing instruction being examined */
 				codrrx(p, np);		/* Continue looking back */
 				return 1;
 			    }
+		/* FALLTHROUGH */
 		default:
 		    if (p->Ptype == PTV_IMMED)
 			{
@@ -1956,7 +3142,14 @@ PCODE *p, *np;		/* An existing instruction being examined */
 			}
 		}	/* Drop through to following case */
 
+	/* FALLTHROUGH */
 	case P_MOVE:
+	    /* IBP updates its operand in place; unlike ordinary OP R,S forms,
+	    ** folding MOVE R,M / IBP R into IBP M does not leave the updated
+	    ** value in R.  A later use/store of R would therefore see stale data.
+	    */
+	    if (np->Pop == P_IBP)
+		break;
 	    rrpre3(p, np, np->Pop);		/* Always takes care of everything */
 	    return 1;
 
@@ -2069,9 +3262,7 @@ PCODE *p, *np;		/* An existing instruction being examined */
 ** "np->Pop".
 */
 static void
-rrpre3(p, np, op)
-PCODE *p, *np;
-int op;			/* Actual OP to use if a change is made */
+rrpre3(struct pcode * p, struct pcode * np, int op)
 {
     PCODE *q;
     INT stkoff;
@@ -2141,9 +3332,7 @@ int op;			/* Actual OP to use if a change is made */
 **	Returns NULL if no reference seen.
 */
 static PCODE *
-chkref(begp, q, r)
-PCODE *begp, *q;
-int r;
+chkref(struct pcode * begp, struct pcode * q, int r)
 {
     for (; q && begp != q; q = before(q))
 	{
@@ -2232,6 +3421,7 @@ chkmref (PCODE *begp, PCODE *endp, INT *aoff)
 	case PTA_REGIS:
 	    xreg = begp->Pr2;		/* Then drop thru to ignore offset */
 
+	/* FALLTHROUGH */
 	default:
 	    aoff = NULL;
 	    break;
@@ -2320,8 +3510,7 @@ chkmref (PCODE *begp, PCODE *endp, INT *aoff)
 **	P points to the OP R,x instruction.
 */
 static void
-rrpopt(p)
-PCODE *p;
+rrpopt(struct pcode * p)
 {
     PCODE *q;
     int op;
@@ -2402,6 +3591,7 @@ PCODE *p;
 			    break;		/* No, return now. */
 			/* Drop through to next case */
 
+		    /* FALLTHROUGH */
 		    case P_IMUL:
 			/*
 			** fold:  IMULI  R,n
@@ -2458,6 +3648,7 @@ PCODE *p;
 		    }
 	    /* fall through to foldplus() */
 
+	/* FALLTHROUGH */
 	case P_ADD:
 	    foldplus(p);		/* do general optimization on add */
 	    if (p != previous)		/* Take care of possible ADDI+ADDI */
@@ -2491,8 +3682,7 @@ PCODE *p;
 /* RRPOP2 - Auxiliary for CODE0, does some optimizations on OP R,S.
 */
 static void
-rrpop2(p)
-PCODE *p;
+rrpop2(struct pcode * p)
 {
     if (Register_Preserve(p->Pr2))    /* Avoids faulty optimizations  */
 	return;
@@ -2546,10 +3736,10 @@ PCODE *p;
 **	p points to just-added instruction.
 */
 static void
-foldxref(p)
-PCODE *p;
+foldxref(struct pcode * p)
 {
     PCODE *q, *b, *oldprev;
+
 
 
     /* Avoids faulty optimizations in the functions: foldxref, optlsh,
@@ -2581,6 +3771,7 @@ PCODE *p;
 		*/
 		    case P_MOVN:
 			q->Pvalue = - q->Pvalue;
+		    /* FALLTHROUGH */
 		    case P_MOVE:
 			if (q == oldprev)	/* Can we re-use last instr? */
 			    {
@@ -2610,6 +3801,7 @@ PCODE *p;
 		*/
 		    case P_SUB:
 			q->Pvalue = - q->Pvalue;
+		    /* FALLTHROUGH */
 		    case P_ADD:
 			p->Poffset = q->Pvalue;		/* Set offset to added val */
 			q->Pop = P_NOP;			/* Then drop the ADDI/SUBI */
@@ -2728,8 +3920,7 @@ PCODE *p;
 **	This function does NOT update preserve regs.
 */
 static void
-optjrst(p)
-PCODE *p;
+optjrst(struct pcode * p)
 {
     PCODE *prev, *b, *q;
 
@@ -2740,6 +3931,21 @@ PCODE *p;
 
     switch (prev->Pop & POF_OPCODE)
 	{
+	case P_SKIP:
+	    /* A late register rewrite can expose SKIPx R,R only after the
+	    ** normal code6() optimization point.  With identical source and
+	    ** destination ACs the SKIP has no value-producing side effect, so
+	    ** the following JRST is exactly the inverse JUMP condition.
+	    */
+	    if (prev->Ptype != PTA_REGIS || prev->Preg != prev->Pr2)
+		break;
+	    p->Pop = prev->Pop ^
+		(P_SKIP ^ P_JUMP ^ POF_ISSKIP ^ POSF_INVSKIP);
+	    p->Preg = prev->Pr2;
+	    clrskip(p);
+	    dropinstr(prev);
+	    break;
+
 	case P_JRST:	/* See if possibly dead code precedes the JRST */
 	case P_POPJ:
 	case P_IFIW:
@@ -2763,6 +3969,23 @@ PCODE *p;
 	    p->Preg = prev->Preg;
 	    clrskip(p);
 	    dropinstr(prev);		/* Flush the CAI */
+	    break;
+
+	case P_ADD:
+	case P_SUB:
+	    if (prev->Ptype != PTV_IMMED || prev->Pvalue != 1)
+		break;
+
+	/* fold:  ADDI R,1	into:  AOJA R,addr
+	**         JRST addr
+	**
+	** and the corresponding SUBI/SOJA form.  These are exact PDP-10
+	** increment/decrement-and-jump instructions; no condition is changed.
+	*/
+	    p->Pop = ((prev->Pop == P_ADD) ? P_AOJ : P_SOJ) + POS_SKPA;
+	    p->Preg = prev->Preg;
+	    clrskip(p);
+	    dropinstr(prev);
 	    break;
 
 	case P_AOS:

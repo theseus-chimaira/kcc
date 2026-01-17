@@ -72,6 +72,7 @@ opcode(P_FSC,	"FSC",	PF_EIMM,	PRC_RCHG, b, c, d)
 /* 30 */
 opcode(P_HLRE,	"HLRE",	0,		PRC_RSET, b, c, d)
 opcode(P_HLRZ,	"HLRZ",	0,		PRC_RSET, b, c, d)
+opcode(P_HRLZ,	"HRLZ",	0,		PRC_RSET, b, c, d)
 opcode(P_HRLI,	"HRLI", 0,		PRC_RSET, b, c, d)	/* FW 2A(41) */
 opcode(P_HRLM,	"HRLM",	PF_MEMCHG,	PRC_RSAME, b, c, d)
 opcode(P_HRRE,	"HRRE",	0,		PRC_RSET, b, c, d)
@@ -85,6 +86,7 @@ opcode(P_IFIW,	"SETZ",	0,		PRC_ILL, b, c, d)
 opcode(P_ILDB,	"ILDB",	PF_MEMCHG,	PRC_RSET, b, c, d)
 opcode(P_IMUL,	"IMUL",	PF_OPIMB,	PRC_RCHG, b, c, d)
 opcode(P_IOR,	"IOR",	PF_OPIMB,	PRC_RCHG, b, c, d)
+opcode(P_JFFO,	"JFFO",	PF_EIMM,	PRC_DCHG, b, c, d)
 opcode(P_JRST,	"JRST",	PF_EIMM,	PRC_RSAME, b, c, d)
 opcode(P_JUMP,	"JUMP",	PF_EIMM,	PRC_RSAME, b, c, d)
 opcode(P_LDB,	"LDB",	0,		PRC_RSET, b, c, d)
@@ -95,6 +97,7 @@ opcode(P_MOVEI,	"MOVEI",PF_EIMM,	PRC_RSET, b, c, d)
 /* 50 */
 opcode(P_MOVEM,	"MOVEM",PF_MEMCHG,	PRC_RSAME, b, c, d)
 opcode(P_MOVM,	"MOVM",	PF_OPI,		PRC_RSET, b, c, d)
+opcode(P_MOVMM,	"MOVMM",PF_MEMCHG,	PRC_RSAME, b, c, d)
 opcode(P_MOVN,	"MOVN",	PF_OPI,		PRC_RSET, b, c, d)
 opcode(P_MOVS,	"MOVS",	PF_OPI,		PRC_RSET, b, c, d)
 opcode(P_MUL,	"MUL",	PF_OPIMB,	PRC_DCHG_RSAME, b, c, d)
@@ -136,3 +139,6 @@ opcode(P_UIDIV,	"UIDIV",PF_OPI,		PRC_DCHG_RSAME, b, c, d) /* Simop */
 opcode(P_XOR,	"XOR",	PF_OPIMB,	PRC_RCHG, b, c, d)
 opcode(P_MUUO,  "MUUO",0,               PRC_RCHG, b, c, d) /* KAR muuo pcode*/
 opcode(P_NULPTR,"NPD",  0,              PRC_RSAME, b, c, c)
+opcode(P_HLLZ,  "HLLZ", 0,              PRC_RSET, b, c, d)
+/* Target-variant instructions.  Keep additions at end to preserve P_ values. */
+opcode(P_CIRC,  "CIRC",  PF_EIMM, PRC_DCHG, b, c, d) /* ITS raw AC-pair circulate */

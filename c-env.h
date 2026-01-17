@@ -18,6 +18,13 @@
         ** They should always be enclosed in ifndefs so users can override
         ** the site defaults if they know what they're doing.
         */
+#ifndef HOST_UNIX
+# if defined(__linux__) || defined(__unix__)
+#  define HOST_UNIX 1
+# else
+#  define HOST_UNIX 0
+# endif
+#endif
 #ifndef SYS_CSI
 #define SYS_CSI 1
 #endif
@@ -91,6 +98,9 @@
  *      Define only one of the following to be 1.
  */
 
+#ifndef CPU_PDP6
+#define CPU_PDP6 0      /* DEC PDP-6 */
+#endif
 #ifndef CPU_KA
 #define CPU_KA 0        /* DEC KA-10 */
 #endif
@@ -118,7 +128,7 @@
 
 
 /* Assign default if none of above are specified */
-#if (CPU_KA+CPU_KI+CPU_KS+CPU_KL0+CPU_KLX \
+#if (CPU_PDP6+CPU_KA+CPU_KI+CPU_KS+CPU_KL0+CPU_KLX \
         +CPU_PDP11+CPU_VAX+CPU_M68)==0
 #undef CPU_KL0
 #define CPU_KL0 1       /* Default is section 0 of extended KL-10 */
@@ -129,6 +139,9 @@
 
 /* CPU_PDP10 is true if processor is any kind of DEC PDP-10 */
 #define CPU_PDP10 (CPU_KA+CPU_KI+CPU_KL)
+
+/* CPU_DEC36 is true for DEC 36-bit machines in this family. */
+#define CPU_DEC36 (CPU_PDP6+CPU_PDP10)
 
 
 
@@ -183,11 +196,17 @@
 #ifndef CENV_ADJBP
 #define CENV_ADJBP (CPU_KL)             /* Has ADJBP instruction */
 #endif
+#ifndef CENV_FPIMM
+#define CENV_FPIMM (CPU_KA+CPU_KI+CPU_KL) /* Has FP immediate mode */
+#endif
+#ifndef CENV_DFL_PDP6
+#define CENV_DFL_PDP6 (CPU_PDP6)        /* Use PDP-6 long FP format */
+#endif
 #ifndef CENV_DFL_S
 #define CENV_DFL_S (CPU_KA)             /* Use Software double prec fmt */
 #endif
 #ifndef CENV_DFL_H
-#define CENV_DFL_H (CPU_KI+CPU_KL)      /* Use Hardware double prec fmt */
+#define CENV_DFL_H (CPU_KI+CPU_KL)      /* Use KA10+ hardware double fmt */
 #endif
 #ifndef CENV_DFL_G
 #define CENV_DFL_G 0                    /* Use "G" extended double prec fmt */

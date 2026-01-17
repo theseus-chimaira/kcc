@@ -13,6 +13,9 @@
 #include "cc.h"		/* also includes ccparm.h for our size parameters! */
 #include "cclex.h"	/* More externals */
 
+/* Code-generator state with a single explicit storage owner. */
+char fnargregs;
+
 /* Version numbers (not switches -- cannot change at runtime).
 **    cverdist is incremented whenever cvercode or cverlib is, or when
 **	a new major KCC distribution is made.
@@ -33,11 +36,15 @@ int stksz   = 010000;		/* Runtime Stack, default 4 K (8 pages) */
 int clevel = SWI_CLEV;		/* Default C implementation level */
 int clevkcc = 1;		/* Always default to ask for KCC extensions */
 int clevnocpp = 0;              /* FW 2A(45) default permit "//" comments */
+int asmdialect = ASM_GAS;	/* Default assembler output dialect */
 
 int tgsys = SWI_TGSYS;		/* Target System type (default to source) */
 int tgcsize = TGSIZ_CHAR;		/* Target Char size in bits */
 int tgcpw = TGSIZ_WORD/TGSIZ_CHAR;	/* Target # Chars Per Word */
 int tgcmask = (1<<TGSIZ_CHAR)-1;	/* Target Char Mask */
+int tgcpu = TGCPU_KL0;		/* Target CPU capability class */
+int tgarch = TGARCH_KL0;		/* Exact requested target profile */
+int tgits = 0;			/* ITS target variant */
 
 int npredef = 0;		/* -Dmac=d # of -D macro predefinitions */
 int npreundef = 0;		/* -Umac   # of -U macro pre-undefinitions */
@@ -106,7 +113,7 @@ char popprc[] = {
 */
 INT tfltab[] = {			/* needs to be a long $$$ */
 #define typespec(ts,str,bsiz,fl) \
-    fl | ((bsiz && bsiz < TGSIZ_WORD) ? TF_BYTE : 0),
+    (fl) | ((bsiz && bsiz < TGSIZ_WORD) ? TF_BYTE : 0),
 	alltypemacro	/* Expand list of types from CCSYM.H */
 #undef typespec
 	0,0,0		/* Permit lookup of flags (0) for param types */
@@ -154,7 +161,7 @@ TYPE *typeptr[TS_MAX];
 
 /* Define a table of token/node types & precs */
 TOKEN tok[] = {
-#define tokdef(name,str,type,prec) type,prec,
+#define tokdef(name,str,type,prec) {type,prec},
 #include "cctoks.h"
 #undef tokdef
 };

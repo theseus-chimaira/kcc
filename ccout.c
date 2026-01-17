@@ -29,7 +29,7 @@ void outinit (void), outdone (int),
 	outptr (SYMBOL *, int, INT), outstr (char *), outnum (INT),
 	outsix (unsigned INT);
 void realcode (PCODE *);
-int codeseg (void), dataseg (void), prevseg (int);
+int codeseg (void), dataseg (void), bssseg (void), prevseg (int);
 int outflt (int, INT *, int);			/* CCGEN */
 INT binexp (unsigned INT);			/* CCEVAL */
 int adjboffset (INT, INT *, int);
@@ -42,26 +42,36 @@ static int makprefile (void); /* KAR-2/92, create ENTRY list in side .MAC */
 /* Internal Functions */
 static void outrj6 (unsigned INT);
 static char *ahmacs (void);
-static char *ahmacdef (char *cp, char **macro);
 static void simptrcnv (PCODE *), simsmove (PCODE *),
-	simufltr (PCODE *), simdsngl (PCODE *), simuidiv (PCODE *),
-	simsubbp (PCODE *), simdfix (PCODE *);
+	simufltr (PCODE *), simfltr (PCODE *), simfix (PCODE *),
+	simdsngl (PCODE *),
+	simuidiv (PCODE *), simsidiv (PCODE *), simsubbp (PCODE *), simdfix (PCODE *),
+	simdmovx (PCODE *),
+	simadjsp (PCODE *), simadjbp (PCODE *), simdfop (PCODE *),
+	outadjsp (INT), outdmovn (int);
+static void outadjbp_body (void);
 static void outmpdbl (INT *, int), outpreamble (void),
 	outlpnum (unsigned INT, int), outinstr (PCODE *),
-	outpnum (unsigned INT), outop (int), outreg (int),
+	outrawnum (unsigned INT), outpnum (unsigned INT), outop (int), outreg (int),
 	outpti (int, INT), outaddress (PCODE *), outasmh (void),
 	outlpnum (unsigned INT, int);
 static int fltpow2 (double), outdecl (void),
-	   obplh (INT, INT *, int);
+	   obplh (INT, INT *, int), bumpaddr (PCODE *), gasbplhval (int);
 static int directop (int);
 static int bigfloat (PCODE *);
+#ifndef __COMPILER_KCC__
+static unsigned long host_u32_from_bytes (unsigned char *);
+static unsigned long host_float_bits (float *);
+static void host_double_bits (double, unsigned long *, unsigned long *);
+static void host_pdp10_double_words (double, unsigned INT *, unsigned INT *);
+#endif
 static void outfile (void); /* KAR-1/92, output of input filename (for NPD) */
 static void outnpd (PCODE *); /* KAR-1/92, added for output of NPD code */
 
 extern char *mlbptr;
 extern char mainname[];
 int	    _word_cnt;		/* KAR-2/91, function wd cnt stat */
-static whichseg;	/* 1 = code, -1 = data, 0 = unknown */
+static int whichseg;	/* 1 = code, -1 = data, 0 = unknown */
 
 
 /*
@@ -127,7 +137,11 @@ static whichseg;	/* 1 = code, -1 = data, 0 = unknown */
 	crtsym(CRT_RETT, "$RETT")	/* CRT    ditto, returns 1 */\
 	crtsym(CRT_RETN, "$RETN")	/* CRT    ditto, returns -1 */\
 	crtsym(CRT_ZERO, "$ZERO")	/* CRT Double 0.0 constant */\
-	crtsym(CRT_ADJBP, "$ADJBP")	/* CRT ADJBP simulation rtn (unused)*/\
+	crtsym(CRT_ADJBP, "$ADJBP")	/* CRT ADJBP simulation rtn */\
+	crtsym(CRT_KDFAD, "$KDFAD")	/* KA10 double floating add */\
+	crtsym(CRT_KDFSB, "$KDFSB")	/* KA10 double floating subtract */\
+	crtsym(CRT_KDFMP, "$KDFMP")	/* KA10 double floating multiply */\
+	crtsym(CRT_KDFDV, "$KDFDV")	/* KA10 double floating divide */\
 	crtsym(CRT_BPMUL, "$BPMUL")	/* CRT BP mul table (for P_SUBBP) */\
 	crtsym(CRT_BPADT, "$BPADT")	/* CRT BP table of $BPADn (for ") */\
 	crtsym(CRT_BPAD6, "$BPAD6")	/* CRT BP 6-bit add table (for ") */\
@@ -193,7 +207,11 @@ static whichseg;	/* 1 = code, -1 = data, 0 = unknown */
 	crtsym(CRT_RETT, "$RETT")	/* CRT    ditto, returns 1 */\
 	crtsym(CRT_RETN, "$RETN")	/* CRT    ditto, returns -1 */\
 	crtsym(CRT_ZERO, "$ZERO")	/* CRT Double 0.0 constant */\
-	crtsym(CRT_ADJBP, "$ADJBP")	/* CRT ADJBP simulation rtn (unused)*/\
+	crtsym(CRT_ADJBP, "$ADJBP")	/* CRT ADJBP simulation rtn */\
+	crtsym(CRT_KDFAD, "$KDFAD")	/* KA10 double floating add */\
+	crtsym(CRT_KDFSB, "$KDFSB")	/* KA10 double floating subtract */\
+	crtsym(CRT_KDFMP, "$KDFMP")	/* KA10 double floating multiply */\
+	crtsym(CRT_KDFDV, "$KDFDV")	/* KA10 double floating divide */\
 	crtsym(CRT_BPMUL, "$BPMUL")	/* CRT BP mul table (for P_SUBBP) */\
 	crtsym(CRT_BPADT, "$BPADT")	/* CRT BP table of $BPADn (for ") */\
 	crtsym(CRT_BPAD6, "$BPAD6")	/* CRT BP 6-bit add table (for ") */\
@@ -217,6 +235,7 @@ enum { crtsyms CRT_N };		/* Define the CRT_ indices plus count */
 #undef crtsym
 
 static int crtref[CRT_N];		/* Table of CRT sym reference counts */
+static int simadjbp_ref;		/* Need one local GAS PDP-6 ADJBP helper */
 #define crtsym(idx, sym) sym,
 static char *crtsnam[CRT_N] = { crtsyms };	/* Table of CRT symbol names */
 #undef crtsym
@@ -229,12 +248,13 @@ static char *crtsnam[CRT_N] = { crtsyms };	/* Table of CRT symbol names */
 
 void
 outinit (void)
-    {
+{
     int		i;
 
 
     for (i = CRT_N; --i >= 0;)	/* Reset reference counts */
 	crtref[i] = 0;
+    simadjbp_ref = 0;
 
     /*
      * These two runtime symbols are ALWAYS implicitly referenced;
@@ -258,7 +278,7 @@ outinit (void)
 static
 void
 outfile (void)
-    {
+{
     int		i = 0;
     int		slen = strlen (inpfname);
     char	tmp[4] = {0};
@@ -315,7 +335,7 @@ outnpd (PCODE *p)
 #endif
 
     outstr ("\tPUSHJ\t17,$CFNP\n");
-    outstr ("\tADJSP\t17,-2\n");
+    outadjsp (-2);
     outstr (label);
     outstr ("==.");
 
@@ -332,7 +352,13 @@ outnpd (PCODE *p)
 static
 void
 outpreamble (void)
-    {
+{
+    if (asmdialect == ASM_GAS)
+	{
+	outstr ("\t.text\n");
+	return;
+	}
+
     outstr ("\tTITLE\t");		/* Make TITLE pseudo-op */
 
     if (module_pragma)
@@ -375,6 +401,21 @@ outdone (int mainf)
 
     if (debcsi == KCC_DBG_NULL)
 	outfile ();
+
+    if (asmdialect == ASM_GAS)
+	{
+	outnl ();
+	codeseg ();
+	if (simadjbp_ref) {
+	    outstr ("%ADJBPH:\n");
+	    outadjbp_body ();
+	    outstr ("\tPOPJ\t17,\n");
+	}
+	makprefile ();
+	outdecl ();
+	outnl ();
+	return;
+	}
 
     outnl ();
     codeseg ();				/* make sure in code segment */
@@ -426,7 +467,7 @@ outdone (int mainf)
     /* EXTERN for $$$CRT */
 
     if ((!mainf) ||
-	 (s = symfidstr ("`$$$CRT")) != NULL && s->Sclass == SC_EXTDEF)
+	 ((s = symfidstr ("`$$$CRT")) != NULL && s->Sclass == SC_EXTDEF))
 	crtref[CRT_CRT] = 0;		/* Is defined, pretend not reffed */
 
     if ((s = symfidstr ("`$$$CPU")) != NULL && s->Sclass == SC_EXTDEF)
@@ -500,7 +541,7 @@ outdecl (void)
 		    else
 			continue;		/* Otherwise just ignore */
 		    }
-		outstr ("\tEXTERN\t");
+		outstr (asmdialect == ASM_GAS ? "\t.extern\t" : "\tEXTERN\t");
 		break;
 	    }
 	outmiref (s);
@@ -535,6 +576,14 @@ makprefile (void)
 	{
 	if (sym->Sclass == SC_EXTDEF)	/* For each external def */
 	    {
+	    if (asmdialect == ASM_GAS)
+		{
+		outstr ("\n\t.globl ");
+		outmiref (sym);
+		++nexfs;
+		sym = sym->Snext;
+		continue;
+		}
 	    if ((nexfs % 5) == 0)
 		outstr ("\n\tENTRY ");
 	    else
@@ -577,7 +626,7 @@ char*	    asmhdr = NULL;
 static
 void
 outasmh (void)
-    {
+{
     FILE*	hdrf;
     register
     int		c;
@@ -650,7 +699,7 @@ ahmacs (void)
 {
     register char *cp;
     char *beg;
-    int size;
+    size_t size;
 
     /* To construct the possibly large header string, we steal space
     ** by re-using the pcode buffer temporarily.  Check when done to ensure
@@ -762,20 +811,6 @@ PURGE IFE,IFN,IFG,IFGE,IFL,IFLE,IFDEF,IFNDEF,IFIDN,IFDIF\n\n");
     return beg;			/* No luck, just re-generate each time */
 }
 
-static char *
-ahmacdef (char *cp, char **macro)
-{
-    cp = estrcpy (estrcpy (estrcpy (cp,"\tDEFINE "),macro[0]),
-	    " (A,M)\n\t<");
-
-    while (*++macro)
-	cp = estrcpy (estrcpy (estrcpy (cp, "\t"), *macro), "\n");
-
-    cp = estrcpy (cp, "\t>\n");
-
-    return cp;
-}
-
 /*
 ** Data segmentation.
 **
@@ -800,7 +835,7 @@ codeseg (void)
     int oseg;
     if ((oseg = whichseg) < 0)	/* if in data */
 	{
-	outstr ("\n\t%%CODE\n");		/* put in code instead */
+	outstr (asmdialect == ASM_GAS ? "\n\t.text\n" : "\n\t%%CODE\n");
 #if SYS_CSI
 	if (mlist)
 	    oline += 2;
@@ -816,9 +851,9 @@ int
 dataseg (void)
 {
     int oseg;
-    if ((oseg = whichseg) > 0)	/* if in code */
+    if ((oseg = whichseg) != -1)	/* if not in initialized data */
 	{
-	outstr ("\n\t%%DATA\n");		/* put in data instead */
+	outstr (asmdialect == ASM_GAS ? "\n\t.data\n" : "\n\t%%DATA\n");
 #if SYS_CSI
 	if (mlist)
 	    oline += 2;
@@ -828,12 +863,32 @@ dataseg (void)
     return oseg;
 }
 
+/* BSSSEG - Start using zero-filled data segment.
+*/
+int
+bssseg (void)
+{
+    int oseg;
+    if (asmdialect != ASM_GAS)
+	return dataseg ();
+    if ((oseg = whichseg) != -2)
+	{
+	outstr ("\n\t.bss\n");
+#if SYS_CSI
+	if (mlist)
+	    oline += 2;
+#endif
+	whichseg = -2;
+	}
+    return oseg;
+}
+
 /* PREVSEG - restore to previous segment
 */
 int
 prevseg (int seg)
 {
-    return (seg < 0) ? dataseg () : codeseg ();
+    return (seg == -2) ? bssseg () : ((seg < 0) ? dataseg () : codeseg ());
 }
 
 /* REALCODE (p) - Generate real code for given pseudo-instruction.
@@ -867,15 +922,133 @@ realcode (PCODE *p)
 	case P_UIDIV:
 	    simuidiv (p);
 	    return;	/* "Unsigned Integer Divide" */
+	case P_IDIV:
+	    if (tgcpu == TGCPU_PDP6 || tgarch == TGARCH_BASE || tgarch == TGARCH_PDP10)
+		{
+		simsidiv (p);
+		return;	/* Safe signed divide for PDP-6/common targets */
+		}
+	    break;
 	case P_SUBBP:
 	    simsubbp (p);
 	    return;	/* "Subtract Byte Pointer" */
 	case P_DFIX:
 	    simdfix (p);
 	    return;	/* "Double Fix" */
+	case P_FLTR:
+	    if (tgcpu == TGCPU_PDP6 || tgcpu == TGCPU_KA)
+		{
+		simfltr (p);
+		return;	/* Simulated signed Float for PDP-6/KA10 */
+		}
+	    break;
+	case P_FIX:
+	    if (tgcpu == TGCPU_PDP6 || tgcpu == TGCPU_KA)
+		{
+		simfix (p);
+		return;	/* Simulated single Fix for PDP-6/KA10 */
+		}
+	    break;
 	case P_DSNGL:
 	    simdsngl (p);
 	    return;	/* "Double to Single" */
+
+	case P_ADJSP:
+	    if (!tgmachuse.adjsp) {
+		simadjsp(p);
+		return;
+	    }
+	    break;
+
+	case P_ADJBP:
+	    if (!tgmachuse.adjbp) {
+		simadjbp(p);
+		return;
+	    }
+	    break;
+
+	case P_DMOVE:
+	case P_DMOVEM:
+	case P_DMOVN:
+	    if (!tgmachuse.dmovx) {
+		simdmovx(p);
+		return;
+	    }
+	    break;
+
+	case P_DFAD:
+	case P_DFSB:
+	case P_DFMP:
+	case P_DFDV:
+	    if (tgarch == TGARCH_PDP6) {
+		PCODE q;
+		int scr1, scr2;
+		char *mn;
+
+		switch (p->Pop & POF_OPCODE) {
+		case P_DFAD: mn = "FADL"; break;
+		case P_DFSB: mn = "FSBL"; break;
+		case P_DFMP: mn = "FMPL"; break;
+		case P_DFDV: mn = "FDVL"; break;
+		default: mn = "FADL"; break;
+		}
+
+		if (p->Ptype == PTA_DCONST) {
+		    scr1 = 013;
+		    scr2 = 014;
+		    if (p->Preg == scr1 || p->Preg + 1 == scr1
+		      || p->Preg == scr2 || p->Preg + 1 == scr2) {
+			scr1 = 010;
+			scr2 = 011;
+		    }
+		    fprintf (out, "\tPUSH\t17,0%o\n", scr1);
+		    fprintf (out, "\tPUSH\t17,0%o\n", scr2);
+		    q = *p;
+		    q.Pop = P_MOVE;
+		    q.Preg = scr1;
+		    q.Ptype = PTA_DCONST1 | (p->Ptype & PTF_SKIPPED);
+		    outinstr (&q);
+		    q.Preg = scr2;
+		    q.Ptype = PTA_DCONST2 | (p->Ptype & PTF_SKIPPED);
+		    outinstr (&q);
+		    fprintf (out, "\t%s\t0%o,0%o\n", mn, p->Preg, scr1);
+		    fprintf (out, "\tPOP\t17,0%o\n", scr2);
+		    fprintf (out, "\tPOP\t17,0%o\n", scr1);
+		    return;
+		}
+
+		if ((p->Ptype & PTF_ADRMODE) == PTA_REGIS) {
+		    fprintf (out, "\t%s\t0%o,0%o\n", mn, p->Preg, p->Pr2);
+		    return;
+		}
+
+		outc ('\t');
+		outstr (mn);
+		outc ('\t');
+		outnum (p->Preg);
+		outc (',');
+		outaddress (p);
+		outnl ();
+		return;
+	    }
+	    if (tgcpu == TGCPU_PDP6 || tgcpu == TGCPU_KA) {
+		simdfop(p);
+		return;
+	    }
+	    break;
+
+	case P_SETZ:
+	case P_SETO:
+	    if (!(p->Pop & POF_BOTH)
+	      && (p->Ptype & PTF_ADRMODE) != PTA_ONEREG
+	      && (p->Ptype & PTF_ADRMODE) != PTA_REGIS)
+		{
+		outop (p->Pop);
+		outreg (p->Preg);
+		outnl ();
+		return;
+		}
+	    break;
 
     /* End of simulated ops; switch continued on next page! */
 	    
@@ -893,6 +1066,7 @@ realcode (PCODE *p)
 	case P_TRN:
 	    if (foldtrna (p))
 		return;
+	/* FALLTHROUGH */
 	case P_TRC:
 	case P_TRZ:
 	case P_TRO:
@@ -1027,18 +1201,22 @@ realcode (PCODE *p)
     ** normally do not come here as they use DMOVx, but it is possible
     ** as part of a code sequence that zeros the second AC separately.
     */
+	/* FALLTHROUGH */
 	case P_MOVN:
 	    if (!optobj || typ != PTV_IMMED || (p->Pvalue &~ 0777777L) == 0)
 		break;
+	    if ((p->Pvalue & ((INT)0777777777777)) == ((INT)0400000000000))
+		break;			/* avoid bad MOVSI form for INT_MIN */
 	    p->Pop = P_MOVE;		/* re-invert P_MOVN */
 	    p->Pvalue = - p->Pvalue;	/* for fixup into P_MOVSI */
+	/* FALLTHROUGH */
 	case P_MOVE:
 	    if (!optobj || typ != PTV_IMMED)
 		break;
 	    if (p->Pvalue && (p->Pvalue & 0777777L) == 0)
 		{
 		p->Pop = P_MOVS;	/* MOVEI of left half quantity */
-		p->Pvalue = ((unsigned INT) p->Pvalue) >> 18;	/* becomes MOVSI */
+		p->Pvalue = (((unsigned INT) p->Pvalue) & 0777777777777L) >> 18;	/* becomes MOVSI */
 		}
 	    break;
 	default:
@@ -1229,9 +1407,22 @@ outinstr (PCODE *p)
 	    outop (p->Pop);
 	    outreg (p->Preg);
 	    outc ('[');
-	    outnum (p->Pbsize);	/* Output P+S field */
-	    outstr (",,");
-	    outaddress (p);		/* Now add right half addr+offset (index) */
+	    if (asmdialect == ASM_GAS)
+		{
+		int bppos;
+		int bpsiz;
+		bppos = (p->Pbsize >> 12) & 077;
+		bpsiz = (p->Pbsize >> 6) & 077;
+		fprintf (out, "POINT %d,", bpsiz);
+		outaddress (p);
+		fprintf (out, ",%d", 35 - bppos);
+		}
+	    else
+		{
+		outnum (p->Pbsize);	/* Output P+S field */
+		outstr (",,");
+		outaddress (p);		/* Now add right half addr+offset (index) */
+		}
 	    outc (']');
 	    break;
 
@@ -1250,7 +1441,7 @@ outinstr (PCODE *p)
 		if ((popflg[opr&POF_OPCODE] & PF_OPI)	/* If op can be opI,*/
 		  && (p->Pvalue &~ 0777777L) == 0)	/* and operand has zero LH, */
 		    {
-		    outc ('I');			/* make immediate op! */
+		    outc (asmdialect == ASM_GAS ? 'i' : 'I'); /* make immediate op */
 		    big = 0;			/* and say small operand */
 		    }
 		}
@@ -1275,6 +1466,8 @@ outinstr (PCODE *p)
 		case P_FDVR:	/* can be optimized sometimes */
 		case P_MOVS:
 		    big = bigfloat (p);	/* Set flag 0 if small */
+		    if (!tgmachuse.fpimm && (p->Pop & POF_OPCODE) != P_MOVS)
+			big = 1;	/* PDP-6 has no FP immediate mode */
 		    break;
 		case P_MOVE:		/* Check for quick setup of float */
 		    if ((big = bigfloat (p)) == 0)
@@ -1284,18 +1477,51 @@ outinstr (PCODE *p)
 		    big = 1;
 		    break;
 		}
+	    if (asmdialect == ASM_GAS && !big)
+		{
+		/* DEC MACRO accepts forms such as MOVSI R,(floatword)
+		 * and FADRI R,(floatword).  The DAIMON/GAS-like
+		 * dialect deliberately treats parentheses as normal
+		 * expression grouping, so those forms either assemble
+		 * as the wrong halfword or become dialect-specific.
+		 * Emit an explicit literal instead.
+		 */
+		if ((p->Pop & POF_OPCODE) == P_MOVS)
+		    outop (P_MOVE);
+		else
+		    outop (p->Pop);
+		outreg (p->Preg);
+		outc ('[');
+#ifdef  __COMPILER_KCC__		/* native mode */
+		outnum (* (INT *) (&p->Pfloat));
+#else					/* host may not be PDP-10! */
+		outmpdbl ((INT *) &p->Pfloat, 1);
+#endif
+		outc (']');
+		break;
+		}
+
 	    outop (p->Pop);
 	    if (!big)
-		outc ('I');
+		outc (asmdialect == ASM_GAS ? 'i' : 'I');
 	    outreg (p->Preg);
-	    outc (big ? '[' : ' (');
+	    if (big)
+		outc ('[');
+	    else
+		{
+		outc (' ');
+		outc ('(');
+		}
 #ifdef  __COMPILER_KCC__		/* native mode */
 	    outnum (* (INT *) (&p->Pfloat));	/* Pass float as INT val */
 #else					/* host may not be PDP-10! */
-	    if (big)
-		outmpdbl ((INT *) &p->Pdouble, 3);
-	    else
-		outmpdbl ((INT *) &p->Pfloat, 1);
+	    /* PTA_FCONST always holds a single-precision value in Pfloat.
+	    ** Even when the operand must be emitted as a full literal, emit
+	    ** one PDP-10 single-float word.  Using Pdouble here reads the
+	    ** same union storage as a host double and creates a bogus two-word
+	    ** literal, which breaks FIX/FADR/FMPR/etc. on host-built KCC.
+	    */
+	    outmpdbl ((INT *) &p->Pfloat, 1);
 #endif
 	    outc (big ? ']' : ')');
 
@@ -1314,7 +1540,15 @@ outinstr (PCODE *p)
 	    outreg (p->Preg);
 	    outc ('[');
 	    if (tgmachuse.mapdbl)		/* If target mach fmt is different */
+		{
+#ifdef __COMPILER_KCC__
 		outmpdbl ((INT *)&p->Pdouble, i);/* Output part of mapped double */
+#else
+		unsigned INT dword1, dword2;
+		host_pdp10_double_words (p->Pdouble, &dword1, &dword2);
+		outpnum (i == 1 ? dword1 : dword2);
+#endif
+		}
 	    else
 		outnum (i == 1 ? p->Pdouble1 : p->Pdouble2);
 	    outc (']');
@@ -1334,7 +1568,17 @@ outinstr (PCODE *p)
 	    else if (tgmachuse.mapdbl)	/* If target mach fmt is different */
 		{
 		outc ('[');
+#ifdef __COMPILER_KCC__
 		outmpdbl ((INT *) &p->Pdouble, 3);	/* Output mapped double */
+#else
+		unsigned INT dword1, dword2;
+		host_pdp10_double_words (p->Pdouble, &dword1, &dword2);
+		outpnum (dword1);
+		outnl ();
+		outtab ();
+		outtab ();
+		outpnum (dword2);
+#endif
 		outc (']');
 		}
 	    else
@@ -1391,16 +1635,22 @@ oneinstr (PCODE *p)
 	case P_DMOVE:
 	case P_DMOVN:
 	case P_DMOVEM:
-	    return 1;			/* TRUE if machine has DMOVx */
+	    return tgmachuse.dmovx;	/* TRUE if machine has DMOVx */
+	case P_ADJSP:
+	    return tgmachuse.adjsp;	/* FALSE if simulated as ADD */
 	case P_ADJBP:
-	    return 1;			/* TRUE if machine has ADJBP */
+	    return tgmachuse.adjbp;	/* TRUE if machine has ADJBP */
 	case P_DFAD:
 	case P_DFSB:
 	case P_DFMP:
 	case P_DFDV:
-	    return 1;			/* TRUE if machine has hardware dbls */
+	    return (tgarch == TGARCH_PDP6 || (tgcpu != TGCPU_PDP6 && tgcpu != TGCPU_KA));
+	case P_IDIV:
+	    if (tgcpu == TGCPU_PDP6 || tgarch == TGARCH_BASE || tgarch == TGARCH_PDP10)
+		return 0;
+	    return 1;
 	case P_FLTR:
-	    return 1;			/* TRUE if machine has hardware FLTR */
+	    return tgmachuse.fltr;	/* TRUE if machine has hardware FLTR */
 
 	case P_TRN:
 	case P_TRO:
@@ -1467,30 +1717,473 @@ directop (int op)
 static void
 simufltr (PCODE *p)
 {
+    static int ufltr_label = 0;
+    int lab = ++ufltr_label;
     int r = p->Preg;
-    int mr = ((p->Ptype&PTF_ADRMODE) == PTA_REGIS) ? p->Pr2 : 0;
+    int mr = ((p->Ptype&PTF_ADRMODE) == PTA_REGIS) ? p->Pr2 : -1;
 
-    p->Pop = P_SKIP+POF_ISSKIP+POS_SKPGE;
-    if (r == mr)
-	p->Preg = R_SCRREG;	/* 16 */
-    outinstr (p);			/* SKIPGE R,M or SKIPGE 16,R */
-    fprintf (out,"\t LSH\t%o,-1\n", r);		/* LSH R,-1 */
-    fprintf (out,"\tFLTR\t%o,%o\n", r, r);	/* FLTR R,R */
-
-    if (r == mr)
-	fprintf (out,"\tCAIGE\t%o,\n", R_SCRREG);	/* CAIGE 16, */
-    else					/* or */
+    if (mr != r)
 	{
-	if (mr)
-	    fprintf (out,"\tCAIGE\t%o,\n", R_SCRREG);	/* CAIGE R, */
-	else
-	    {
-	    outstr ("\tSKIPGE ");			/* SKIPGE M */
-	    outaddress (p);
-	    outnl ();
-	    }
+	p->Pop = P_MOVE;
+	outinstr (p);
 	}
-    fprintf (out,"\t FSC\t%o,1\n", r);		/* FSC R,1 */
+
+    if (tgcpu == TGCPU_PDP6 || tgcpu == TGCPU_KA)
+	{
+	fprintf (out,"\tTLNN\t%o,0777000\n", r);
+	fprintf (out,"\t JRST\t%%UFL%o\n", lab);
+	fprintf (out,"\tLSH\t%o,-011\n", r);
+	fprintf (out,"\tFSC\t%o,0233\n", r);
+	fprintf (out,"\tFSC\t%o,011\n", r);
+	fprintf (out,"\tJRST\t%%UFX%o\n", lab);
+	fprintf (out,"%%UFL%o:\tFSC\t%o,0233\n", lab, r);
+	fprintf (out,"%%UFX%o:\n", lab);
+	return;
+	}
+
+    fprintf (out,"\tMOVE\t%o,0%o\n", R_SCRREG, r);
+    fprintf (out,"\tJUMPGE\t%o,.+2\n", R_SCRREG);
+    fprintf (out,"\t LSH\t%o,-1\n", r);
+    fprintf (out,"\tFLTR\t%o,0%o\n", r, r);
+    fprintf (out,"\tJUMPGE\t%o,.+2\n", R_SCRREG);
+    fprintf (out,"\t FSC\t%o,1\n", r);
+}
+
+/* SIMFLTR - Output expansion of P_FLTR for PDP-6/KA10.
+**	FLTR is not a PDP-6/KA10 hardware instruction.  For signed C
+**	integers, use FSC with the standard 233 scale factor after making
+**	the magnitude positive, then restore the sign in floating format.
+*/
+static void
+simfltr (PCODE *p)
+{
+    int r = p->Preg;
+
+    if ((p->Ptype&PTF_ADRMODE) != PTA_REGIS || r != p->Pr2)
+	{
+	p->Pop = P_MOVE;
+	outinstr (p);
+	}
+    fprintf (out, "\tMOVE\t16,0%o\n", r);
+    outstr ("\tJUMPGE\t16,.+2\n");
+    fprintf (out, "\tMOVNS\t%o\n", r);
+    fprintf (out, "\tFSC\t%o,0233\n", r);
+    outstr ("\tCAIGE\t16,\n");
+    fprintf (out, "\t MOVNS\t%o\n", r);
+}
+
+/* SIMFIX - Output expansion of P_FIX for PDP-6/KA10.
+**	FIX is not a PDP-6/KA10 hardware instruction.  Convert a single
+**	floating operand to a signed integer using the same exponent/fraction
+**	shape as the double-fix expansion, but with a single ASH.
+*/
+static void
+simfix (PCODE *p)
+{
+    int r = p->Preg;
+
+    if ((p->Ptype&PTF_ADRMODE) != PTA_REGIS || r != p->Pr2)
+	{
+	p->Pop = P_MOVE;
+	outinstr (p);
+	}
+    fprintf (out, "\tHLRE\t16,0%o\n\tASH\t16,-011\n", r);
+    fprintf (out, "\tJUMPGE\t16,.+3\n");
+    fprintf (out, "\tMOVNS\t%o\n", r);
+    outstr ("\tTRC\t16,-01\n");
+    fprintf (out, "\tTLZ\t%o,0777000\n", r);
+    fprintf (out, "\tASH\t%o,-0233(16)\n", r);
+    outstr ("\tCAIGE\t16,\n");
+    fprintf (out, "\t MOVNS\t%o\n", r);
+}
+
+static void
+outadjsp(INT n)
+{
+    if (tgmachuse.adjsp) {
+	outstr ("\tADJSP\t17,");
+	outnum (n);
+	outnl ();
+    }
+    else if (n < 0) {
+	/*
+	** Do not emit ADD 17,[-N,,-N] here.  On real PDP-6/KA10
+	** two's-complement ADD, carry out of the right half feeds the
+	** left half, so ADD with a negative double-half literal only
+	** accidentally behaved like stack decrement under old buggy SIMH
+	** ADD semantics.  Use SUB with a positive [N,,N], matching the
+	** GCC PDP-10 backend and the hardware pushdown-list intent.
+	*/
+	outstr ("\tSUB\t17,[");
+	outnum (-n);
+	outstr (",,");
+	outnum (-n);
+	outstr ("]\n");
+    }
+    else {
+	outstr ("\tADD\t17,[");
+	outnum (n);
+	outstr (",,");
+	outnum (n);
+	outstr ("]\n");
+    }
+}
+
+static void
+simadjsp (PCODE *p)
+{
+    if (p->Preg != R_SP) {
+	int_error ("simadjsp: bad form");
+	outinstr (p);
+	return;
+    }
+    outadjsp (p->Pvalue);
+}
+
+static void
+outadjbp_body (void)
+{
+    static int adjbp_label = 0;
+    int n = adjbp_label++;
+
+    /* PDP-6 has no ADJBP instruction and its accumulators must not be
+    ** treated as low-core memory operands.  Keep the pointer and negative
+    ** adjustment scratch values in real stack memory while simulating it.
+    **
+    ** Entry:  AC1  = byte pointer
+    **         AC16 = signed byte count
+    ** Exit:   AC1  = adjusted byte pointer
+    ** Clobbers AC13, AC14, AC15, AC16.
+    */
+    fprintf(out, "\tJUMPE\t1,%%ADJX%o\n", n);
+    fprintf(out, "\tJUMPE\t16,%%ADJX%o\n", n);
+    outstr("\tPUSH\t17,1\n");
+    fprintf(out, "\tJUMPL\t16,%%ADJN%o\n", n);
+    fprintf(out, "%%ADJP%o:\tIBP\t0(17)\n", n);
+    fprintf(out, "\tSOJG\t16,%%ADJP%o\n", n);
+    fprintf(out, "\tJRST\t%%ADJR%o\n", n);
+
+    /* Negative adjustment.  Layout after ADJSP +2 is:
+    **   -2(17) pointer, -1(17) byte size S, 0(17) scratch.
+    */
+    fprintf(out, "%%ADJN%o:\tADD\t17,[2,,2]\n", n);
+    outstr("\tHLRZ\t13,-2(17)\n");
+    outstr("\tLSH\t13,-6\n");
+    outstr("\tANDI\t13,077\n");
+    outstr("\tMOVEM\t13,-1(17)\n");
+    fprintf(out, "%%ADNI%o:\tHLRZ\t14,-2(17)\n", n);
+    outstr("\tLSH\t14,-014\n");
+    outstr("\tANDI\t14,077\n");
+    outstr("\tMOVEI\t15,044\n");
+    outstr("\tSUB\t15,-1(17)\n");
+    outstr("\tMOVEM\t15,0(17)\n");
+    fprintf(out, "\tCAMN\t14,0(17)\n\t JRST\t%%ADJW%o\n", n);
+    outstr("\tADD\t14,-1(17)\n");
+    fprintf(out, "\tJRST\t%%ADJS%o\n", n);
+    fprintf(out, "%%ADJW%o:\tHRRZ\t15,-2(17)\n", n);
+    outstr("\tSUBI\t15,1\n");
+    outstr("\tHRRM\t15,-2(17)\n");
+    outstr("\tMOVEI\t15,044\n");
+    fprintf(out, "%%ADJL%o:\tSUB\t15,-1(17)\n", n);
+    fprintf(out, "\tJUMPGE\t15,%%ADJL%o\n", n);
+    outstr("\tADD\t15,-1(17)\n");
+    outstr("\tMOVEM\t15,0(17)\n");
+    outstr("\tMOVE\t14,0(17)\n");
+    fprintf(out, "%%ADJS%o:\tHLRZ\t15,-2(17)\n", n);
+    outstr("\tANDI\t15,07777\n");
+    outstr("\tLSH\t14,014\n");
+    outstr("\tMOVEM\t14,0(17)\n");
+    outstr("\tIOR\t15,0(17)\n");
+    outstr("\tHRLM\t15,-2(17)\n");
+    fprintf(out, "\tAOJL\t16,%%ADNI%o\n", n);
+    outstr("\tSUB\t17,[2,,2]\n");
+    fprintf(out, "%%ADJR%o:\tPOP\t17,1\n", n);
+    fprintf(out, "%%ADJX%o:\n", n);
+}
+
+static void
+simadjbp (PCODE *p)
+{
+    PCODE q;
+    INT n;
+    int npush, srcreg;
+
+    if ((p->Ptype & ~PTF_SKIPPED) != PTV_IMMED) {
+        srcreg = (((p->Ptype & PTF_ADRMODE) == PTA_REGIS) ? p->Pr2 : -1);
+	npush = 0;
+	if (p->Preg != 13) {
+	    outstr("\tPUSH\t17,13\n");
+	    ++npush;
+	}
+	if (p->Preg != 14) {
+	    outstr("\tPUSH\t17,14\n");
+	    ++npush;
+	}
+	if (p->Preg != 15) {
+	    outstr("\tPUSH\t17,15\n");
+	    ++npush;
+	}
+	if (p->Preg != 1) {
+	    outstr("\tPUSH\t17,1\n");
+	    ++npush;
+	}
+	q = *p;
+	q.Pop = P_MOVE;
+	q.Preg = (p->Preg == R_SCRREG) ? 13 : R_SCRREG;
+        if (srcreg >= 0)
+            ;                           /* Marshal the source AC below. */
+	else if ((q.Ptype & PTF_ADRMODE) == PTA_BYTEPOINT
+	  && q.Pindex == R_SP
+	  && q.Pptr == NULL) {
+	    fprintf(out, "\tMOVEI\t%o,", q.Preg);
+	    outnum(q.Poffset - npush);
+	    outstr("(17)\n");
+	    fprintf(out, "\tHRLI\t%o,", q.Preg);
+	    outnum(q.Pbsize);
+	    outnl();
+	} else {
+	    if (q.Pindex == R_SP
+	      && ((q.Ptype & PTF_ADRMODE) != PTA_BYTEPOINT)
+	      && q.Pbsize == 0)
+		q.Poffset -= npush;
+	    outinstr(&q);
+	}
+	/* PDP-6 accumulators are not readable through low-core effective
+	** addresses.  Marshal count and pointer through stack memory instead
+	** of attempting register-to-register MOVE/SETM/EXCH transfers.
+	** The helper receives AC1 = byte pointer and AC16 = signed byte count,
+	** and returns the adjusted pointer in AC1.
+	*/
+	outadjsp(2);
+	fprintf(out, "\tMOVEM\t%o,-1(17)\n", p->Preg);
+        if (srcreg >= 0)
+            fprintf(out, "\tMOVEM\t%o,0(17)\n", srcreg);
+        else
+            fprintf(out, "\tMOVEM\t%o,0(17)\n", q.Preg);
+	outstr("\tMOVE\t1,0(17)\n");
+	outstr("\tMOVE\t16,-1(17)\n");
+	if (asmdialect == ASM_GAS) {
+	    outstr("\tPUSHJ\t17,%ADJBPH\n");
+	    simadjbp_ref = 1;
+	} else {
+	    fprintf(out, "\tPUSHJ\t17,%s\n", crtsnam[CRT_ADJBP]);
+	    ++crtref[CRT_ADJBP];
+	}
+	if (p->Preg != 1) {
+	    outstr("\tMOVEM\t1,0(17)\n");
+	    fprintf(out, "\tMOVE\t%o,0(17)\n", p->Preg);
+	}
+	outadjsp(-2);
+	if (p->Preg != 1)
+	    outstr("\tPOP\t17,1\n");
+
+	if (p->Preg != 15)
+	    outstr("\tPOP\t17,15\n");
+	if (p->Preg != 14)
+	    outstr("\tPOP\t17,14\n");
+	if (p->Preg != 13)
+	    outstr("\tPOP\t17,13\n");
+	return;
+    }
+
+    n = p->Pvalue;
+    if (n < 0) {
+	if (p->Preg != 13)
+	    outstr("\tPUSH\t17,13\n");
+	if (p->Preg != 14)
+	    outstr("\tPUSH\t17,14\n");
+	if (p->Preg != 15)
+	    outstr("\tPUSH\t17,15\n");
+	if (p->Preg != 1) {
+	    outstr("\tPUSH\t17,1\n");
+	    fprintf(out, "\tSETM\t1,%o\n", p->Preg);
+	}
+	fprintf(out, "\tMOVE\t%o,[", R_SCRREG);
+	outnum(n);
+	outstr("]\n");
+	if (asmdialect == ASM_GAS) {
+	    outstr("\tPUSHJ\t17,%ADJBPH\n");
+	    simadjbp_ref = 1;
+	} else {
+	    fprintf(out, "\tPUSHJ\t17,%s\n", crtsnam[CRT_ADJBP]);
+	    ++crtref[CRT_ADJBP];
+	}
+	if (p->Preg != 1) {
+	    fprintf(out, "\tSETM\t%o,1\n", p->Preg);
+	    outstr("\tPOP\t17,1\n");
+	}
+	if (p->Preg != 15)
+	    outstr("\tPOP\t17,15\n");
+	if (p->Preg != 14)
+	    outstr("\tPOP\t17,14\n");
+	if (p->Preg != 13)
+	    outstr("\tPOP\t17,13\n");
+	return;
+    }
+
+    while (n-- > 0)
+	fprintf(out, "\tIBP\t%o\n", p->Preg);
+}
+
+static int
+bumpaddr (PCODE *p)
+{
+    switch (p->Ptype & PTF_ADRMODE) {
+    case PTA_REGIS:
+	++p->Pr2;
+	return 1;
+    case PTA_MINDEXED:
+    case PTA_BYTEPOINT:
+	++p->Poffset;
+	return 1;
+    default:
+	return 0;
+    }
+}
+
+static void
+outdmovn (int r)
+{
+    if (tgmachuse.dmovx)
+	fprintf(out, "\tDMOVN\t%o,%o\n", r, r);
+    else if (tgcpu == TGCPU_PDP6) {
+	fprintf(out, "\tMOVNS\t%o\n", r);
+	fprintf(out, "\tMOVNS\t%o\n", r + 1);
+    } else
+	fprintf(out, "\tDFN\t%o,%o\n", r, r + 1);
+}
+
+static void
+simdmovx (PCODE *p)
+{
+    PCODE q;
+    int op = p->Pop & POF_OPCODE;
+    int r = p->Preg;
+
+    q = *p;
+    if (op == P_DMOVE || op == P_DMOVN) {
+	q.Pop = P_MOVE;
+	if ((q.Ptype & PTF_ADRMODE) == PTA_DCONST) {
+	    q.Ptype = PTA_DCONST1 | (p->Ptype & PTF_SKIPPED);
+	    outinstr(&q);
+	    q.Preg = r + 1;
+	    q.Ptype = PTA_DCONST2 | (p->Ptype & PTF_SKIPPED);
+	    outinstr(&q);
+	} else if ((q.Ptype & PTF_ADRMODE) == PTA_REGIS
+		&& r == q.Pr2 + 1) {
+	    /*
+	    ** Simulate an upward-overlapping register-pair move in reverse
+	    ** order.  MOVE R+1,S after MOVE R,S would otherwise destroy the
+	    ** original S+1 value when R == S+1.
+	    */
+	    q.Preg = r + 1;
+	    q.Pr2++;
+	    outinstr(&q);
+	    q.Preg = r;
+	    q.Pr2--;
+	    outinstr(&q);
+	} else {
+	    outinstr(&q);
+	    q.Preg = r + 1;
+	    if (!bumpaddr(&q)) {
+		int_error ("simdmovx: bad DMOVE adrmode");
+		return;
+	    }
+	    outinstr(&q);
+	}
+	if (op == P_DMOVN)
+	    outdmovn(r);
+	return;
+    }
+
+    if (op == P_DMOVEM) {
+	q.Pop = P_MOVEM;
+	outinstr(&q);
+	q.Preg = r + 1;
+	if (!bumpaddr(&q)) {
+	    int_error ("simdmovx: bad DMOVEM adrmode");
+	    return;
+	}
+	outinstr(&q);
+	return;
+    }
+
+    int_error ("simdmovx: bad op");
+}
+
+static void
+simdfop (PCODE *p)
+{
+    PCODE q, q2;
+    int i, op, helper, save[5];
+
+    op = p->Pop & POF_OPCODE;
+    switch (op) {
+    case P_DFAD:
+	helper = CRT_KDFAD;
+	break;
+    case P_DFSB:
+	helper = CRT_KDFSB;
+	break;
+    case P_DFMP:
+	helper = CRT_KDFMP;
+	break;
+    case P_DFDV:
+	helper = CRT_KDFDV;
+	break;
+    default:
+	int_error("simdfop: bad op");
+	return;
+    }
+
+    for (i = 0; i < 5; ++i) {
+	save[i] = 010 + i;
+	fprintf(out, "\tPUSH\t17,0%o\n", save[i]);
+    }
+
+    q = *p;
+    q.Pop = P_MOVE;
+    if ((q.Ptype & PTF_ADRMODE) == PTA_MINDEXED && q.Pindex == R_SP)
+	q.Poffset -= 5;
+
+    if (q.Ptype == PTA_DCONST) {
+	q.Preg = 013;
+	q.Ptype = PTA_DCONST1 | (p->Ptype & PTF_SKIPPED);
+	outinstr(&q);
+	q.Preg = 014;
+	q.Ptype = PTA_DCONST2 | (p->Ptype & PTF_SKIPPED);
+	outinstr(&q);
+    } else {
+	q2 = q;
+	if (!bumpaddr(&q2)) {
+	    int_error("simdfop: bad adrmode");
+	    return;
+	}
+	if (((q.Ptype & PTF_ADRMODE) == PTA_MINDEXED && q.Pindex == 013)
+	  || (q.Ptype == PTA_REGIS && q.Pr2 == 013)) {
+	    q2.Preg = 014;
+	    outinstr(&q2);
+	    q.Preg = 013;
+	    outinstr(&q);
+	} else {
+	    q.Preg = 013;
+	    outinstr(&q);
+	    q2.Preg = 014;
+	    outinstr(&q2);
+	}
+    }
+
+    fprintf(out, "\tMOVE\t10,0%o\n", p->Preg);
+    fprintf(out, "\tMOVE\t11,0%o\n", p->Preg + 1);
+    fprintf(out, "\tPUSHJ\t17,%s\n", crtsnam[helper]);
+    ++crtref[helper];
+    fprintf(out, "\tMOVE\t0%o,010\n", p->Preg);
+    fprintf(out, "\tMOVE\t0%o,011\n", p->Preg + 1);
+
+    for (i = 0; i < 5; ++i)
+	if (save[i] != p->Preg && save[i] != p->Preg + 1)
+	    fprintf(out, "\tMOVE\t%o,%d(17)\n", save[i], i - 4);
+    outadjsp(-5);
 }
 
 /* SIMDFIX - Output expansion of P_DFIX double-to-integer conversion "instr"
@@ -1509,7 +2202,7 @@ simufltr (PCODE *p)
 **	  TRC	16,777777	;Watch for diff between twos and ones comp
 **	TLZ	R,777000	;Bash exponent and sign ... now positive
 **				; For KA-10 format, LSH R+1,10 goes here.
-**	ASHC	R,-233 (16)	;Make an integer (may overflow)
+**	ASHC	R,-233(16)	;Make an integer (may overflow)
 **	CAIGE	16,		;Original negative?  Check its sign.
 **	 MOVN	R,R		;Yup, negate result.
 */
@@ -1524,12 +2217,19 @@ simdfix (PCODE *p)
 	p->Pop = P_DMOVE;		/* Make DMOVE R,M to get double */
 	outinstr (p);
 	}
-    fprintf (out, "\tHLRE\t16,%o\n\tASH\t16,-11\n\tJUMPGE\t16,.+3\n", r);
-    fprintf (out, "\tDMOVN\t%o,%o\n", r, r);
-    outstr ("\tTRC\t16,-1\n");
+    fprintf (out, "\tHLRE\t16,0%o\n\tASH\t16,-011\n", r);
+    if (tgcpu == TGCPU_PDP6) {
+	fprintf (out, "\tJUMPGE\t16,.+4\n");
+	fprintf (out, "\tMOVNS\t%o\n", r);
+	fprintf (out, "\tMOVNS\t%o\n", r + 1);
+    } else {
+	fprintf (out, "\tJUMPGE\t16,.+3\n");
+	outdmovn(r);
+    }
+    outstr ("\tTRC\t16,-01\n");
 
-    fprintf (out, "\tTLZ\t%o,777000\n", r);
-    fprintf (out, "\tASHC\t%o,-233 (16)\n", r);
+    fprintf (out, "\tTLZ\t%o,0777000\n", r);
+    fprintf (out, "\tASHC\t%o,-0233(16)\n", r);
     outstr ("\tCAIGE\t16,\n");		/* Check sign bit of original # */
     fprintf (out, "\t MOVNS\t%o\n", r);	/* Negate result */
 }
@@ -1563,11 +2263,19 @@ simdsngl (PCODE *p)
 	p->Pop = P_DMOVE;		/* Make DMOVE R,M to get double */
 	outinstr (p);
 	}
-    fprintf (out, "\tSKIPGE\t16,%o\n", r);
-    fprintf (out, "\t DMOVN\t%o,%o\n", r, r);
-    fprintf (out, "\tTLNE\t%o,200000\n", r+1);
-    fprintf (out, "\t TRON\t%o,1\n\t  JRST\t.+4\n", r);
-    fprintf (out, "\tMOVE\t%o,%o\n\tAND\t%o,[777000,,1]\n\tFADR\t%o,%o\n",
+    if (tgcpu == TGCPU_PDP6) {
+	fprintf (out, "\tSKIPL\t16,0%o\n", r);
+	fprintf (out, "\t JRST\t.+3\n");
+	fprintf (out, "\tMOVNS\t%o\n", r);
+	fprintf (out, "\tMOVNS\t%o\n", r + 1);
+    } else {
+	fprintf (out, "\tSKIPGE\t16,0%o\n", r);
+	outc (' ');
+	outdmovn(r);
+    }
+    fprintf (out, "\tTLNE\t%o,0200000\n", r+1);
+    fprintf (out, "\t TRON\t%o,01\n\t  JRST\t.+04\n", r);
+    fprintf (out, "\tMOVE\t%o,0%o\n\tAND\t%o,[0777000,,01]\n\tFADR\t%o,0%o\n",
 		r+1, r,
 		r+1,
 		r, r+1);
@@ -1597,37 +2305,19 @@ simdsngl (PCODE *p)
 static void
 simsubbp (PCODE *p)
 {
-    int siz, typ, tbidx;
+    int siz, typ, bytes_per_word, first_e, i;
+    int oldop, oldreg;
+    const char *idxsep;
 
-    if ((typ = (p->Ptype&PTF_ADRMODE)) == PTA_PCONST)
-	siz = (int) p->Pbsize;		/* Aha, size is known! */
-    else
-	siz = 0;
+    idxsep = (asmdialect == ASM_GAS) ? "" : " ";
+    typ = (p->Ptype&PTF_ADRMODE);
 
-    switch (siz)
-	{
-	case 6:
-	    tbidx = 0;
-	    break;
-	case 7:
-	    tbidx = 1;
-	    break;
-	case 8:
-	    tbidx = 2;
-	    break;
-	case 9:
-	    tbidx = 3;
-	    break;
-	case 18:
-	    tbidx = 4;
-	    break;
-	default:
-	    int_error ("simsubbp: bad Pbsize: %ld", (INT) siz);
-	    siz = 0;
-	case 0:
-	    fprintf (out, "\tLDB\t16,[%s,,%o]\n", crtsnam[CRT_BPSZ], p->Preg);
-	    crtref[CRT_BPSZ]++;
-	}
+    /* P_SUBBP carries the byte size in Pbsize when the generator knows the
+    ** pointed-to element type.  Older code only trusted Pbsize for literal
+    ** byte-pointer operands, which left register-vs-register pointer
+    ** subtraction on the historical CRT table fallback.
+    */
+    siz = (int) p->Pbsize;
 
     /* Simple check to verify addressing mode is OK */
     switch (typ)
@@ -1639,33 +2329,103 @@ simsubbp (PCODE *p)
 	default:
 	    int_error ("simsubbp: bad adrmode: %ld", (INT) typ);
 	}
-    p->Pop = P_SUB;			/* Make SUB R,M */
-    outinstr (p);
+
+    if (siz > 0 && siz <= TGSIZ_WORD)
+	{
+	/*
+	** Keep standalone-hosted KCC output self-contained.  The historical
+	** expansion used CRT constants/tables ($$BMPn, $$BSHF, $BPADn) that are
+	** not available in the bare DAIMON test runtime.  For a known byte size,
+	** compute:
+	**     word_delta * bytes_per_word + left_byte_index - right_byte_index
+	** directly from the byte-pointer word address and encoded P field.
+	**
+	** The encoded field extracted by HLRZ/LSH/ANDI is E = 35 - P.  For the
+	** first byte in a word E is 36 - size, then it decreases by size for
+	** each following byte.
+	**
+	** Uses AC15 and AC16 as CCOUT scratch registers, as other CCOUT
+	** pseudo-op expansions already do with R_SCRREG/AC16.  P_SUBBP destroys
+	** the first register of its input pair and leaves the result in R+1.
+	*/
+	bytes_per_word = 36 / siz;
+	first_e = 36 - siz;
+
+	oldop = p->Pop;
+	oldreg = p->Preg;
+	p->Pop = P_MOVE;
+	p->Preg = 016;
+	outinstr (p);			/* MOVE 16,M ; right byte pointer */
+	p->Pop = oldop;
+	p->Preg = oldreg;
+
+	/* Current DAS does not alias low-core effective addresses to PDP-6
+	** accumulators.  Keep both byte pointers and the call-preserved AC15
+	** in real stack memory while this expansion decomposes them.  This
+	** also makes every numeric constant below explicitly octal for DAS.
+	*/
+	outadjsp (4);
+	fprintf (out, "\tMOVEM\t%o,-03(17)\n", p->Preg);
+	outstr ("\tMOVEM\t16,-02(17)\n");
+	outstr ("\tMOVEM\t15,-01(17)\n");
+
+	fprintf (out, "\tMOVE\t%o,-03(17)\n", p->Preg + 1);
+	fprintf (out, "\tANDI\t%o,0777777\n", p->Preg + 1);
+	fprintf (out, "\tMOVE\t%o,-02(17)\n", p->Preg);
+	fprintf (out, "\tANDI\t%o,0777777\n", p->Preg);
+	fprintf (out, "\tMOVEM\t%o,00(17)\n", p->Preg);
+	fprintf (out, "\tSUB\t%o,00(17)\n", p->Preg + 1);
+	if (bytes_per_word != 1)
+	    fprintf (out, "\tIMULI\t%o,0%o\n", p->Preg + 1, bytes_per_word);
+
+	outstr ("\tHLRZ\t15,-03(17)\n");
+	outstr ("\tLSH\t15,-014\n");
+	outstr ("\tANDI\t15,077\n");
+	fprintf (out, "\tMOVEI\t%o,00\n", p->Preg);
+	for (i = 1; i < bytes_per_word; ++i)
+	    {
+	    fprintf (out, "\tCAIN\t15,0%o\n", first_e - (siz * i));
+	    fprintf (out, "\t MOVEI\t%o,0%o\n", p->Preg, i);
+	    }
+	fprintf (out, "\tMOVEM\t%o,00(17)\n", p->Preg);
+	fprintf (out, "\tADD\t%o,00(17)\n", p->Preg + 1);
+
+	outstr ("\tHLRZ\t15,-02(17)\n");
+	outstr ("\tLSH\t15,-014\n");
+	outstr ("\tANDI\t15,077\n");
+	fprintf (out, "\tMOVEI\t%o,00\n", p->Preg);
+	for (i = 1; i < bytes_per_word; ++i)
+	    {
+	    fprintf (out, "\tCAIN\t15,0%o\n", first_e - (siz * i));
+	    fprintf (out, "\t MOVEI\t%o,0%o\n", p->Preg, i);
+	    }
+	fprintf (out, "\tMOVEM\t%o,00(17)\n", p->Preg);
+	fprintf (out, "\tSUB\t%o,00(17)\n", p->Preg + 1);
+	outstr ("\tMOVE\t15,-01(17)\n");
+	outadjsp (-4);
+	return;
+	}
 
     if (siz)
 	{
-	fprintf (out, "\tMULI\t%o,%s\n", p->Preg, crtsnam[CRT_BMP6+tbidx]);
-	crtref[CRT_BMP6+tbidx]++;
+	int_error ("simsubbp: bad Pbsize: %ld", (INT) siz);
+	siz = 0;
 	}
-    else
-	{
-	fprintf (out, "\tMUL\t%o,%s (16)\n", p->Preg, crtsnam[CRT_BPMUL]);
-	crtref[CRT_BPMUL]++;
-	}
+
+    /* Unknown byte-size fallback.  This still needs the historical CRT
+    ** tables and is retained for non-constant/foreign byte pointers.
+    */
+    fprintf (out, "\tLDB\t16,[%s,,%o]\n", crtsnam[CRT_BPSZ], p->Preg);
+    crtref[CRT_BPSZ]++;
+    p->Pop = P_SUB;			/* Make SUB R,M */
+    outinstr (p);
+    fprintf (out, "\tMUL\t%o,%s%s(16)\n", p->Preg, crtsnam[CRT_BPMUL], idxsep);
+    crtref[CRT_BPMUL]++;
     fprintf (out, "\tASH\t%o,-%s\n", p->Preg+1, crtsnam[CRT_BSHF]);
     crtref[CRT_BSHF]++;
-    if (!siz)
-	{
-	fprintf (out, "\tADD\t%o,%s (16)\n", p->Preg, crtsnam[CRT_BPADT]);
-	crtref[CRT_BPADT]++;
-	fprintf (out, "\tADD\t%o, (%o)\n", p->Preg+1, p->Preg);
-	}
-    else
-	{
-	fprintf (out, "\tADD\t%o,%s (%o)\n",
-		p->Preg+1, crtsnam[CRT_BPAD6+tbidx], p->Preg);
-	crtref[CRT_BPAD6+tbidx]++;
-	}
+    fprintf (out, "\tADD\t%o,%s%s(16)\n", p->Preg, crtsnam[CRT_BPADT], idxsep);
+    crtref[CRT_BPADT]++;
+    fprintf (out, "\tADD\t%o,%s(%o)\n", p->Preg+1, idxsep, p->Preg);
 }
 
 /*
@@ -1711,17 +2471,45 @@ simptrcnv (PCODE *p)
 #endif
 
 
+    /* A negative source size is an internal packed-member conversion.
+    ** The pointer is being dereferenced, so NULL preservation is not needed;
+    ** preserve its exact starting bit while replacing the S field.
+    */
+    if (p->Poffset < 0)
+        {
+        int oldsiz = -(int)p->Poffset;
+        int newsiz = (int)p->Pbsize;
+        int delta = oldsiz - newsiz;
+
+        if (oldsiz <= 0 || oldsiz > TGSIZ_WORD
+          || newsiz <= 0 || newsiz > TGSIZ_WORD)
+            {
+            int_error ("simptrcnv: bad packed bsize: %ld", (INT)p->Pbsize);
+            return;
+            }
+        fprintf(out, "\tTLZ\t%o,0007700\n", p->Preg);
+        if (delta > 0)
+            fprintf(out, "\tADD\t%o,[0%02o0000000000]\n",
+                    p->Preg, delta & 077);
+        else if (delta < 0)
+            fprintf(out, "\tSUB\t%o,[0%02o0000000000]\n",
+                    p->Preg, (-delta) & 077);
+        fprintf(out, "\tTLO\t%o,0%06o\n", p->Preg,
+                (newsiz & 077) << 6);
+        return;
+        }
+
     /* Switch depending on original size plus desired size */
     switch ((int) (TGSIZ_WORD* p->Poffset + p->Pbsize))
 	{
 	case TGSIZ_WORD* 9 + 18:	/* 9-bit to 18-bit */
-		fprintf (out, "\tTLZE\t%o,117700\n", p->Preg);
-		fprintf (out, "\t TLO\t%o,002200\n", p->Preg);
+		fprintf (out, "\tTLZE\t%o,0117700\n", p->Preg);
+		fprintf (out, "\t TLO\t%o,0002200\n", p->Preg);
 		return;
 
 	case TGSIZ_WORD* 18 + 9:	/* 18-bit to 9-bit */
-		fprintf (out, "\tTLZE\t%o,007700\n", p->Preg);
-		fprintf (out, "\t TLO\t%o,111100\n", p->Preg);
+		fprintf (out, "\tTLZE\t%o,0007700\n", p->Preg);
+		fprintf (out, "\t TLO\t%o,0111100\n", p->Preg);
 		return;
 
 	default:
@@ -1736,7 +2524,7 @@ simptrcnv (PCODE *p)
     */
     for (; *ip; ++ip)
 	{
-	fprintf (out,"\t%s+<%lo>\n", crtsnam[*ip], (INT) p->Preg<<23);
+	fprintf (out,"\t%s+<%" INT_OFMT ">\n", crtsnam[*ip], (unsigned INT)p->Preg<<23);
 	++crtref[*ip];
 	}
 }
@@ -1751,6 +2539,9 @@ static void
 simsmove (PCODE *p)
 {
     INT size;
+    const char *idxsep;
+
+    idxsep = (asmdialect == ASM_GAS) ? "" : " ";
 
     if ((p->Ptype&PTF_ADRMODE) != PTA_MINDEXED)
 	{
@@ -1761,7 +2552,7 @@ simsmove (PCODE *p)
 	{
 	case 1:
 	case 2:
-	    fprintf (out,"\tMOVEI\t16,-1 (%o)\n", p->Preg); /* dest <addr-1> */
+	    fprintf (out,"\tMOVEI\t16,-1%s(%o)\n", idxsep, p->Preg); /* dest <addr-1> */
 	    while (--size >= 0)
 		{
 		outstr ("\tPUSH\t16,");
@@ -1779,13 +2570,98 @@ simsmove (PCODE *p)
 		return;
 		}
 
-	    fprintf (out,"\tMOVEI\t16, (%o)\n\tHRLI\t16,",p->Preg);
+	    fprintf (out,"\tMOVEI\t16,%s(%o)\n\tHRLI\t16,", idxsep, p->Preg);
 	    outaddress (p);		/* for HRLI\t16,<source-addr> */
-	    fprintf (out,"\n\tBLT\t16,%lo (%o)\n", (INT) size-1, p->Preg);
+	    fprintf (out,"\n\tBLT\t16,%" INT_OFMT "%s(%o)\n", (unsigned INT)(size-1), idxsep, p->Preg);
 	    return;
 	}
     }
 
+/* SIMSIDIV - Output portable signed division expansion for P_IDIV.
+**
+** PDP-6 and KA10/KI10 do not agree on the IDIV edge where the dividend is
+** the signed 36-bit minimum value.  PDP-6 reports No Divide for that input,
+** while later processors accept more cases.  For common/base code, and for
+** exact PDP-6 C code, guard only that edge and otherwise retain the normal
+** hardware IDIV fast path.
+**
+** On the edge path, divide abs(INT_MIN) as an unsigned value using the
+** existing P_UIDIV expansion, then restore the C/PDP-10 signed quotient and
+** remainder signs.  INT_MIN / -1 is C overflow/undefined, but this path still
+** returns INT_MIN with zero remainder rather than depending on machine-specific
+** No Divide behavior.
+*/
+static void
+simsidiv (PCODE *p)
+{
+    PCODE q;
+    int rq = p->Preg;
+    int rr = rq + 1;
+    static int sidiv_label = 0;
+    int lab = sidiv_label++;
+    int sav = 015;
+    INT divisor;
+
+    if ((p->Ptype & PTF_ADRMODE) == PTA_RCONST)
+        {
+        divisor = p->Pvalue;
+        if (divisor > 1 && divisor <= 01000000L
+          && (divisor & (divisor - 1)) == 0)
+            {
+            fprintf(out, "\tMOVE\t%o,%o\n", rr, rq);
+            fprintf(out, "\tSKIPGE\t%o\n", rq);
+            fprintf(out, "\t ADDI\t%o,%" INT_OFMT "\n",
+                    rq, (unsigned INT)(divisor - 1));
+            fprintf(out, "\tASH\t%o,-%" INT_OFMT "\n",
+                    rq, (unsigned INT)binexp(divisor));
+            fprintf(out, "\tMOVE\t%o,0%o\n", R_SCRREG, rq);
+            fprintf(out, "\tLSH\t%o,%" INT_OFMT "\n",
+                    R_SCRREG, (unsigned INT)binexp(divisor));
+            fprintf(out, "\tSUB\t%o,0%o\n", rr, R_SCRREG);
+            return;
+            }
+        }
+
+    if (rq == sav || rr == sav)
+	sav = 014;
+
+    q = *p;
+    q.Pop = P_MOVE;
+    q.Preg = R_SCRREG;
+    outinstr (&q);			/* scratch = divisor */
+
+    fprintf (out, "\tCAMN\t%o,[0400000000000]\n", rq);
+    fprintf (out, "\t JRST\t%%SIDN%o\n", lab);
+    if ((p->Ptype & PTF_ADRMODE) == PTA_RCONST) {
+        fprintf (out, "\tIDIVI\t%o,", rq);
+        outnum (p->Pvalue);
+        outnl ();
+    } else
+        fprintf (out, "\tIDIV\t%o,0%o\n", rq, R_SCRREG);
+    fprintf (out, "\tJRST\t%%SIDD%o\n", lab);
+
+    fprintf (out, "%%SIDN%o:\tPUSH\t17,0%o\n", lab, sav);
+    fprintf (out, "\tPUSH\t17,0%o\n", R_SCRREG);
+    fprintf (out, "\tMOVM\t%o,0%o\n", sav, R_SCRREG);
+    fprintf (out, "%%SIDP%o:\tMOVE\t%o,[0400000000000]\n", lab, rq);
+    fprintf (out, "\tMOVE\t%o,0%o\n", R_SCRREG, sav);
+
+    q = *p;
+    q.Pop = P_UIDIV;
+    q.Preg = rq;
+    q.Ptype = PTA_REGIS;
+    q.Pr2 = R_SCRREG;
+    simuidiv (&q);
+
+    fprintf (out, "\tSKIPL\t0(17)\n");
+    fprintf (out, "\t MOVN\t%o,%o\n", rq, rq);
+    fprintf (out, "\tSKIPE\t%o\n", rr);
+    fprintf (out, "\t MOVN\t%o,%o\n", rr, rr);
+    outadjsp (-1);
+    fprintf (out, "\tPOP\t17,0%o\n", sav);
+    fprintf (out, "%%SIDD%o:\n", lab);
+}
+
 /* SIMUIDIV - Output expansion of P_UIDIV unsigned division "instruction".
 **	P_UIDIV reg,<addr>
 **		reg = register containing dividend (two-word register)
@@ -1799,6 +2675,8 @@ simuidiv (PCODE *p)
     register int rq = p->Preg;		/* RQ - Quotient register */
     register int rr = rq+1;		/* RR - Remainder register, RQ+1 */
     register INT divisor;
+    static int uidiv_label = 0;
+    int lab = uidiv_label++;
 
     /* First, try to use optimized sequences if the divisor is a constant. */
     if ((p->Ptype&PTF_ADRMODE) == PTA_RCONST)
@@ -1811,8 +2689,8 @@ simuidiv (PCODE *p)
 	    }
 	if ((divisor & (divisor-1)) == 0)	/* If divisor is power of 2 */
 	    {
-	    fprintf (out,"\tLSHC\t%o,-%lo\n", rq, binexp (divisor));
-	    fprintf (out,"\tLSH\t%o,-%lo\n",rr, (TGSIZ_WORD - binexp (divisor)));
+	    fprintf (out,"\tLSHC\t%o,-%" INT_OFMT "\n", rq, (unsigned INT)binexp(divisor));
+	    fprintf (out,"\tLSH\t%o,-%" INT_OFMT "\n", rr, (unsigned INT)(TGSIZ_WORD - binexp(divisor)));
 	    return;
 	    }
 	if (divisor > 0)		/* High bit not set? */
@@ -1821,9 +2699,9 @@ simuidiv (PCODE *p)
 	    fprintf (out, "\t TDZA\t%o,%o\n", rq, rq);
 	    fprintf (out, "\t  MOVEI\t%o,1\n", rq);
 	    if (! (p->Pvalue & ~0777777L))	/* Constant fits in RH? */
-		fprintf (out, "\tDIVI\t%o,%lo\n", rq, (INT) divisor);
+		fprintf (out, "\tDIVI\t%o,%" INT_OFMT "\n", rq, (unsigned INT)divisor);
 	    else
-		fprintf (out, "\tDIV\t%o,[%lo]\n", rq, (INT) divisor);
+		fprintf (out, "\tDIV\t%o,[%" INT_OFMT "]\n", rq, (unsigned INT)divisor);
 	    return;
 	    }
 	/* Constant divisor has high bit set, ugh!
@@ -1839,53 +2717,94 @@ simuidiv (PCODE *p)
     ** addressing conflicts with regs RQ or RQ+1.  We temporarily set
     ** Preg to this scratch reg so that we can take advantage of outinstr ()
     ** and have it use the right register.
+    **
+    ** Older versions of this routine used hand-counted .+N jumps.  That is
+    ** fragile when this sequence is changed: the DAIMON KCC runtime harness
+    ** caught the positive-dividend path jumping out of udivsi_var into the
+    ** next generated function after the high-numerator workaround grew the
+    ** instruction stream.  Use generated local labels instead.
     */
-    p->Pop = P_SKIP+POF_ISSKIP+POS_SKPGE;	/* Modify instr to fake out */
-    p->Preg = R_SCRREG;				/*       call to outinstr () */
-    outinstr (p);				/* SKIPGE 16,MEM Get divisor */
-    outstr (     "\t JRST\t.+10\n");		/*  JRST $1 if divisor neg */
-    fprintf (out,"\tJUMPGE\t%o,.+17\n", rq);	/* JUMPGE RQ,$3 Both +? Win! */
-
+    if ((p->Ptype & PTF_ADRMODE) == PTA_REGIS && p->Pr2 == R_SCRREG)
+	{
+	/* The divisor is already in AC16.  SKIPGE 16,16 followed by JRST
+	** only tests its sign, so use the native one-instruction branch.
+	*/
+	fprintf (out,"\tJUMPL\t%o,%%UIDN%o\n", R_SCRREG, lab);
+	}
+    else
+	{
+	p->Pop = P_SKIP+POF_ISSKIP+POS_SKPGE; /* Fetch and test divisor */
+	p->Preg = R_SCRREG;
+	outinstr (p);
+	fprintf (out,"\t JRST\t%%UIDN%o\n", lab); /* Divisor negative */
+	}
+    fprintf (out,"\tJUMPGE\t%o,%%UIDP%o\n", rq, lab); /* Both positive */
 
     /* Divisor is positive, but dividend isn't.
     ** Must check for special case of 1, which leaves high-order (sign) bit
     ** still set! (All other values zero it).  Might as well include 0 here.
     */
     fprintf (out,"\tCAIG\t%o,1\n", R_SCRREG);	/* CAIG 16,1 Check divisor */
-    outstr (     "\t JRST\t.+14\n");		/*  JRST $2 if 0 or 1 */
+    fprintf (out,"\t JRST\t%%UIDZ%o\n", lab);	/* Divisor 0 or 1 */
 
     /* Dividend is neg (has high bit set), divisor doesn't.
-    ** We know that divisor is at least 2 so the quotient will always
-    ** lose at least 1 high bit and thus we can win by doing a DIV without
-    ** any fixup.  The DIV is needed rather than IDIV because we have to
-    ** divide a 2-word value; the high bit becomes the low bit of the
-    ** high-order word.
+    **
+    ** Original KCC used:
+    **
+    **	MOVE	RR,RQ
+    **	MOVEI	RQ,1
+    **	DIV	RQ,16
+    **
+    ** to synthesize a double-word unsigned dividend.  That depends on
+    ** a fragile DIV corner for high-bit one-word dividends; the PDP-6/KA10
+    ** SIMH path used by the DAIMON harness can wedge there.  Avoid that
+    ** hardware DIV case by halving first and using a positive signed IDIV.
+    ** IDIV uses the single-word dividend in RQ and leaves the remainder in
+    ** RR, so it is safe after the shift has cleared the sign bit:
+    **
+    **	q0 = (u >> 1) / d
+    **	r0 = (u >> 1) % d
+    **	q  = 2*q0
+    **	r  = 2*r0 + (u & 1)
+    **	if (r >= d) { r -= d; ++q; }
+    **
+    ** RQ still receives the quotient and RR the remainder.
     */
-    fprintf (out,"\tMOVE\t%o,%o\n", rr, rq);	/* MOVE RR,RQ Set up */
-    fprintf (out,"\tMOVEI\t%o,1\n", rq); /* MOVEI RQ,1 Get 1 ? dvdend */
-    fprintf (out,"\tDIV\t%o,%o\n", rq, R_SCRREG); /* DIV RQ,16  Do the div! */
-    outstr (     "\tJRST\t.+12\n");		/* JRST $4	Done! */
+    fprintf (out,"\tMOVE\t%o,%o\n", rr, rq);	/* RR = original dividend */
+    fprintf (out,"\tANDI\t%o,1\n", rr);	/* RR = original low bit */
+    fprintf (out,"\tPUSH\t17,0%o\n", rr);	/* save odd bit */
+    fprintf (out,"\tLSH\t%o,-1\n", rq);	/* make dividend positive */
+    fprintf (out,"\tIDIV\t%o,0%o\n", rq, R_SCRREG); /* q0/rem0 */
+    fprintf (out,"\tLSH\t%o,1\n", rq);	/* q = 2*q0 */
+    fprintf (out,"\tLSH\t%o,1\n", rr);	/* r = 2*r0 */
+    fprintf (out,"\tADD\t%o,0(17)\n", rr);	/* add saved odd bit */
+    outadjsp (-1);
+    fprintf (out,"\tCAMGE\t%o,0%o\n", rr, R_SCRREG);
+    fprintf (out,"\t JRST\t%%UIDD%o\n", lab);
+    fprintf (out,"\tSUB\t%o,0%o\n", rr, R_SCRREG);
+    fprintf (out,"\tAOJA\t%o,%%UIDD%o\n", rq, lab);	/* ++quotient, done */
 
-/* Label $1: Divisor is negative (high bit is set) */
+/* Label N: Divisor is negative (high bit is set) */
     /* Because divisor's high bit is set, there's no way the dividend
     ** can be more than twice the magnitude of the divisor.  So the
     ** quotient must be either 0 or 1, with the remainder being respectively
     ** either the dividend or the dividend less 1 times the divisor.
     */
-    fprintf (out,"\tMOVE\t%o,%o\n", rr, rq);	/* MOVE RR,RQ	Make dblwd */
-    fprintf (out,"\tMOVEI\t%o,0\n", rq); /* MOVEI RQ,0 with high wd 0 */
-    fprintf (out,"\tJUMPGE\t%o,.+7\n", rr);	/* JUMPGE RR,$4 Maybe done */
-    fprintf (out,"\tCAMGE\t%o,%o\n",rr,R_SCRREG);	/* CAMGE RR,16 */
-    fprintf (out,"\t JRST\t.+5\n");		/*  JRST $4 */
-    fprintf (out,"\tSUB\t%o,%o\n", rr, R_SCRREG); /* SUB RR,16 */
-    fprintf (out,"\tAOJA\t%o,.+3\n", rq);		/* AOJA RQ,$4 */
+    fprintf (out,"%%UIDN%o:\tMOVE\t%o,%o\n", lab, rr, rq);
+    fprintf (out,"\tMOVEI\t%o,0\n", rq);
+    fprintf (out,"\tJUMPGE\t%o,%%UIDD%o\n", rr, lab);
+    fprintf (out,"\tCAMGE\t%o,0%o\n", rr, R_SCRREG);
+    fprintf (out,"\t JRST\t%%UIDD%o\n", lab);
+    fprintf (out,"\tSUB\t%o,0%o\n", rr, R_SCRREG);
+    fprintf (out,"\tAOJA\t%o,%%UIDD%o\n", rq, lab);
 
-/* Label $2: Divisor is 0 or 1, dividend is neg */
-    fprintf (out,"\tTDZA\t%o,%o\n", rr, rr);	/* TDZA RR,RR  Clear rem */
-						/*	and skip next instr */
-/* Label $3: Divisor and dividend both positive */
-    fprintf (out,"\t IDIV\t%o,%o\n",rq,R_SCRREG);	/* IDIV RQ,16 */
-/* Label $4: Done! */
+/* Label Z: Divisor is 0 or 1, dividend is neg */
+    fprintf (out,"%%UIDZ%o:\tTDZA\t%o,%o\n", lab, rr, rr);
+						/* Clear rem and skip next instr */
+/* Label P: Divisor and dividend both positive */
+    fprintf (out,"%%UIDP%o:\tIDIV\t%o,0%o\n", lab, rq, R_SCRREG);
+/* Label D: Done! */
+    fprintf (out,"%%UIDD%o:\n", lab);
 }
 
 
@@ -1895,33 +2814,45 @@ simuidiv (PCODE *p)
 static void
 outop (int opr)
 {
+    char *mnemonic;
+
     if (opr == 0)
 	int_error ("outop: null op");
 
-    outstr (popostr[opr & POF_OPCODE]);	/* Output assembler opcode mnemonic */
+    mnemonic = popostr[opr & POF_OPCODE];
+    if (asmdialect == ASM_GAS)
+	{
+	while (*mnemonic)
+	    {
+	    char ch = *mnemonic++;
+	    outc (ch >= 'A' && ch <= 'Z' ? ch - 'A' + 'a' : ch);
+	    }
+	}
+    else
+	outstr (mnemonic);	/* Output assembler opcode mnemonic */
 
     switch (opr & POF_OPSKIP)
 	{
 	case POS_SKPA:
-	    outc ('A');
+	    outc (asmdialect == ASM_GAS ? 'a' : 'A');
 	    break;
 	case POS_SKPE:
-	    outc ('E');
+	    outc (asmdialect == ASM_GAS ? 'e' : 'E');
 	    break;
 	case POS_SKPN:
-	    outc ('N');
+	    outc (asmdialect == ASM_GAS ? 'n' : 'N');
 	    break;
 	case POS_SKPL:
-	    outc ('L');
+	    outc (asmdialect == ASM_GAS ? 'l' : 'L');
 	    break;
 	case POS_SKPG:
-	    outc ('G');
+	    outc (asmdialect == ASM_GAS ? 'g' : 'G');
 	    break;
 	case POS_SKPLE:
-	    outstr ("LE");
+	    outstr (asmdialect == ASM_GAS ? "le" : "LE");
 	    break;
 	case POS_SKPGE:
-	    outstr ("GE");
+	    outstr (asmdialect == ASM_GAS ? "ge" : "GE");
 	    break;
 	default:
 	    ;	/* do nothing */
@@ -1932,10 +2863,10 @@ outop (int opr)
 	    {
 	    case P_MOVN+POF_BOTH:
 	    case P_MOVM+POF_BOTH:
-		outc ('S');
+		outc (asmdialect == ASM_GAS ? 's' : 'S');
 		break;
 	    default:
-		outc ('B');
+		outc (asmdialect == ASM_GAS ? 'b' : 'B');
 		break;
 	    }
 }
@@ -1954,7 +2885,7 @@ outreg (int n)
 	else if (mlist && n == R_SP)
 	    outid ("SP");
 	else
-	    outnum (n);
+	    outrawnum ((unsigned INT)n);
 	outc (',');
 	}
 }
@@ -1989,7 +2920,9 @@ outaddress (PCODE *p)
 	{
 	if (p->Poffset > 01000000L)	/* ensure valid 18 bit address */
 	    int_error ("outaddress: bad stk offset 0%o", p->Poffset);
-	outc (' (');
+	if (asmdialect != ASM_GAS)
+	    outc (' ');
+	outc ('(');
 
 	if (mlist && Register_Preserve (p->Pindex))
 	    outid (Reg_Id[p->Pindex -
@@ -1997,11 +2930,51 @@ outaddress (PCODE *p)
 	else if (mlist && p->Pindex == R_SP)
 	    outid ("SP");
 	else
-	    outnum (p->Pindex);
+	    outrawnum ((unsigned INT)p->Pindex);
 	outc (')');
 	}
 }
 
+
+/* GASBPLHVAL - Return a numeric PDP-10 byte-pointer left half.
+**	KCC's traditional MACRO/FAIL output names constants such as $$BP90.
+**	The GNU-as-style bare assembler used by the DAIMON/KCC harness does not
+**	provide those KCC runtime CPU symbols, so emit the actual local byte
+**	pointer P+S value when possible.
+*/
+static int
+gasbplhval (int i)
+{
+    int size = 0;
+    int slot = 0;
+    int pos;
+
+    if (i == CRT_BPPS)
+	return 0777700;
+
+    if (i >= CRT_BPH0 && i <= CRT_BPH1) {
+	size = 18;
+	slot = i - CRT_BPH0;
+    } else if (i >= CRT_BP90 && i <= CRT_BP93) {
+	size = 9;
+	slot = i - CRT_BP90;
+    } else if (i >= CRT_BP80 && i <= CRT_BP83) {
+	size = 8;
+	slot = i - CRT_BP80;
+    } else if (i >= CRT_BP70 && i <= CRT_BP74) {
+	size = 7;
+	slot = i - CRT_BP70;
+    } else if (i >= CRT_BP60 && i <= CRT_BP65) {
+	size = 6;
+	slot = i - CRT_BP60;
+    } else {
+	return -1;
+    }
+
+    pos = slot * size + size - 1;
+    return ((35 - pos) << 12) | (size << 6);
+}
+
 /* OUTPTI - output immediate pointer operand.
 **	This is used for TLZ and TLO.
 **	We already know that the instruction's operand is a PTA_PCONST
@@ -2018,12 +2991,39 @@ outpti (int bsize, INT offset)
     int i;
     INT woff = 0;
 
+    /* DAS/GAS can express arbitrary PDP-10 byte sizes directly.  Avoid
+    ** routing those through KCC's historical $$BPxx table, which only
+    ** contains the traditional 6/7/8/9/18-bit byte sizes.
+    */
+    if (asmdialect == ASM_GAS && bsize > 0 && bsize < TGSIZ_WORD) {
+	int bpw = TGSIZ_WORD / bsize;
+	int boff = adjboffset(offset, &woff, bpw);
+	int pos;
+
+	if (woff) {
+	    int_error("outpti: byte offset crosses word");
+	    outnum(0777700);
+	    return;
+	}
+	pos = boff * bsize + bsize - 1;
+	outnum(((35 - pos) << 12) | (bsize << 6));
+	return;
+    }
+
     if ((i = obplh (offset, &woff, bsize)) == 0
       || woff)
 	{
 	int_error ("outpti: bad args");
 	i = CRT_BPPS;
 	}
+    if (asmdialect == ASM_GAS) {
+	int n = gasbplhval (i);
+	if (n >= 0) {
+	    outnum (n);
+	    return;
+	}
+    }
+
     outstr (crtsnam[i]);		/* Output byte pointer bits */
     ++crtref[i];
 }
@@ -2043,7 +3043,41 @@ void
 outptr (SYMBOL *sym, int bsize, INT offset)
     {
     register int i = 0;
+    INT woff = 0;
 
+
+    if (asmdialect == ASM_GAS && bsize)
+	{
+	int boff = adjboffset(offset, &woff, TGSIZ_WORD / bsize);
+	fprintf (out, "POINT %d,", bsize);
+	if (sym)
+	    outmiref (sym);
+	else
+	    outstr ("0");
+	if (woff)
+	    {
+	    if (woff > 0)
+		outc ('+');
+	    outnum (woff);
+	    }
+	fprintf (out, ",%d", boff * bsize + bsize - 1);
+	return;
+	}
+
+    if (asmdialect == ASM_GAS && !bsize)
+	{
+	if (sym)
+	    outmiref (sym);
+	else
+	    outstr ("0");
+	if (offset)
+	    {
+	    if (offset > 0)
+		outc ('+');
+	    outnum (offset);
+	    }
+	return;
+	}
 
     if (bsize && (i = obplh (offset, &offset, bsize)) != 0)
 	{
@@ -2093,6 +3127,7 @@ obplh (INT boff, INT *awoff, int bsize)
 	{
 	default:
 	    int_error ("obplh: bad bsize: %d", bsize);
+	/* FALLTHROUGH */
 	case -1:		/* Return P+S mask */
 	    return CRT_BPPS;
 	case 0:			/* Word pointer */
@@ -2159,10 +3194,21 @@ outflt (int typ, INT *ptr, int flags)
     if (flags & OF_CONST)
 	outc ('[');		/* Set up as literal constant ] */
     else
+	{
 	outtab ();
+	if (asmdialect == ASM_GAS)
+	    outstr (".word ");
+	}
     if (typ == TS_FLOAT)
 	{
+#ifdef __COMPILER_KCC__
 	outpnum (*ptr);
+#else
+	{
+	float f = (float) * (double *)ptr;
+	outmpdbl ((INT *)&f, 1);
+	}
+#endif
 	typ = 1;
 	}
     else if (tgmachuse.mapdbl)	/* If target mach fmt is different */
@@ -2175,6 +3221,8 @@ outflt (int typ, INT *ptr, int flags)
 	outpnum (ptr[0]);
 	outnl ();
 	outtab ();
+	if (asmdialect == ASM_GAS)
+	    outstr (".word ");
 	if (flags & OF_CONST)
 	    outtab ();
 	outpnum (ptr[1]);
@@ -2188,7 +3236,9 @@ outflt (int typ, INT *ptr, int flags)
     ** we know the assembler output is going to stay around.
     */
     if (!delete)		/* If keeping asm file around, add comment */
+	{
 	fprintf (out, "\t; %.20g", * (double *)ptr);
+	}
     if (! (flags & OF_CONST))
 	outnl ();
     return typ;		/* Return # wds emitted */
@@ -2201,6 +3251,102 @@ outlpnum (unsigned INT n, int dig)
 	outlpnum (n >> 3, dig - 1);
     putc ((n & 7) + '0', out);
 }
+
+#ifndef __COMPILER_KCC__
+static unsigned long
+host_u32_from_bytes (unsigned char * b)
+{
+    union { unsigned int i; unsigned char c[sizeof(unsigned int)]; } u;
+
+    u.i = 1;
+    if (u.c[0] == 1)
+	return (((unsigned long)b[3] << 24)
+	      | ((unsigned long)b[2] << 16)
+	      | ((unsigned long)b[1] << 8)
+	      |  (unsigned long)b[0]);
+    return (((unsigned long)b[0] << 24)
+	  | ((unsigned long)b[1] << 16)
+	  | ((unsigned long)b[2] << 8)
+	  |  (unsigned long)b[3]);
+}
+
+static unsigned long
+host_float_bits (float * fp)
+{
+    unsigned char b[4];
+
+    if (sizeof (*fp) != 4)
+	int_error ("host_float_bits: unsupported host float size");
+    memcpy ((char *)b, (char *)fp, 4);
+    return host_u32_from_bytes (b);
+}
+
+static void
+host_double_bits (double d, unsigned long * lo, unsigned long * hi)
+{
+    unsigned char b[8];
+    union { unsigned int i; unsigned char c[sizeof(unsigned int)]; } u;
+
+    if (sizeof (double) != 8)
+	int_error ("host_double_bits: unsupported host double size");
+    memcpy ((char *)b, (char *)&d, 8);
+    u.i = 1;
+    if (u.c[0] == 1)
+	{
+	*lo = host_u32_from_bytes (b);
+	*hi = host_u32_from_bytes (b + 4);
+	}
+    else
+	{
+	*hi = host_u32_from_bytes (b);
+	*lo = host_u32_from_bytes (b + 4);
+	}
+}
+
+static void
+host_pdp10_double_words (double d, unsigned INT * w1, unsigned INT * w2)
+{
+    unsigned INT word1, word2;
+    unsigned INT hi18, lo18;
+    unsigned INT value, second, exp, sign;
+    unsigned long lo32, hi32;
+
+    host_double_bits (d, &lo32, &hi32);
+    if (lo32 == 0 && hi32 == 0)
+	{
+	*w1 = 0;
+	*w2 = 0;
+	return;
+	}
+
+    second = (unsigned INT)lo32;
+    sign   = (unsigned INT)(hi32 & (1UL << 31));
+    exp    = (unsigned INT)((hi32 >> 20) & 03777UL);
+    exp    = exp + 2;
+    exp    = exp + (128 - 1024);
+    value  = (unsigned INT)(hi32 & 03777777UL);
+    value  = value + 04000000UL;
+
+    if (sign)
+	{
+	second = ~second + 1;
+	value  = ~value + (second == 0);
+	value &= 07777777UL;
+	exp    = ~exp & 0377UL;
+	}
+
+    hi18 = ((sign | (exp << 23) | (value << 2)) >> 14) & 0777777UL;
+    lo18 = ((value << 6) | (second >> 26)) & 0777777UL;
+    word1 = (hi18 << 18) | lo18;
+
+    hi18 = (second >> 9) & 0777777UL;
+    lo18 = (second << 9) & 0777777UL;
+    word2 = (hi18 << 18) | lo18;
+
+    *w1 = word1;
+    *w2 = word2;
+}
+#endif
 
 /* OUTMPDBL - Output mapped double-format constant
 **	This is also used by CCGEN for data.
@@ -2244,9 +3390,12 @@ outmpdbl (INT *ip, int which)  /* 1 = 1st wd, 2 = 2nd wd, 3 = both wds (dbl) */
 		 sign    = 0,
 		 outword = 0;
 
+    unsigned long lo32 = 0, hi32 = 0, f32 = 0;
+
     if (which == 3)			/* double precision input */
 	{
-	if (ip[0] == 0 && ip[1] == 0)
+	host_double_bits (*((double *)ip), &lo32, &hi32);
+	if (lo32 == 0 && hi32 == 0)
 	    {
 	    outstr ("0\n\t\t0");			/* special case: input zero */
 	    return;
@@ -2257,12 +3406,12 @@ outmpdbl (INT *ip, int which)  /* 1 = 1st wd, 2 = 2nd wd, 3 = both wds (dbl) */
 	 *	Remaining 20 bits, plus ip[0], are a 52 bit fraction
 	 *	with a leading 1 implied.
 	 */
-	second = ip[0];
-	sign   = (ip[1] & (1L << 31));
-	exp    = (ip[1] >> 20) & 03777;	    /* normalized exponent */
+	second = lo32;
+	sign   = (hi32 & (1UL << 31));
+	exp    = (hi32 >> 20) & 03777;	    /* normalized exponent */
 	exp    = exp + 2;		    /* adjust for pdp-10 usage */
 	exp    = exp + (128 - 1024);	    /* adjust to 8 bits XS 128 */
-	value  = (ip[1] & 03777777L);	    /* fractional part */
+	value  = (hi32 & 03777777L);	    /* fractional part */
 	value  = value  + 04000000L;	    /* add implied leading 1 */
 
 	if (sign)				/* if negative */
@@ -2292,7 +3441,8 @@ outmpdbl (INT *ip, int which)  /* 1 = 1st wd, 2 = 2nd wd, 3 = both wds (dbl) */
 	if (which == 2)
 	    ip++;			/* use 2nd wd instead of 1st */
 
-	if (ip[0] == 0)
+	f32 = host_float_bits ((float *)ip);
+	if (f32 == 0)
 	    {
 	    outpnum (0L);		/* special case: input = zero; */
 	    return;
@@ -2302,10 +3452,10 @@ outmpdbl (INT *ip, int which)  /* 1 = 1st wd, 2 = 2nd wd, 3 = both wds (dbl) */
 	 *	First bit is sign; next 8 bits are exponent in XS 128.
 	 *	Remaining 23 bits are fraction with leading 1 implied.
 	 */
-	sign   = (ip[0] & (1L << 31));
-	exp    = (ip[0] >> 23) & 0377;	    /* normalize exponent */
+	sign   = (f32 & (1UL << 31));
+	exp    = (f32 >> 23) & 0377;	    /* normalize exponent */
 	exp    = exp + 2;                   /* adjust to PDP-10 world  */
-	value  = (ip[0] & 037777777L);	    /* isolate fractional part */
+	value  = (f32 & 037777777L);	    /* isolate fractional part */
 	value  = value  + 040000000L;	    /* add implied leading 1   */
 
 	if (sign)			/* if negative, */
@@ -2360,13 +3510,22 @@ binexp (unsigned INT n)
 static int
 fltpow2 (double d)
 {
-    unsigned INT u = (unsigned INT) (* (INT *) (&d));
 #ifdef __COMPILER_KCC__
+    unsigned INT u = (unsigned INT) (* (INT *) (&d));
+
     if ((d > 0.0 && u & 03777777777L) == 0)
 	return (int) (u >> 27) - 129;
 #else  /* Not KCC */
-    if ((d > 0.0 && u & 037777777L) == 0)
-	return (int) (u >> 23) - 127;
+    unsigned long lo32, hi32;
+    int exp;
+
+    if (d > 0.0)
+	{
+	host_double_bits (d, &lo32, &hi32);
+	exp = (int)((hi32 >> 20) & 03777);
+	if (exp != 0 && (hi32 & 03777777L) == 0 && lo32 == 0)
+	    return exp - 1023;
+	}
 #endif
     return 0;
 }
@@ -2393,7 +3552,7 @@ outscon (char *s, int l, int bsiz)
 /* Char string,  Length (may include nulls!), and Byte size to use. */
 {
     int i, sepchar = ',';
-    char *opstr = "BYTE\t (%d) ";
+    char *opstr = asmdialect == ASM_GAS ? ".byte\t%d," : "BYTE\t (%d) ";
 
     --s;			/* Set up for preincrement */
     while (l > 0)			/* For each word */
@@ -2432,7 +3591,9 @@ outlab (SYMBOL *s)
     {
     outid (s->Sname);		/* Output the actual label name */
 
-    if (s->Sname[0] == '$')	/* Local label? */
+    if (asmdialect == ASM_GAS)
+	outstr (":\n");
+    else if (s->Sname[0] == '$')	/* Local label? */
 	outstr ("==.\n");	/* Yes, define it as half-killed.  See note. */
     else
 	outstr (":\n");		/* No, normal label. */
@@ -2456,6 +3617,12 @@ outid (char *s)
     int		n,
 		ch;
 
+    if (asmdialect == ASM_GAS && s[0] == '$' && s[1] >= '0' && s[1] <= '9')
+	{
+	putc ('%', out);
+	putc ('L', out);
+	++s;
+	}
 
     if (!longidents)			/* FW 2A(51) */
 	n = 6;				/* Max # chars to output */
@@ -2465,7 +3632,7 @@ outid (char *s)
 
     while (ch)
 	{
-	if (ch == '_')
+	if (ch == '_' && asmdialect != ASM_GAS)
 	    ch = UNDERSCORE_MAPCHR;
 
 	putc (ch, out);
@@ -2522,10 +3689,12 @@ outmidef (SYMBOL *s)
 
     outmiref (s);
 
-    if (s->Sclass == SC_EXTDEF)
+    if (asmdialect != ASM_GAS && s->Sclass == SC_EXTDEF)
 	putc (':', out);
 
     putc (':', out);
+    if (asmdialect == ASM_GAS)
+	putc ('\n', out);
     }
 
 /*
@@ -2614,19 +3783,35 @@ outnum (INT n)
 	    n = -n;
 	    putc ('-', out);
 	    }
+    /* DAS follows C integer syntax: an unprefixed number is decimal.
+    ** KCC's assembler output is traditionally octal, so make that radix
+    ** explicit for every numeric operand, including accumulator numbers.
+    ** DAS interprets an unprefixed token as decimal, whereas KCC's emitted
+    ** assembler syntax is traditionally octal.
+    */
+    outpnum ((unsigned INT)n);
+}
+
+/* OUTRAWNUM - Output octal digits without a radix prefix.  Use only where
+** DAS parses the field as octal by definition, such as an AC or index field.
+*/
+static void
+outrawnum (unsigned INT n)
+{
     if (n &~ 07)
-	outpnum ((unsigned INT) n >> 3);
+	outrawnum (n >> 3);
     putc ((n & 07) + '0', out);
 }
 
-/* OUTPNUM - Output value as a positive unsigned octal number
+/* OUTPNUM - Output a positive unsigned octal constant with an explicit
+** leading zero for DAS's decimal-default expression grammar.
 */
 static void
 outpnum (unsigned INT n)
 {
     if (n &~ 07)
-	outpnum (n >> 3);
-    putc ((n & 07) + '0', out);
+	putc ('0', out);
+    outrawnum (n);
 }
 
 /* OUTSIX - Output SIXBIT word, ignoring trailing blanks
@@ -2670,11 +3855,28 @@ outrj6 (unsigned INT ms)
 
 void
 outiprolog (void)
-    {
-    fprintf (out, "\tADJSP\t17,%o+1\n", r_maxnopreserve);
-    fprintf (out, "\tMOVEM\t%o,(17)\n", r_maxnopreserve);
-    fprintf (out, "\tMOVEI\t%o,-%o(17)\n", r_maxnopreserve, r_maxnopreserve);
-    fprintf (out, "\tBLT\t%o,-1(17)\n", r_maxnopreserve);
+{
+    int nsave = r_maxnopreserve + 3;
+
+    /* Save AC0..AC7 plus AC15/AC16.  Normal C functions preserve the
+    ** latter pair at their boundary; an interrupt handler must preserve
+    ** them itself because it can interrupt arbitrary code.
+    */
+    if (tgmachuse.adjsp)
+	fprintf (out, "\tADJSP\t17,%o\n", nsave);
+    else {
+	outstr ("\tADD\t17,[");
+	outnum (nsave);
+	outstr (",,");
+	outnum (nsave);
+	outstr ("]\n");
+    }
+    fprintf (out, "\tMOVEM\t%o,(17)\n", R_SCRREG);
+    fprintf (out, "\tMOVEM\t%o,-1(17)\n", R_SCRREG - 1);
+    fprintf (out, "\tMOVEM\t%o,-2(17)\n", r_maxnopreserve);
+    fprintf (out, "\tMOVEI\t%o,-%o(17)\n", r_maxnopreserve,
+	     r_maxnopreserve + 2);
+    fprintf (out, "\tBLT\t%o,-3(17)\n", r_maxnopreserve);
     }
 
 
@@ -2686,9 +3888,22 @@ outiprolog (void)
 
 void
 outiepilog (void)
-    {
-    fprintf (out, "\tMOVSI\t%o,-%o(17)\n", r_maxnopreserve, r_maxnopreserve);
+{
+    int nsave = r_maxnopreserve + 3;
+
+    fprintf (out, "\tMOVE\t%o,(17)\n", R_SCRREG);
+    fprintf (out, "\tMOVE\t%o,-1(17)\n", R_SCRREG - 1);
+    fprintf (out, "\tMOVSI\t%o,-%o(17)\n", r_maxnopreserve,
+	     r_maxnopreserve + 2);
     fprintf (out, "\tBLT\t%o,%o\n", r_maxnopreserve, r_maxnopreserve);
-    fprintf (out, "\tADJSP\t17,-%o-1\n", r_maxnopreserve);
+    if (tgmachuse.adjsp)
+	fprintf (out, "\tADJSP\t17,-%o\n", nsave);
+    else {
+	outstr ("\tSUB\t17,[");
+	outnum (nsave);
+	outstr (",,");
+	outnum (nsave);
+	outstr ("]\n");
+    }
     fputs ("\tDEBRK$\n", out);
     }

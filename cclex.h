@@ -48,6 +48,8 @@ EXT SYMBOL *cursym;		/* Ptr to symbol, if token is T_IDENT */
  */
 EXT struct {
     TYPE *ctype;		/* constant type */
+    int cwide;			/* non-zero if integer needs hi/lo word pair */
+    INT chi;			/* high word for wide integer constant */
     union {
 	INT cint;		/* integer value */
 	float cflt;		/* float value */

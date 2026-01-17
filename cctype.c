@@ -13,8 +13,8 @@ extern NODE *evalexpr(NODE *);				/* CCEVAL */
 extern NODE *ndef(int op, TYPE *t, int f, NODE *l, NODE *r);	/* CCNODE */
 extern NODE *ndeftl(int op, TYPE *t, NODE *l);		/* CCNODE */
 extern NODE *ndeficonst(INT val);			/* CCNODE */
-extern TYPE *findtype(int, TYPE *), *findutype(TYPE *), 
-	 *findqtype(TYPE *, INT);			/* CCSYM */
+extern TYPE *findtype(int, TYPE *), *findctype(int, INT, unsigned INT, TYPE *),
+	 *findutype(TYPE *), *findqtype(TYPE *, INT);			/* CCSYM */
 extern TYPE *tcomposite(TYPE *, TYPE *);		/* CCSYM */
 extern int cmputype(TYPE *, TYPE *);			/* CCSYM */
 
@@ -131,14 +131,8 @@ whenever an exact and unique value is needed for a specific cast, the
 */
 static char
 convtab[TS_MAX*TS_MAX] = {
-/* 18 basic types, plus 2 internal (bitfields) */
-/* Vo Fn Ar St Un Pt En Fl Db LD SB SC SS SI SL UB UC US UI UL */
-/*	Void, Funct, Array,
-**	Struct, Union, Pointer, Enum,
-**	Float, Double, Long Double,
-**	Signed   Bitfield, Char, Short, Int, Long,
-**	Unsigned Bitfield, Char, Short, Int, Long
-*/
+/* 18 basic types, plus 2 internal (bitfields), plus long long pair */
+/* Vo Fn Ar St Un Pt En Fl Db LD SB SC SS SI SL UB UC US UI UL LL ULL */
 
 /* Conversions to TS_VOID.  All such conversions are allowed. */
 	CAST_VOID,CAST_VOID,CAST_VOID,
@@ -146,6 +140,7 @@ convtab[TS_MAX*TS_MAX] = {
 	CAST_VOID,CAST_VOID,CAST_VOID,
 	CAST_VOID,CAST_VOID,CAST_VOID,CAST_VOID,CAST_VOID,
 	CAST_VOID,CAST_VOID,CAST_VOID,CAST_VOID,CAST_VOID,
+	CAST_VOID,CAST_VOID,
 
 /* Conversions to TS_FUNCT.  No such conversion is allowed. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
@@ -153,6 +148,7 @@ convtab[TS_MAX*TS_MAX] = {
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
+	CAST_ILL  ,CAST_ILL  ,
 
 /* Conversions to TS_ARRAY.  No such conversion is allowed. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
@@ -160,125 +156,159 @@ convtab[TS_MAX*TS_MAX] = {
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
+	CAST_ILL  ,CAST_ILL  ,
 
 /* Conversions to TS_STRUCT.  Only the trivial conversion is allowed. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
-	CAST_TRIV ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,	/* Check it out. */
+	CAST_TRIV ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
+	CAST_ILL  ,CAST_ILL  ,
 
 /* Conversions to TS_UNION.  Only the trivial conversion is allowed. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
-	CAST_ILL  ,CAST_TRIV ,CAST_ILL  ,CAST_ILL  ,	/* Check it out. */
+	CAST_ILL  ,CAST_TRIV ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
+	CAST_ILL  ,CAST_ILL  ,
 
 /* Conversions to TS_PTR.  Lots of checking involved. */
-	CAST_ILL  ,CAST_FN_PF,CAST_AR_PA,		/* OK from Fn and Ar */
-	CAST_ILL  ,CAST_ILL  ,CAST_PT_PT,CAST_ILL  ,	/* Ptr to ptr */
+	CAST_ILL  ,CAST_FN_PF,CAST_AR_PA,
+	CAST_ILL  ,CAST_ILL  ,CAST_PT_PT,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
-	CAST_IT_PT,CAST_IT_PT,CAST_IT_PT,CAST_IT_PT,CAST_IT_PT,	/* Ints to */
-	CAST_IT_PT,CAST_IT_PT,CAST_IT_PT,CAST_IT_PT,CAST_IT_PT,	/* ptrs */
+	CAST_IT_PT,CAST_IT_PT,CAST_IT_PT,CAST_IT_PT,CAST_IT_PT,
+	CAST_IT_PT,CAST_IT_PT,CAST_IT_PT,CAST_IT_PT,CAST_IT_PT,
+	CAST_IT_PT,CAST_IT_PT,
 
 /* Conversions to TS_ENUM.  Only enum and integer source allowed. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
-	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_EN_EN,	/* Maybe check tags. */
+	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_EN_EN,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
-	CAST_IT_EN,CAST_IT_EN,CAST_IT_EN,CAST_IT_EN,CAST_IT_EN,	/* Ints to */
-	CAST_IT_EN,CAST_IT_EN,CAST_IT_EN,CAST_IT_EN,CAST_IT_EN,	/* enums */
+	CAST_IT_EN,CAST_IT_EN,CAST_IT_EN,CAST_IT_EN,CAST_IT_EN,
+	CAST_IT_EN,CAST_IT_EN,CAST_IT_EN,CAST_IT_EN,CAST_IT_EN,
+	CAST_IT_EN,CAST_IT_EN,
 
 /* Conversions to TS_FLOAT. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
-	CAST_NONE ,CAST_FP_FP,CAST_FP_FP,		/* float to float */
-	CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,	/* Ints to */
-	CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,	/* float */
+	CAST_NONE ,CAST_FP_FP,CAST_FP_FP,
+	CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,
+	CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,
+	CAST_IT_FP,CAST_IT_FP,
 
 /* Conversions to TS_DOUBLE. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
-	CAST_FP_FP,CAST_NONE ,CAST_FP_FP,		/* float to float */
-	CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,	/* Ints to */
-	CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,	/* float */
+	CAST_FP_FP,CAST_NONE ,CAST_FP_FP,
+	CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,
+	CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,
+	CAST_IT_FP,CAST_IT_FP,
 
 /* Conversions to TS_LNGDBL. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
-	CAST_FP_FP,CAST_FP_FP,CAST_NONE ,		/* float to float */
-	CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,	/* Ints to */
-	CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,	/* float */
+	CAST_FP_FP,CAST_FP_FP,CAST_NONE ,
+	CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,
+	CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,CAST_IT_FP,
+	CAST_IT_FP,CAST_IT_FP,
 
 /* Conversions to TS_BITF. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_PT_IT,CAST_EN_IT,
-	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,		/* Floats to integer */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* Ints to */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* ints */
+	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,
 
 /* Conversions to TS_CHAR. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_PT_IT,CAST_EN_IT,
-	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,		/* Floats to integer */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* Ints to */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* ints */
+	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,
 
 /* Conversions to TS_SHORT. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_PT_IT,CAST_EN_IT,
-	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,		/* Floats to integer */
-	CAST_IT_IT,CAST_IT_IT,CAST_NONE ,CAST_IT_IT,CAST_IT_IT,	/* Ints to */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* ints */
+	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_NONE ,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,
 
 /* Conversions to TS_INT. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_PT_IT,CAST_EN_IT,
-	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,		/* Floats to integer */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_NONE ,CAST_IT_IT,	/* Ints to */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* ints */
+	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_NONE ,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,
 
 /* Conversions to TS_LONG. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_PT_IT,CAST_EN_IT,
-	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,		/* Floats to integer */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_NONE ,	/* Ints to */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* ints */
+	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_NONE ,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,
 
 /* Conversions to TS_UBITF. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_PT_IT,CAST_EN_IT,
-	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,		/* Floats to integer */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* Ints to */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* ints */
+	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,
 
 /* Conversions to TS_UCHAR. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_PT_IT,CAST_EN_IT,
-	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,		/* Floats to integer */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* Ints to */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* ints */
+	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,
 
 /* Conversions to TS_USHORT. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_PT_IT,CAST_EN_IT,
-	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,		/* Floats to integer */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* Ints to */
-	CAST_IT_IT,CAST_IT_IT,CAST_NONE ,CAST_IT_IT,CAST_IT_IT,	/* ints */
+	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_NONE ,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,
 
 /* Conversions to TS_UINT. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_PT_IT,CAST_EN_IT,
-	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,		/* Floats to integer */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* Ints to */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_NONE ,CAST_IT_IT,	/* ints */
+	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_NONE ,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,
 
 /* Conversions to TS_ULONG. */
 	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
 	CAST_ILL  ,CAST_ILL  ,CAST_PT_IT,CAST_EN_IT,
-	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,		/* Floats to integer */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,	/* Ints to */
-	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_NONE ,	/* ints */
+	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_NONE ,
+	CAST_IT_IT,CAST_IT_IT,
+
+/* Conversions to TS_LONGLONG. */
+	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
+	CAST_ILL  ,CAST_ILL  ,CAST_PT_IT,CAST_EN_IT,
+	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_NONE ,CAST_IT_IT,
+
+/* Conversions to TS_ULONGLONG. */
+	CAST_ILL  ,CAST_ILL  ,CAST_ILL  ,
+	CAST_ILL  ,CAST_ILL  ,CAST_PT_IT,CAST_EN_IT,
+	CAST_FP_IT,CAST_FP_IT,CAST_FP_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,CAST_IT_IT,
+	CAST_IT_IT,CAST_NONE ,
 };
 
 /* Pointer representation conversion table
@@ -347,10 +377,21 @@ static pconvtab[PTRREP_MAX][PTRREP_MAX] = {
 **	each type, ignoring qualifiers.  Minimal checking is done.
 */
 static int
-cast_op(to, frm)
-TYPE *to, *frm;
+cast_op(struct type * to, struct type * frm)
 {
     int cop;
+
+    /* _Bool is represented as a 9-bit unsigned byte type with a semantic
+    ** flag.  Converting any scalar to it is a truth-value conversion and
+    ** must not collapse to an ordinary same-width integer no-op.
+    */
+    if (tisbool(to) && !tisbool(frm)) {
+        if (!tisscalar(frm)) {
+            error("Illegal conversion - %s to _Bool", tsnames[frm->Tspec]);
+            return CAST_ILL;
+        }
+        return CAST_BOOL;
+    }
 
     switch (cop = convtab[castidx(frm->Tspec,to->Tspec)]) {
 	case CAST_TRIV:		/* Verify that types are identical */
@@ -358,12 +399,22 @@ TYPE *to, *frm;
 	      || cmputype(to, frm))	/* Ignore type-qualifiers */
 		return CAST_NONE;
 	    cop = CAST_ILL;	/* Otherwise drop through to complain */
+	/* FALLTHROUGH */
 	case CAST_ILL:
 	    error("Illegal conversion - %s to %s",
 		tsnames[frm->Tspec], tsnames[to->Tspec]);
 	    break;
 	case CAST_VOID:		/* Discard -- converting to void */
-	case CAST_NONE:		/* No actual conversion operation needed */
+	    break;
+	case CAST_NONE:		/* Usually no representation change needed */
+	    /* Exact-width KCC integer types can share a TS_ code with the
+	    ** native type while differing in value width.  Promotion from
+	    ** e.g. signed _KCCtype_int32 to 36-bit int still requires real
+	    ** sign extension, so do not collapse it to a no-op.
+	    */
+	    if (tisinteg(to) && tisinteg(frm)
+	      && tbitsize(to) != tbitsize(frm))
+		return CAST_IT_IT;
 	    break;
 
 	/* These two conversions should have been caught before this.
@@ -407,9 +458,7 @@ TYPE *to, *frm;
 **	such no-ops farther on.
 */
 NODE *
-convcast(t,n)
-NODE *n;
-TYPE *t;
+convcast(struct type * t, struct node * n)
 {
     int op;
 
@@ -419,6 +468,121 @@ TYPE *t;
 	return n;
     if (tisqualif(t))
 	t = findutype(t);		/* Use unqualified type as target */
+
+    /* Logical packed pointers carry their representation in the pointer
+    ** word itself.  A cast which does not require changing that word must
+    ** retain the internal representation flag instead of silently turning
+    ** the value back into an ordinary pointer.
+    **
+    ** A known S=1 pointer may reinterpret another integral element width:
+    ** the address remains the same bit address and later arithmetic uses
+    ** the new target width.  A TF_MAYBITPTR value is different: its runtime
+    ** value may instead be a native byte pointer, whose representation can
+    ** depend on the target width.  Keep those casts representation-neutral
+    ** by requiring equal element bit widths.
+    */
+    if (t->Tspec == TS_PTR && n->Ntype->Tspec == TS_PTR
+      && (tisbitptr(n->Ntype) || tismaybitptr(n->Ntype))) {
+	TYPE *st = n->Ntype->Tsubt;
+	TYPE *dt = t->Tsubt;
+	INT flags;
+	int compatible = 0;
+	int subwordsrc = 0;
+	int wordtarget = 0;
+
+	if (st != NULL && dt != NULL) {
+	    subwordsrc = tisinteg(st)
+	      && tbitsize(st) > 0 && tbitsize(st) < TGSIZ_WORD;
+	    wordtarget = dt->Tspec != TS_VOID
+	      && (!tisinteg(dt) || tbitsize(dt) >= TGSIZ_WORD);
+	}
+
+	if (st != NULL && dt != NULL) {
+	    if (cmputype(st, dt))
+		compatible = 1;
+	    else if (tisbitptr(n->Ntype)
+	      && (st->Tspec == TS_VOID || dt->Tspec == TS_VOID))
+		compatible = 1;
+	    else if (tisinteg(st) && tisinteg(dt)) {
+		if (tisbitptr(n->Ntype))
+		    compatible = 1;
+		else if (tbitsize(st) == tbitsize(dt))
+		    compatible = 1;
+	    }
+	    else if (tismaybitptr(n->Ntype) && st->Tspec == TS_VOID
+	      && tisinteg(dt) && tbitsize(dt) > 0
+	      && tbitsize(dt) < TGSIZ_WORD
+	      && !(tischar(dt) && tbitsize(dt) == TGSIZ_CHAR))
+		compatible = 1;
+	}
+
+	if (!compatible) {
+	    if (tismaybitptr(n->Ntype)
+	      && st != NULL && dt != NULL
+	      && ((tisinteg(st) && tisinteg(dt))
+	        || (subwordsrc && wordtarget)))
+		compatible = 1;
+	    else if (tismaybitptr(n->Ntype)
+	      && st != NULL && dt != NULL && dt->Tspec == TS_VOID) {
+		/* Canonicalize a representation-polymorphic byte pointer to
+		** KCC's S=1 logical form before it becomes an untyped void *.
+		** The raw bit address then survives arbitrary void * call/return
+		** boundaries without needing source-width metadata.
+		*/
+		t = findctype(TS_PTR, t->Tflag | TF_MAYBITPTR,
+		              t->Tsize, dt);
+		return ndefcast(CAST_PT_PT, t, n);
+	    }
+	    else if (tismaybitptr(n->Ntype))
+		error("function-boundary packed pointer cast requires compatible pointer target");
+	    else
+		error("unsupported logical packed pointer cast");
+	    if (!compatible)
+		return n;
+	}
+
+	/* Casting a representation-polymorphic byte pointer to a word pointer
+	** must materialize an ordinary word address.  Both native byte pointers
+	** and KCC's S=1 form keep the containing word address in the RH, so the
+	** existing pointer cast code can discard the P+S half uniformly.
+	*/
+	if (tismaybitptr(n->Ntype) && subwordsrc && wordtarget)
+	    return ndefcast(CAST_PT_PT, t, n);
+
+	flags = t->Tflag;
+	if (tisbitptr(n->Ntype))
+	    flags |= TF_PACKEDPTR | TF_BITPTR;
+	if (tismaybitptr(n->Ntype))
+	    flags |= TF_MAYBITPTR;
+	t = findctype(TS_PTR, flags, t->Tsize, dt);
+
+	/* A width-changing TF_MAYBITPTR cast needs code generation so native
+	** byte pointers are rewritten while S=1 logical pointers remain raw.
+	*/
+	if (tismaybitptr(n->Ntype) && st != NULL && dt != NULL
+	  && tisinteg(st) && tisinteg(dt)
+	  && tbitsize(st) != tbitsize(dt))
+	    return ndefcast(CAST_PT_PT, t, n);
+
+	n->Ntype = t;
+	return n;
+    }
+
+    /* A void pointer may carry KCC's canonical S=1 packed bit address even
+    ** after storage in an ordinary void * object has erased the source type
+    ** flag.  A cast back to a non-native subword integer pointer therefore
+    ** has two runtime representations: ordinary word pointer or S=1 logical
+    ** pointer.  Keep ordinary native char * on the standard byte-address ABI.
+    */
+    if (t->Tspec == TS_PTR && n->Ntype->Tspec == TS_PTR
+      && n->Ntype->Tsubt != NULL && n->Ntype->Tsubt->Tspec == TS_VOID
+      && t->Tsubt != NULL && tisinteg(t->Tsubt)
+      && tbitsize(t->Tsubt) > 0 && tbitsize(t->Tsubt) < TGSIZ_WORD
+      && !(tischar(t->Tsubt) && tbitsize(t->Tsubt) == TGSIZ_CHAR)) {
+	TYPE *mt = findctype(TS_PTR, t->Tflag | TF_MAYBITPTR,
+	                    t->Tsize, t->Tsubt);
+	return ndefcast(CAST_PT_PT, mt, n);
+    }
 
     op = cast_op(t, n->Ntype);		/* find out which cast to use */
     if (op == CAST_PT_PT && clevkcc	/* Special hack for KCC extension */
@@ -437,9 +601,7 @@ TYPE *t;
 ** which needs to have its type checked and perhaps fixed up.
 */
 NODE *
-convasgn(lt,n)
-TYPE *lt;		/* Left (destination) type */
-NODE *n;
+convasgn(struct type * lt, struct node * n)
 {
     TYPE *rt;		/* Right (source) type */
     NODE *cn;		/* New cast node if any */
@@ -453,6 +615,8 @@ NODE *n;
     */
     if (tisarith(lt) && tisarith(rt))	/* Any arith type to any arith type */
 	return convcast(lt, n);		/* OK, do the specified conversion */
+    if (tisbool(lt) && tisscalar(rt))
+        return convcast(lt, n);          /* C99 scalar -> _Bool */
 
     switch (lt->Tspec) {
     case TS_PTR:
@@ -461,6 +625,33 @@ NODE *n;
 	rt = n->Ntype;			/* n may have changed */
 	if (rt->Tspec != TS_PTR)	/* Ensure all ptr-to-ptr after here */
 	    break;
+	/* Function-boundary exact-width pointers preserve their raw pointer
+	** representation.  TF_MAYBITPTR means the runtime S field selects
+	** ordinary byte-pointer versus S=1 logical semantics; no cast may
+	** rewrite that field here.
+	*/
+	if (tismaybitptr(lt) && lt->Tsubt != NULL && rt->Tsubt != NULL
+	  && cmputype(lt->Tsubt, rt->Tsubt))
+	    {
+	    n->Ntype = lt;
+	    return n;
+	    }
+	if (tismaybitptr(rt) && !tismaybitptr(lt))
+	    {
+	    error("function-boundary packed pointer representation must be retained locally");
+	    n->Ntype = lt;
+	    return n;
+	    }
+	if (tisbitptr(rt) && !tisbitptr(lt))
+	    {
+	    error("non-byte-aligned GNU packed pointer cannot yet escape its local logical pointer representation");
+	    return convcast(lt, n);
+	    }
+	if (tisbitptr(lt) && !tisbitptr(rt))
+	    {
+	    error("ordinary pointer cannot replace a non-byte-aligned GNU packed logical pointer");
+	    return convcast(lt, n);
+	    }
 	/* Ensure left subtype has all qualifiers that right subtype does */
 	if (((~lt->Tsubt->Tflag) & rt->Tsubt->Tflag)&TF_QUALS)
 	    break;			/* R has qual that L doesnt */
@@ -491,12 +682,14 @@ NODE *n;
     cn = convcast(lt, n);		/* Attempt to force the cast */
     if (cn != n && cn->Nop == N_CAST	/* If cast was done, print warning */
       && cn->Ncast != CAST_ILL)		/* unless cast_op already barfed. */
+	{
 	if (clevel >= CLEV_STRICT)
 	    error("Illegal conversion - %s to %s", 
 		tsnames[rt->Tspec], tsnames[lt->Tspec]);
 	else
 	    warn("Implicit conversion - %s to %s",
 		tsnames[rt->Tspec], tsnames[lt->Tspec]);
+	}
     return cn;
 }
 
@@ -504,8 +697,7 @@ NODE *n;
 **	Returns pointer to a converted expression (usually the same node)
 */
 NODE *
-convarrfn(n)
-NODE *n;
+convarrfn(struct node * n)
 {
     switch (n->Ntype->Tspec) {
 	default: break;		/* Not array or function */
@@ -524,13 +716,43 @@ NODE *n;
 	    ** Anything else requires using & to get the address.
 	    ** That can only be N_PTR, Q_DOT, or Q_MEMBER.
 	    */
-	    if (n->Nop == Q_IDENT || n->Nop == Q_PLUS) {
-		n->Ntype = findtype(TS_PTR, n->Ntype->Tsubt);
-		n->Nflag &= ~NF_LVALUE;		/* Ensure not an lvalue */
-	    } else
-		return ndef(N_ADDR, findtype(TS_PTR, n->Ntype->Tsubt),
-				n->Nflag & ~NF_LVALUE,
+	    {
+		TYPE *et = n->Ntype->Tsubt;
+		TYPE *pt;
+		int packedarr = 0;
+
+		if (n->Nop == Q_DOT && n->Nleft != NULL
+		  && tispacked(n->Nleft->Ntype))
+		    packedarr = 1;
+		else if (n->Nop == Q_MEMBER && n->Nleft != NULL
+		  && n->Nleft->Ntype != NULL
+		  && n->Nleft->Ntype->Tspec == TS_PTR
+		  && tispacked(n->Nleft->Ntype->Tsubt))
+		    packedarr = 1;
+
+                {
+                INT pflags = typbsiztab[TS_PTR];
+                if (packedarr)
+                    pflags |= TF_PACKEDPTR;
+                if (packedarr && n->Nxoff < 0)
+                    {
+                    unsigned INT code = (unsigned INT)(-n->Nxoff);
+                    if ((code & 07777) == 07400
+                      && ((code >> 12) % TGSIZ_CHAR) != 0)
+                        pflags |= TF_BITPTR;
+                    }
+                pt = packedarr
+                   ? findctype(TS_PTR, pflags, typsiztab[TS_PTR], et)
+                   : findtype(TS_PTR, et);
+                }
+
+		if (n->Nop == Q_IDENT || n->Nop == Q_PLUS) {
+		    n->Ntype = pt;
+		    n->Nflag &= ~NF_LVALUE;	/* Ensure not an lvalue */
+		} else
+		    return ndef(N_ADDR, pt, n->Nflag & ~NF_LVALUE,
 				n, (NODE *)NULL);
+	    }
 	    break;
 
 	case TS_FUNCT:	/* Convert "function of T" to "pointer to fun of T" */
@@ -554,8 +776,7 @@ NODE *n;
 **	cause a "trivial conversion" merely to get rid of any qualifiers.
 */
 NODE *
-convunary(n)
-NODE *n;
+convunary(struct node * n)
 {
     TYPE *newtype;
 
@@ -567,6 +788,7 @@ NODE *n;
 	    }
 	    /* Not converting, drop thru to default */
 
+	/* FALLTHROUGH */
 	default:	/* Usual case, no conversion needed unless qualified */
 	    if (tisqualif(n->Ntype))
 		n = convcast(findutype(n->Ntype), n);
@@ -587,6 +809,28 @@ NODE *n;
 	    else newtype = uinttype;	/* Not ANSI, or not big enough */
 	    break;
 
+
+	case TS_INT:
+	    /* Exact-width int extensions narrower than a PDP-10 int undergo
+	    ** the ordinary integer promotions.  The canonical TS_INT object
+	    ** remains 36 bits and therefore falls through unchanged.
+	    */
+	    if (tbitsize(n->Ntype) < TGSIZ_INT) {
+		newtype = inttype;
+		break;
+	    }
+	    if (tisqualif(n->Ntype))
+		n = convcast(findutype(n->Ntype), n);
+	    return n;
+
+	case TS_UINT:
+	    if (tbitsize(n->Ntype) < TGSIZ_INT) {
+		newtype = (clevel >= CLEV_ANSI) ? inttype : uinttype;
+		break;
+	    }
+	    if (tisqualif(n->Ntype))
+		n = convcast(findutype(n->Ntype), n);
+	    return n;
 
 	case TS_ARRAY:	/* Convert "array of T" to "pointer to T" */
 	case TS_FUNCT:	/* Convert "function of T" to "pointer to fun of T" */
@@ -611,8 +855,7 @@ NODE *n;
 */
 
 NODE *
-convbinary(n)
-NODE *n;
+convbinary(struct node * n)
 {
     TYPE  *lt, *rt;
 
@@ -642,7 +885,15 @@ NODE *n;
     else if (lt == flttype || rt == flttype)
 	convboth(n, flttype);
 
-    /* 3.  If one operand is "unsigned long", make both "unsigned long" */
+    /* 3.  If one operand is "unsigned long long", make both. */
+    else if (lt == ulonglongtype || rt == ulonglongtype)
+	convboth(n, ulonglongtype);
+
+    /* 3a. If one operand is "long long", make both "long long". */
+    else if (lt == longlongtype || rt == longlongtype)
+	convboth(n, longlongtype);
+
+    /* 3b. If one operand is "unsigned long", make both "unsigned long" */
     else if (lt == ulongtype || rt == ulongtype)
 	convboth(n, ulongtype);
 
@@ -673,18 +924,14 @@ NODE *n;
 /* CONVBOTH and CONVXBOTH - simple auxiliaries just for convbinary().
 */
 static void
-convboth(n, newtyp)
-NODE *n;
-TYPE *newtyp;
+convboth(struct node * n, struct type * newtyp)
 {
     n->Nleft = convxboth(n->Nleft, newtyp);	/* Do left side */
     n->Nright = convxboth(n->Nright, newtyp);	/* then right */
 }
 
 static NODE *
-convxboth(n, newtyp)
-NODE *n;
-TYPE *newtyp;
+convxboth(struct node * n, struct type * newtyp)
 {
     if (n->Ntype != newtyp) {
 	/* Do implicit cast.  If casting a cast that's also implicit,
@@ -709,8 +956,7 @@ TYPE *newtyp;
 ** The new type is always unqualified.
 */
 NODE *
-convfunarg(n)
-NODE *n;
+convfunarg(struct node * n)
 {
     if (n->Ntype->Tspec == TS_VOID) {
 	error("Illegal use of void type - function arg");
@@ -734,8 +980,7 @@ NODE *n;
 ** whereas CARM level returns "unsigned int" if the original type was unsigned.
 */
 TYPE *
-convfparam(t)
-TYPE *t;		/* Type of function parameter to check */
+convfparam(struct type * t)
 {
     switch (t->Tspec) {	/* Apply funct param convs */
 	case TS_VOID:
@@ -768,9 +1013,10 @@ TYPE *t;		/* Type of function parameter to check */
 
 	case TS_CHAR:		/* char => int */
 	case TS_UCHAR:		/* and unsigned char */
-	    if ((TGSIZ_WORD % tbitsize(t)) != 0)
-		error("Function param cannot have char size %d",
-				tbitsize(t));
+	    /* Parameter values are promoted before they are passed; their
+	    ** in-memory packing need not divide a 36-bit word.  This matters
+	    ** for the exact 16-bit PDP-10 byte extension.
+	    */
 	    if (clevel >= CLEV_ANSI)	/* If ANSI, */
 		return inttype;		/* chars always promoted to int */
 	    return (t->Tspec == TS_CHAR ? inttype : uinttype);
@@ -783,9 +1029,17 @@ TYPE *t;		/* Type of function parameter to check */
 	    return uinttype;
 
 	case TS_INT:
-	case TS_LONG:
+	    if (tbitsize(t) < TGSIZ_INT)
+		return inttype;
+	    break;
 	case TS_UINT:
+	    if (tbitsize(t) < TGSIZ_INT)
+		return (clevel >= CLEV_ANSI) ? inttype : uinttype;
+	    break;
+	case TS_LONG:
 	case TS_ULONG:
+	case TS_LONGLONG:
+	case TS_ULONGLONG:
 	    break;
 
 	default:
@@ -807,8 +1061,7 @@ TYPE *t;		/* Type of function parameter to check */
 **	One is a pointer and the other is a ptr to {un}qualified (void).
 */
 TYPE *
-convternaryt(n)
-NODE *n;
+convternaryt(struct node * n)
 {
     TYPE *lt, *rt, *t;
     INT quals;
@@ -851,8 +1104,7 @@ NODE *n;
 **	Ignores qualifiers.
 */
 NODE *
-convvoidptr(n)
-NODE *n;
+convvoidptr(struct node * n)
 {
     if (n->Nleft->Ntype->Tspec == TS_PTR
       && n->Nleft->Ntype->Tsubt->Tspec == TS_VOID)
@@ -870,8 +1122,7 @@ NODE *n;
 **	(thus they have no qualifiers on their types)
 */
 NODE *
-convnullcomb(n)
-NODE *n;
+convnullcomb(struct node * n)
 {
     (void)convisnull(n);	/* Invoke conversion if any, ignore result */
     return n;
@@ -887,8 +1138,7 @@ NODE *n;
 **	anyway because the operands have been run through convbinary().
 */
 static int
-convisnull(n)
-NODE *n;
+convisnull(struct node * n)
 {
     if (n->Nleft->Ntype->Tspec == TS_PTR && nisnull(&n->Nright))
 	n->Nright = convcast(n->Nleft->Ntype, n->Nright);
@@ -913,8 +1163,7 @@ NODE *n;
 ** some preliminary checks.
 */
 static int
-nisnull(an)
-NODE **an;
+nisnull(struct node ** an)
 {
     NODE *n = *an;
 
@@ -938,9 +1187,7 @@ NODE **an;
 /* NDEFCAST - Makes a N_CAST node and sets its cast operation value.
 */
 static NODE *
-ndefcast(op, t, n)
-TYPE *t;
-NODE *n;
+ndefcast(int op, struct type * t, struct node * n)
 {
     n = ndeftl(N_CAST, t, n);	/* Apply cast to given type */
     n->Ncast = op;		/* Using this specific cast operation */

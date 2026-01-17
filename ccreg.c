@@ -18,6 +18,7 @@ VREG *vrget(void), *vrdget(void); /* Allocate virtual register or pair */
 VREG *vrretget(void), *vrretdget(void);	/* Same but use return-value regs */
 void vrfree(VREG *);		/* Release vreg */
 void vrallspill(void);	/* Spill all active regs onto stack */
+void vrspillothers(VREG *, VREG *); /* Spill all except two values */
 VREG *vrwiden(VREG *reg, int low);	/* Widen a vreg into a pair */
 void vrlowiden(VREG *);	/* Common case: widen vreg in low direction */
 void vrnarrow(VREG *);	/* Narrow a vreg pair into single vreg */
@@ -55,13 +56,13 @@ static char *vrdumpflags (int);
 #define empty(vr) ((vr)->Vrnext == (vr))	/* TRUE if list is empty */
 
 /* virtual regs not now in use */
-static VREG freelist = {0, 0, (TYPE *)NULL, 0, &freelist, &freelist};
+static VREG freelist = {0, 0, (TYPE *)NULL, 0, &freelist, &freelist, NULL};
 
 /* regs associated with real regs */
-static VREG reglist = {0, 0, (TYPE *)NULL, 0, &reglist, &reglist};
+static VREG reglist = {0, 0, (TYPE *)NULL, 0, &reglist, &reglist, NULL};
 
 /* regs spilled onto the stack */
-static VREG spillist = {0, 0, (TYPE *)NULL, 0, &spillist, &spillist};
+static VREG spillist = {0, 0, (TYPE *)NULL, 0, &spillist, &spillist, NULL};
 
 static VREG *regis[NREGS];	/* who is using which registers */
 static int regfree[NREGS];	/* what regs are used in code */
@@ -71,12 +72,15 @@ static int regfree[NREGS];	/* what regs are used in code */
 ** special places, by providing the appropriate phys reg value.  These
 ** vregs are never strung on a list or used in any other way.
 */
-VREG vr_retval	= { VRF_SPECIAL|VRF_LOCK, R_RETVAL };
-VREG vr_sp	= { VRF_SPECIAL|VRF_LOCK, R_SP };
+VREG vr_retdbl	= { VRF_SPECIAL|VRF_LOCK, R_RETDBL, (TYPE *)NULL, 0,
+			    (VREG *)NULL, (VREG *)NULL, &vr_retval };
+VREG vr_retval	= { VRF_SPECIAL|VRF_LOCK, R_RETVAL, (TYPE *)NULL, 0,
+			    (VREG *)NULL, (VREG *)NULL, &vr_retdbl };
+VREG vr_sp	= { VRF_SPECIAL|VRF_LOCK, R_SP, NULL, 0, NULL, NULL, NULL };
 
 #if SYS_CSI	/* For FORTRAN linkage */
-VREG vr_fap	= { VRF_SPECIAL|VRF_LOCK, R_FAP  };
-VREG vr_zero	= { VRF_SPECIAL|VRF_LOCK, R_ZERO };
+VREG vr_fap	= { VRF_SPECIAL|VRF_LOCK, R_FAP, NULL, 0, NULL, NULL, NULL };
+VREG vr_zero	= { VRF_SPECIAL|VRF_LOCK, R_ZERO, NULL, 0, NULL, NULL, NULL };
 #endif
 
 /*
@@ -156,6 +160,18 @@ vrdget(void)
 #endif
 
     return vrlink(vrsetrr(vrdalloc(), rrdfind()), &reglist);
+}
+
+/* VRDGETREG - Bind a new virtual pair to a known free real-register pair.
+** Used for a read-once incoming ABI DImode argument, whose ACs have been
+** reserved from normal allocation by fnargkeepmask.
+*/
+VREG *
+vrdgetreg(int rr)
+{
+    if (rr < 0 || rr >= R_MAXREG || regis[rr] != NULL || regis[rr+1] != NULL)
+        efatal("vrdgetreg: fixed pair unavailable");
+    return vrlink(vrsetrr(vrdalloc(), rr), &reglist);
 }
 
 /* VRRETGET - Get a register for holding a return value
@@ -238,6 +254,46 @@ vrallspill(void)
 	vrspill(reglist.Vrnext);
 }
 
+/* VRSPILLOTHERS - Spill every active value except two selected operands.
+**
+** This is the call-boundary primitive needed by private arithmetic helpers.
+** It adds no allocator state: values outside the keep set move to the normal
+** spill list, while the selected operands remain resident until copied into
+** the helper ABI registers.
+*/
+void
+vrspillothers(VREG *keep1, VREG *keep2)
+{
+    VREG *vr;
+    int found;
+
+    do
+	{
+	found = 0;
+	for (vr = reglist.Vrnext; vr != &reglist; vr = vr->Vrnext)
+	    {
+	    if (vr == keep1 || vr == keep2
+	      || (keep1 && vr == VR2(keep1))
+	      || (keep2 && vr == VR2(keep2)))
+		continue;
+	    if (vr->Vrflags & VRF_REG2ND)
+		continue;
+	    vrspill(vr);
+	    found = 1;
+	    break;
+	    }
+	}
+    while (found);
+}
+
+/* VRUNSPILLALL - Reload any spilled virtual regs and restore stackoffset. */
+void
+vrunspillall(void)
+{
+    while (!empty(&spillist))
+	(void) vrtoreal(spillist.Vrnext);
+}
+
 /* VRSPILL - Spill a virtual register.
 **	Either we needed to reallocate it or we are calling a function.
 **	In either case the register moves onto the stack.
@@ -265,7 +321,12 @@ vr1spill(VREG *vr)
 	efatal("vr1spill: reg already spilled");
     vr1unlink(vr);			/* remove from assigned list */
 
-    if (Register_Nopreserve(vr->Vrloc) || XF4_call_spill)
+    /* ABI argument ACs may be protected from peephole rewriting by
+    ** fnargkeepmask, but AC1..AC7 are still physically call-volatile.
+    ** Spill decisions must use the ABI property, not the optimizer-safety
+    ** predicate, or a VREG can be unlinked without being put on spillist.
+    */
+    if (Register_CallVolatile(vr->Vrloc) || XF4_call_spill)
 	{
 	spillist.Vrnext->Vroldstk = stackoffset;/* remember where we are */
 
@@ -607,11 +668,11 @@ rrfind (void)
     updrfree();			/* update regfree[] to pbuf contents */
 
     for (r = r_minnopreserve; r <= r_maxnopreserve; r++) /* FW 2A(47) */
-	if (regfree[r])
+	if (!(fnargkeepmask & (1 << r)) && regfree[r])
 	    return r;
 
     for (r = r_minnopreserve; r <= r_maxnopreserve; r++) /* FW 2A(47) */
-	if (regis[r] == NULL)
+	if (!(fnargkeepmask & (1 << r)) && regis[r] == NULL)
 	    return r;
 
     /* All registers in use, have to decide which one to spill to stack.
@@ -649,7 +710,7 @@ rrfind (void)
 ** addressing mode of each instruction.
 */
 static void
-updrfree()
+updrfree(void)
 {
     int r;
     PCODE *p;
@@ -697,7 +758,9 @@ rrdfind (void)
 
     for (r = r_minnopreserve; r < r_maxnopreserve; r++) /* FW 2A(47) */
 	{
-	if (regfree[r] && regfree[r + 1])
+	if (!(fnargkeepmask & (1 << r))
+	  && !(fnargkeepmask & (1 << (r + 1)))
+	  && regfree[r] && regfree[r + 1])
 	    return r;
 #if	DEBUG_KCC
 	else
@@ -708,7 +771,9 @@ rrdfind (void)
 
     for (r = r_minnopreserve; r < r_maxnopreserve; r++) /* FW 2A(47) */
         {
-	if ((regis[r] == NULL) && (regis[r + 1] == NULL))
+	if (!(fnargkeepmask & (1 << r))
+	  && !(fnargkeepmask & (1 << (r + 1)))
+	  && (regis[r] == NULL) && (regis[r + 1] == NULL))
 	    return r;
 #if	DEBUG_KCC
 	else
@@ -779,14 +844,16 @@ rrdfind (void)
 	    if (((vr->Vrloc + 1) <= r_maxnopreserve) /* FW 2A(47) */
 		    && (regis[vr->Vrloc + 1] == NULL))
 		{
+		r = vr->Vrloc;
 		vrspill(vr);
 		return r;
 		}
 	    else if (((vr->Vrloc - 1) >= r_minnopreserve)
 		    && (regis[vr->Vrloc - 1] == NULL))
 		{
+		r = vr->Vrloc - 1;
 		vrspill(vr);
-		return (r - 1);
+		return r;
 		}
 	    }
 	}
@@ -817,8 +884,7 @@ vrsetrr(VREG *vr, int rr)
 /* VR1SETRR -  Set a virtual register's location to be some real reg
 */
 static VREG *
-vr1setrr(vr, rr)
-VREG *vr;
+vr1setrr(struct vreg * vr, int rr)
 {
 #if	DEBUG_KCC
     printf ("vr1setrr (%%%o, %%%o)\n", vr, rr);
@@ -831,8 +897,7 @@ VREG *vr;
 **	If the vreg is a pair, both are unlinked.
 */
 static void
-vrunlink(vr)
-VREG *vr;
+vrunlink(struct vreg * vr)
 {
 #if	DEBUG_KCC
     printf ("vrunlink (%%%o)\n", vr);
@@ -847,8 +912,7 @@ VREG *vr;
 **	This is the first half of changing from one list to another
 */
 static void
-vr1unlink(reg)
-VREG *reg;
+vr1unlink(struct vreg * reg)
 {
 #if	DEBUG_KCC
     printf ("vr1unlink (%%%o)\n", reg);
@@ -870,8 +934,7 @@ VREG *reg;
 **	the 2nd reg as well.
 */
 static VREG *
-vrlink(reg, list)
-VREG *reg, *list;
+vrlink(struct vreg * reg, struct vreg * list)
 {
 #if	DEBUG_KCC
     printf ("vrlink (%%%o, %%%o)\n", reg, list);
@@ -886,8 +949,7 @@ VREG *reg, *list;
 **	Used when a new vreg is created and when moving between lists
 */
 static VREG *
-vr1link(reg, list)
-VREG *reg, *list;
+vr1link(struct vreg * reg, struct vreg * list)
 {
 #if	DEBUG_KCC
     printf ("vr1link (%%%o, %%%o)\n", reg, list);
@@ -912,7 +974,7 @@ VREG *reg, *list;
 ** VRDALLOC - Same, but returns 1st of a double register pair, linked together.
 */
 static VREG *
-vralloc()
+vralloc(void)
 {
     VREG *rp;
 
@@ -944,7 +1006,7 @@ vralloc()
 }
 
 static VREG *
-vrdalloc()
+vrdalloc(void)
 {
     VREG *vr1 = vralloc();
     VREG *vr2 = vralloc();

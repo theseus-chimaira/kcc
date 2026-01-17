@@ -22,6 +22,7 @@ int sideffp(NODE *n);				/* Used here and CCGEN2 */
 INT istrue(NODE *test, NODE *bindings);		/* CCGEN1's gfor() */
 
 /* Imported functions */
+extern INT sizetype(TYPE *);					/* CCSYM */
 extern NODE *ndef(int op, TYPE *t, int f, NODE *l, NODE *r);	/* CCSTMT */
 extern NODE *convbinary(NODE *), *convnullcomb(NODE *);	/* CCTYPE */
 extern INT binexp(unsigned INT);		/* CCOUT */
@@ -31,22 +32,23 @@ extern int hash(char *);		/* CCSYM */
 static NODE *copyflag(NODE *, NODE *), *setlog(NODE *, int);
 static INT ecanon(NODE *);
 static NODE *eseqdisc(NODE *, NODE *), *evalcast(NODE *);
-static long value(NODE *, NODE *);
+static INT value(NODE *, NODE *);
 static NODE *lookup(SYMBOL *, NODE *);
 static NODE *eval(NODE *), *evalunop(NODE *), *evalbinop(NODE *);
+static void dimode_neg_iconst(NODE *), dimode_compl_iconst(NODE *);
 static NODE *evalb1op(NODE *), *evallog(NODE *), *evalfun(NODE *);
 static NODE *evalasop(NODE *);
 static int evalbool(NODE *);
 static NODE *edisc(NODE *);	/* Auxiliary routine that does the work */
-static long tolong(TYPE *, long);
+static INT tolong(TYPE *, INT), targetint(int, int, INT);
 static NODE *evalincdec(NODE *, int);
 #if 0
 static NODE *edisc();	/* Auxiliary routine that does the work */
-static long tolong();
+static INT tolong();
 static NODE *evalincdec();
 static NODE *copyflag(), *setlog(), *evalcast(), *eseqdisc();
 static INT ecanon();
-static long value();
+static INT value();
 static NODE *lookup();
 static NODE *eval();
 static NODE *evalunop(), *evalbinop(), *evalb1op(), *evallog(), *evalfun();
@@ -56,7 +58,8 @@ static int evalbool();
 
 /* Handy macro to see if an operand node is a hackable constant */
 #define eisconst(e) \
-	(e->Nop == N_ICONST || e->Nop == N_PCONST || e->Nop == N_FCONST)
+	(e->Nop == N_ICONST || e->Nop == N_PCONST || e->Nop == N_FCONST \
+	 || e->Nop == N_ACONST)
 #define eisiconst(e) (e->Nop == N_ICONST)
 
 /* EVALEXPR(e) - Evaluates a parse-tree expression, folding constants and
@@ -64,8 +67,7 @@ static int evalbool();
 **	values in sequential (comma) expressions.
 */
 NODE *
-evalexpr(e)
-NODE *e;
+evalexpr(struct node * e)
 {
     ecanon(e = eval(e));
     return e;
@@ -76,6 +78,7 @@ eval(NODE *e)
 {
     if (e) switch (tok[e->Nop].tktype) {
 
+    /* FALLTHROUGH */
     case TKTY_RWOP:			/* Built-in Reserved-Word ops */
 	break;				/* Only Q_ASM for now */
 
@@ -97,8 +100,18 @@ eval(NODE *e)
 
     case TKTY_UNOP:
 	e->Nleft = eval(e->Nleft);
+	if ((e->Nop == N_NEG || e->Nop == Q_COMPL)
+	    && e->Nleft->Nop == N_CAST && eisconst(e->Nleft->Nleft)
+	    && (tisdimode(e->Ntype) || tisdimode(e->Nleft->Ntype)))
+	    {
+	    NODE *cast = e->Nleft;
+
+	    e->Nleft = cast->Nleft;
+	    if (tisdimode(cast->Ntype))
+		e->Ntype = cast->Ntype;
+	    }
 	if (eisconst(e->Nleft))
-	    return evalunop(e);		/* Do unary op on constant */
+	    return evalunop(e);		/* Do unary op (or cast) on constant */
 	break;
 
     /* Assignment ops have side effects, so can't eliminate them completely.
@@ -203,6 +216,7 @@ static int
 evalbool(NODE *e)
 {
     switch (e->Nop) {
+	case N_ACONST:		return 1;	/* Label address is never null */
 	case N_PCONST:		/* Pointer constant same as int constant */
 	case N_ICONST:	return (e->Niconst ? 1 : 0);
 	case N_FCONST:	return (e->Nfconst ? 1 : 0);
@@ -271,7 +285,7 @@ chkovf(void)			/* check for arithmetic overflow */
 #if SYS_CSI			/* FEW 2A(40) 29-Jul-92 */
     if (unsign)
 	{
-	asm ("\tJCRY0 .+2\n");	/* for unsigned overflow, check CARRY0 */
+	asm ("\tJFCL   4, .+2\n");	/* for unsigned overflow, check CARRY0 */
 
 	if (subtra)
 	    asm ("\tPOPJ 17,\n"); /* unsigned subtraction: true if clear */
@@ -283,15 +297,261 @@ chkovf(void)			/* check for arithmetic overflow */
 #endif
     asm("\tSETZ	1,\n");		/* IF NO OVERFLOW, RETURN FALSE      */
 #else
+#if SYS_CSI
+    (void)unsign;
+    (void)subtra;
+#endif
     return 0;			/* assumes no overflow */
 #endif
 }
 
+static void
+dimode_iconst_put(NODE *e, INT hi, INT lo)
+{
+    hi &= dimode_hi36mask();
+    lo = dimode_lo_signcopy(hi, lo);
+    e->Niconst = lo & dimode_lo35mask();
+    e->n_var1.n_int = hi;
+    e->Nflag |= NF_WIDE;
+}
+
+#ifdef __COMPILER_KCC__
+/*
+** Native KCC has a 71-bit unsigned long long DImode.  Keep this path
+** scalar so KCC can compile itself without needing hosted helper types.
+*/
+typedef unsigned long long DIMODE_UACC;
+#define DIMODE71ACC ((DIMODE_UACC)~(DIMODE_UACC)0)
+#define DIMODE_SIGNACC (((DIMODE_UACC)0400000000000ULL) << 35)
+
+static DIMODE_UACC
+dimode_to_acc(INT hi, INT lo)
+{
+    lo = dimode_lo_expand(hi, lo);
+    return ((((DIMODE_UACC)(hi & dimode_hi36mask())) << 35)
+	    | ((DIMODE_UACC)(lo & dimode_lo35mask())))
+	& DIMODE71ACC;
+}
+
+static long long
+dimode_signed_acc(DIMODE_UACC acc)
+{
+    if (acc & DIMODE_SIGNACC)
+	return (long long)(acc | ~DIMODE71ACC);
+    return (long long)acc;
+}
+
+static DIMODE_UACC
+dimode_from_signed(long long v)
+{
+    return ((DIMODE_UACC)v) & DIMODE71ACC;
+}
+#else
+/*
+** Hosted DImode folding must also work on ILP32 compilers that have no
+** __int128.  Represent the 71 target bits exactly as KCC stores them:
+** one 36-bit high word and one 35-bit low word.  INT is guaranteed by
+** cc.h to be at least 36 bits on every hosted build.
+*/
+typedef struct dimode_hacc {
+    unsigned INT hi;
+    unsigned INT lo;
+} DIMODE_HACC;
+
+static unsigned INT
+dimode_hmask36(void)
+{
+    return (unsigned INT)0777777777777ULL;
+}
+
+static unsigned INT
+dimode_hmask35(void)
+{
+    return (unsigned INT)0377777777777ULL;
+}
+
+static unsigned INT
+dimode_hsign36(void)
+{
+    return (unsigned INT)0400000000000ULL;
+}
+
+static void
+dimode_hmake(DIMODE_HACC *a, INT hi, INT lo)
+{
+    lo = dimode_lo_expand(hi, lo);
+    a->hi = ((unsigned INT)hi) & dimode_hmask36();
+    a->lo = ((unsigned INT)lo) & dimode_hmask35();
+}
+
+static void
+dimode_hput(NODE *e, const DIMODE_HACC *a)
+{
+    dimode_iconst_put(e, (INT)a->hi, (INT)a->lo);
+}
+
+static void
+dimode_hadd(DIMODE_HACC *r, const DIMODE_HACC *a,
+	    const DIMODE_HACC *b)
+{
+    unsigned INT lo;
+
+    lo = a->lo + b->lo;
+    r->lo = lo & dimode_hmask35();
+    r->hi = (a->hi + b->hi + (lo >> 35)) & dimode_hmask36();
+}
+
+static void
+dimode_hsub(DIMODE_HACC *r, const DIMODE_HACC *a,
+	    const DIMODE_HACC *b)
+{
+    unsigned INT borrow;
+
+    borrow = a->lo < b->lo;
+    r->lo = (a->lo - b->lo) & dimode_hmask35();
+    r->hi = (a->hi - b->hi - borrow) & dimode_hmask36();
+}
+
+static void
+dimode_hand(DIMODE_HACC *r, const DIMODE_HACC *a,
+	    const DIMODE_HACC *b)
+{
+    r->hi = a->hi & b->hi;
+    r->lo = a->lo & b->lo;
+}
+
+static void
+dimode_hor(DIMODE_HACC *r, const DIMODE_HACC *a,
+	   const DIMODE_HACC *b)
+{
+    r->hi = a->hi | b->hi;
+    r->lo = a->lo | b->lo;
+}
+
+static void
+dimode_hxor(DIMODE_HACC *r, const DIMODE_HACC *a,
+	    const DIMODE_HACC *b)
+{
+    r->hi = a->hi ^ b->hi;
+    r->lo = a->lo ^ b->lo;
+}
+
+static void
+dimode_hlsh(DIMODE_HACC *r, const DIMODE_HACC *a, int n)
+{
+    if (n <= 0) {
+	*r = *a;
+	return;
+    }
+    if (n >= 71) {
+	r->hi = 0;
+	r->lo = 0;
+	return;
+    }
+    if (n < 35) {
+	r->hi = ((a->hi << n) | (a->lo >> (35 - n)))
+	    & dimode_hmask36();
+	r->lo = (a->lo << n) & dimode_hmask35();
+	return;
+    }
+    r->hi = (a->lo << (n - 35)) & dimode_hmask36();
+    r->lo = 0;
+}
+
+static void
+dimode_hrsh(DIMODE_HACC *r, const DIMODE_HACC *a, int n, int signext)
+{
+    unsigned INT sign, fill36, fill35;
+    int k;
+
+    if (n <= 0) {
+	*r = *a;
+	return;
+    }
+    sign = signext && ((a->hi & dimode_hsign36()) != 0);
+    if (n >= 71) {
+	r->hi = sign ? dimode_hmask36() : 0;
+	r->lo = sign ? dimode_hmask35() : 0;
+	return;
+    }
+    if (n < 35) {
+	r->lo = ((a->lo >> n) | (a->hi << (35 - n)))
+	    & dimode_hmask35();
+	r->hi = a->hi >> n;
+	if (sign) {
+	    fill36 = dimode_hmask36() ^ (dimode_hmask36() >> n);
+	    r->hi |= fill36;
+	}
+	return;
+    }
+    k = n - 35;
+    /* At exactly 35 bits the top bit of the 36-bit high word remains
+     * as bit 35 of the shifted 71-bit value.  Preserve it in the high
+     * result word; larger shifts move every source bit into low35. */
+    if (sign)
+	r->hi = dimode_hmask36();
+    else if (k == 0)
+	r->hi = (a->hi >> 35) & 1;
+    else
+	r->hi = 0;
+    r->lo = (a->hi >> k) & dimode_hmask35();
+    if (sign && k > 0) {
+	fill35 = dimode_hmask35() ^ (dimode_hmask35() >> k);
+	r->lo |= fill35;
+    }
+}
+
+static void
+dimode_hneg(DIMODE_HACC *r, const DIMODE_HACC *a)
+{
+    DIMODE_HACC z;
+
+    z.hi = 0;
+    z.lo = 0;
+    dimode_hsub(r, &z, a);
+}
+
+static int
+dimode_hucmp(const DIMODE_HACC *a, const DIMODE_HACC *b)
+{
+    if (a->hi != b->hi)
+	return a->hi < b->hi ? -1 : 1;
+    if (a->lo != b->lo)
+	return a->lo < b->lo ? -1 : 1;
+    return 0;
+}
+
+static int
+dimode_hscmp(const DIMODE_HACC *a, const DIMODE_HACC *b)
+{
+    int aneg, bneg;
+
+    aneg = (a->hi & dimode_hsign36()) != 0;
+    bneg = (b->hi & dimode_hsign36()) != 0;
+    if (aneg != bneg)
+	return aneg ? -1 : 1;
+    return dimode_hucmp(a, b);
+}
+
+static void
+dimode_hfrom_int(DIMODE_HACC *a, INT v, int signext)
+{
+    unsigned INT uv;
+
+    uv = (unsigned INT)v;
+    a->lo = uv & dimode_hmask35();
+    if (signext && v < 0)
+	a->hi = dimode_hmask36();
+    else
+	a->hi = (uv >> 35) & 1;
+}
+#endif
+
 static NODE *
 evalbinop(NODE *e)
 {
-    long	l, l2;
-    unsigned long ul, ul2;
+    INT	l, l2;
+    unsigned INT ul, ul2;
     float	f, f2;
     double	d, d2;
     int log = -1;
@@ -477,6 +737,175 @@ evalbinop(NODE *e)
 	}
 	return setlog(e, log);
 
+#ifdef __COMPILER_KCC__
+    case TS_LONGLONG:
+    case TS_ULONGLONG:
+	{
+	INT hi1, lo1, hi2, lo2;
+	DIMODE_UACC acc;
+	long long sr;
+	int unsign = tisunsign(eleft->Ntype);
+	int shft;
+
+	dimode_iconst_words(eleft, &hi1, &lo1);
+	dimode_iconst_words(e->Nright, &hi2, &lo2);
+	switch (e->Nop) {
+	case Q_PLUS:
+	    sr = dimode_signed_acc(dimode_to_acc(hi1, lo1))
+	       + dimode_signed_acc(dimode_to_acc(hi2, lo2));
+	    if (!unsign)
+		acc = dimode_from_signed(sr);
+	    else
+		acc = (dimode_to_acc(hi1, lo1) + dimode_to_acc(hi2, lo2)) & DIMODE71ACC;
+	    dimode_iconst_put(eleft, (INT)(acc >> 35), (INT)acc);
+	    break;
+	case Q_MINUS:
+	    sr = dimode_signed_acc(dimode_to_acc(hi1, lo1))
+	       - dimode_signed_acc(dimode_to_acc(hi2, lo2));
+	    if (!unsign)
+		acc = dimode_from_signed(sr);
+	    else
+		acc = (dimode_to_acc(hi1, lo1) - dimode_to_acc(hi2, lo2)) & DIMODE71ACC;
+	    dimode_iconst_put(eleft, (INT)(acc >> 35), (INT)acc);
+	    break;
+	case Q_MPLY:
+	    return e;		/* runtime gdimodemul handles sign-copy lo */
+	case Q_ANDT:
+	    acc = dimode_to_acc(hi1, lo1) & dimode_to_acc(hi2, lo2);
+	    dimode_iconst_put(eleft, (INT)(acc >> 35), (INT)acc);
+	    break;
+	case Q_OR:
+	    acc = dimode_to_acc(hi1, lo1) | dimode_to_acc(hi2, lo2);
+	    dimode_iconst_put(eleft, (INT)(acc >> 35), (INT)acc);
+	    break;
+	case Q_XORT:
+	    acc = dimode_to_acc(hi1, lo1) ^ dimode_to_acc(hi2, lo2);
+	    dimode_iconst_put(eleft, (INT)(acc >> 35), (INT)acc);
+	    break;
+	case Q_LSHFT:
+	    shft = e->Nright->Niconst;
+	    acc = (dimode_to_acc(hi1, lo1) << shft) & DIMODE71ACC;
+	    dimode_iconst_put(eleft, (INT)(acc >> 35), (INT)acc);
+	    break;
+	case Q_RSHFT:
+	    shft = e->Nright->Niconst;
+	    if (unsign)
+		acc = dimode_to_acc(hi1, lo1) >> shft;
+	    else
+		acc = dimode_from_signed(
+		    dimode_signed_acc(dimode_to_acc(hi1, lo1)) >> shft);
+	    dimode_iconst_put(eleft, (INT)(acc >> 35), (INT)acc);
+	    break;
+	case Q_EQUAL:
+	    log = dimode_to_acc(hi1, lo1) == dimode_to_acc(hi2, lo2);
+	    return setlog(e, log);
+	case Q_NEQ:
+	    log = dimode_to_acc(hi1, lo1) != dimode_to_acc(hi2, lo2);
+	    return setlog(e, log);
+	case Q_LESS:
+	    if (unsign)
+		log = dimode_to_acc(hi1, lo1) < dimode_to_acc(hi2, lo2);
+	    else
+		log = dimode_signed_acc(dimode_to_acc(hi1, lo1))
+		    < dimode_signed_acc(dimode_to_acc(hi2, lo2));
+	    return setlog(e, log);
+	case Q_GREAT:
+	    if (unsign)
+		log = dimode_to_acc(hi1, lo1) > dimode_to_acc(hi2, lo2);
+	    else
+		log = dimode_signed_acc(dimode_to_acc(hi1, lo1))
+		    > dimode_signed_acc(dimode_to_acc(hi2, lo2));
+	    return setlog(e, log);
+	case Q_LEQ:
+	    if (unsign)
+		log = dimode_to_acc(hi1, lo1) <= dimode_to_acc(hi2, lo2);
+	    else
+		log = dimode_signed_acc(dimode_to_acc(hi1, lo1))
+		    <= dimode_signed_acc(dimode_to_acc(hi2, lo2));
+	    return setlog(e, log);
+	case Q_GEQ:
+	    if (unsign)
+		log = dimode_to_acc(hi1, lo1) >= dimode_to_acc(hi2, lo2);
+	    else
+		log = dimode_signed_acc(dimode_to_acc(hi1, lo1))
+		    >= dimode_signed_acc(dimode_to_acc(hi2, lo2));
+	    return setlog(e, log);
+	default:
+	    return e;
+	}
+	break;
+	}
+
+#else
+    case TS_LONGLONG:
+    case TS_ULONGLONG:
+	{
+	INT hi1, lo1, hi2, lo2;
+	DIMODE_HACC a1, a2, acc;
+	int cmp;
+	int unsign = tisunsign(eleft->Ntype);
+	int shft;
+
+	dimode_iconst_words(eleft, &hi1, &lo1);
+	dimode_iconst_words(e->Nright, &hi2, &lo2);
+	dimode_hmake(&a1, hi1, lo1);
+	dimode_hmake(&a2, hi2, lo2);
+	switch (e->Nop) {
+	case Q_PLUS:
+	    dimode_hadd(&acc, &a1, &a2);
+	    dimode_hput(eleft, &acc);
+	    break;
+	case Q_MINUS:
+	    dimode_hsub(&acc, &a1, &a2);
+	    dimode_hput(eleft, &acc);
+	    break;
+	case Q_MPLY:
+	    return e;		/* runtime gdimodemul handles sign-copy lo */
+	case Q_ANDT:
+	    dimode_hand(&acc, &a1, &a2);
+	    dimode_hput(eleft, &acc);
+	    break;
+	case Q_OR:
+	    dimode_hor(&acc, &a1, &a2);
+	    dimode_hput(eleft, &acc);
+	    break;
+	case Q_XORT:
+	    dimode_hxor(&acc, &a1, &a2);
+	    dimode_hput(eleft, &acc);
+	    break;
+	case Q_LSHFT:
+	    shft = e->Nright->Niconst;
+	    dimode_hlsh(&acc, &a1, shft);
+	    dimode_hput(eleft, &acc);
+	    break;
+	case Q_RSHFT:
+	    shft = e->Nright->Niconst;
+	    dimode_hrsh(&acc, &a1, shft, !unsign);
+	    dimode_hput(eleft, &acc);
+	    break;
+	case Q_EQUAL:
+	    return setlog(e, dimode_hucmp(&a1, &a2) == 0);
+	case Q_NEQ:
+	    return setlog(e, dimode_hucmp(&a1, &a2) != 0);
+	case Q_LESS:
+	case Q_GREAT:
+	case Q_LEQ:
+	case Q_GEQ:
+	    cmp = unsign ? dimode_hucmp(&a1, &a2) : dimode_hscmp(&a1, &a2);
+	    if (e->Nop == Q_LESS)
+		return setlog(e, cmp < 0);
+	    if (e->Nop == Q_GREAT)
+		return setlog(e, cmp > 0);
+	    if (e->Nop == Q_LEQ)
+		return setlog(e, cmp <= 0);
+	    return setlog(e, cmp >= 0);
+	default:
+	    return e;
+	}
+	break;
+	}
+#endif
+
     default:
 	int_warn("evalbinop: bad type %N", e);
 	return e;
@@ -501,6 +930,56 @@ evalbinop(NODE *e)
 **	Unary ops:
 **		(cast) ~ -
 */
+
+/* Fold unary minus on a DImode integer constant (__negdi2). */
+#ifdef __COMPILER_KCC__
+static void
+dimode_neg_iconst(NODE *e)
+{
+    INT hi, lo;
+    DIMODE_UACC acc;
+    long long sr;
+
+    dimode_iconst_words(e, &hi, &lo);
+    acc = dimode_to_acc(hi, lo);
+    if (tisunsign(e->Ntype))
+	sr = -(long long)acc;
+    else
+	sr = -dimode_signed_acc(acc);
+    acc = dimode_from_signed(sr);
+    dimode_iconst_put(e, (INT)(acc >> 35), (INT)acc);
+}
+
+#else
+static void
+dimode_neg_iconst(NODE *e)
+{
+    INT hi, lo;
+    DIMODE_HACC a, acc;
+
+    dimode_iconst_words(e, &hi, &lo);
+    dimode_hmake(&a, hi, lo);
+    dimode_hneg(&acc, &a);
+    dimode_hput(e, &acc);
+}
+#endif
+
+/* Fold ones-complement on a DImode integer constant (onecmpldi). */
+static void
+dimode_compl_iconst(NODE *e)
+{
+    INT hi, lo;
+
+    lo = e->Niconst;
+    if (e->Nflag & NF_WIDE)
+	hi = e->n_var1.n_int;
+    else if (tisunsign(e->Ntype))
+	hi = 0;
+    else
+	hi = dimode_sighi(lo);
+    dimode_iconst_put(e, ~hi, ~lo);
+}
+
 static NODE *
 evalunop(NODE *e)
 {
@@ -516,10 +995,17 @@ evalunop(NODE *e)
 		break;
 	case TS_UINT:
 	case TS_ULONG:
-		e->Nleft->Niconst = ~ (unsigned long)e->Nleft->Niconst;
+		e->Nleft->Niconst = ~ (unsigned INT)e->Nleft->Niconst;
+		break;
+	case TS_LONGLONG:
+	case TS_ULONGLONG:
+		dimode_compl_iconst(e->Nleft);
 		break;
 	default:
-	    int_warn("evalunop: bad ~ %N", e);
+	    if (tisdimode(e->Ntype))
+		dimode_compl_iconst(e->Nleft);
+	    else
+		int_warn("evalunop: bad ~ %N", e);
 	}
 	return copyflag(e->Nleft, e);
 
@@ -533,6 +1019,10 @@ evalunop(NODE *e)
 	case TS_ULONG:
 		e->Nleft->Niconst = -(e->Nleft->Niconst); // FW KCC-NT
 		break;
+	case TS_LONGLONG:
+	case TS_ULONGLONG:
+		dimode_neg_iconst(e->Nleft);
+		break;
 	case TS_FLOAT:
 		e->Nleft->Nfconst = - (float) e->Nleft->Nfconst;
 		break;
@@ -541,8 +1031,13 @@ evalunop(NODE *e)
 		e->Nleft->Nfconst = - (double) e->Nleft->Nfconst;
 		break;
 	default:
-	    int_warn("evalunop: bad - %N", e);
-	    return e;
+	    if (tisdimode(e->Ntype))
+		dimode_neg_iconst(e->Nleft);
+	    else
+		{
+		int_warn("evalunop: bad - %N", e);
+		return e;
+		}
 	}
 	return copyflag(e->Nleft, e);
 
@@ -624,9 +1119,20 @@ evalb1op(NODE *e)
     */
 #if NEW > 1
     if (tisinteg(e->Ntype)) {		/* Check integral types */
-	long icon;			/* Get value of the constant */
-	icon = (e->Nleft->Nop == N_ICONST
-			? e->Nleft->Niconst : e->Nright->Niconst);
+	INT icon;			/* Get normalized constant value */
+	NODE *iconnode;
+
+	iconnode = (e->Nleft->Nop == N_ICONST ? e->Nleft : e->Nright);
+	if (tisdimode(e->Ntype)) {
+	    INT hi, lo;
+
+	    dimode_iconst_words(iconnode, &hi, &lo);
+	    if (hi == 0)
+		icon = lo;
+	    else
+		icon = 3;		/* Not an identity or low-word power. */
+	} else
+	    icon = iconnode->Niconst;
 	if (icon >= -1 && icon <= 1)	/* Test for winning constant vals */
 	switch (e->Nop) {
 	case Q_MPLY:			/* Cuz commuted, const on right */
@@ -736,6 +1242,7 @@ evalb1op(NODE *e)
 		    return ekeepleft(e);	/* 0/f => (f,0) */
 
 		/* Drop thru to check for f/0, f/1 and f/(-1) */
+	    /* FALLTHROUGH */
 	    case Q_MPLY:
 		if (!eisconst(e->Nright))
 		    break;
@@ -805,22 +1312,22 @@ evalb1op(NODE *e)
     case TS_UINT:
     case TS_ULONG:
 	switch (e->Nop) {
-	case Q_PLUS:	er->Niconst += (unsigned long) elr->Niconst;	break;
-	case Q_MPLY:	er->Niconst *= (unsigned long) elr->Niconst;	break;
-	case Q_ANDT:	er->Niconst &= (unsigned long) elr->Niconst;	break;
-	case Q_OR:	er->Niconst |= (unsigned long) elr->Niconst;	break;
-	case Q_XORT:	er->Niconst ^= (unsigned long) elr->Niconst;	break;
+	case Q_PLUS:	er->Niconst += (unsigned INT) elr->Niconst;	break;
+	case Q_MPLY:	er->Niconst *= (unsigned INT) elr->Niconst;	break;
+	case Q_ANDT:	er->Niconst &= (unsigned INT) elr->Niconst;	break;
+	case Q_OR:	er->Niconst |= (unsigned INT) elr->Niconst;	break;
+	case Q_XORT:	er->Niconst ^= (unsigned INT) elr->Niconst;	break;
 	default:	return e;
 	}
 	break;
     case TS_INT:
     case TS_LONG:
 	switch (e->Nop) {
-	case Q_PLUS:	er->Niconst += (long) elr->Niconst;	break;
-	case Q_MPLY:	er->Niconst *= (long) elr->Niconst;	break;
-	case Q_ANDT:	er->Niconst &= (long) elr->Niconst;	break;
-	case Q_OR:	er->Niconst |= (long) elr->Niconst;	break;
-	case Q_XORT:	er->Niconst ^= (long) elr->Niconst;	break;
+	case Q_PLUS:	er->Niconst += (INT) elr->Niconst;	break;
+	case Q_MPLY:	er->Niconst *= (INT) elr->Niconst;	break;
+	case Q_ANDT:	er->Niconst &= (INT) elr->Niconst;	break;
+	case Q_OR:	er->Niconst |= (INT) elr->Niconst;	break;
+	case Q_XORT:	er->Niconst ^= (INT) elr->Niconst;	break;
 	default:	return e;
 	}
 	break;
@@ -886,9 +1393,11 @@ evalasop(NODE *e)
 #if NEW > 2
     if (tisvolatile(e->Nleft->Ntype))	/* If volatile dest expr, */
 	return e;			/* leave whole thing alone, sigh. */
+    if (tisbool(e->Ntype))
+        return e;                       /* Assignment conversion is semantic. */
 
     if (tisinteg(e->Ntype)) {		/* Check integral types */
-	long icon;			/* Get value of the constant */
+	INT icon;			/* Get value of the constant */
 	if (e->Nright->Nop != N_ICONST)
 	    return e;			/* May be an error */
 	icon = e->Nright->Niconst;
@@ -1004,6 +1513,7 @@ evalasop(NODE *e)
 		    break;
 		}
 		/* Drop thru to check for f/0, f/1 and f/(-1) */
+	    /* FALLTHROUGH */
 	    case Q_ASDIV:
 		if (fcon == 0.0) {		/* f/=0 => f */
 		    advise("Division by zero ignored");
@@ -1085,15 +1595,17 @@ evalincdec(NODE *e, int op)  /* Expr node optimized and Desired inc/dec op */
 /*
 ** Copy flags and such across from old top node
 ** Used when op has been folded out but we still want to keep its info
-** WARNING!  This may not work if Nflag is really being used as
-** something else.  See the union definition for NODE in cc.h.
+** Nflag is the per-node flag field; copying it preserves volatile,
+** lvalue, and related expression state across the fold.
 */
 
 static NODE *
 copyflag (NODE *new, NODE *old)
 {
+    int wide = new->Nflag & NF_WIDE;
+
     new->Ntype = old->Ntype;
-    new->Nflag = old->Nflag;
+    new->Nflag = old->Nflag | wide;
     return new;
 }
 
@@ -1142,16 +1654,55 @@ evalcast(NODE *e)
 	    cn->Nop = N_VCONST;	/* Change node op to special value */
 	    break;
 
+	case CAST_BOOL:
+	    if (cn->Nop == N_FCONST)
+		cn->Niconst = (cn->Nfconst != 0.0);
+	    else if ((cn->Nflag & NF_WIDE) && tisdimode(tfrom))
+		cn->Niconst = (cn->Niconst != 0 || cn->n_var1.n_int != 0);
+	    else
+		cn->Niconst = (cn->Niconst != 0);
+	    cn->Nflag &= ~NF_WIDE;
+	    cn->Nop = N_ICONST;
+	    break;
+
 	case CAST_IT_IT:	/* Integer type to integer type */
-	    cn->Niconst = tolong(tto, cn->Niconst);
+	    if (tisdimode(tto) && !tisdimode(tfrom))
+		{
+#ifdef __COMPILER_KCC__
+		DIMODE_UACC acc;
+		INT v = tolong(tfrom, cn->Niconst);
+
+		if (tisunsign(tto))
+		    acc = ((DIMODE_UACC)(unsigned INT)v) & DIMODE71ACC;
+		else
+		    acc = dimode_from_signed((long long)v);
+		dimode_iconst_put(cn, (INT)(acc >> 35), (INT)acc);
+#else
+		DIMODE_HACC acc;
+		INT v = tolong(tfrom, cn->Niconst);
+
+		dimode_hfrom_int(&acc, v, !tisunsign(tfrom));
+		dimode_hput(cn, &acc);
+#endif
+		}
+	    else if ((cn->Nflag & NF_WIDE) && tisdimode(tto))
+		{
+		if (!tisdimode(tfrom))
+		    {
+		    cn->Niconst = tolong(tto, cn->Niconst);
+		    cn->Nflag &= ~NF_WIDE;
+		    }
+		}
+	    else
+		cn->Niconst = tolong(tto, cn->Niconst);
 	    break;
 	case CAST_FP_IT:	/* Floating-point type to integer type */
-	    cn->Niconst = tolong(tto, (long) cn->Nfconst);
+	    cn->Niconst = tolong(tto, (INT) cn->Nfconst);
 	    cn->Nop = N_ICONST;
 	    break;
 	case CAST_EN_IT:	/* Enumeration type to integer type */
 	case CAST_PT_IT:	/* Pointer type to integer type */
-	    cn->Niconst = tolong(tto, (long) cn->Niconst);
+	    cn->Niconst = tolong(tto, (INT) cn->Niconst);
 	    cn->Nop = N_ICONST;
 	    break;
 
@@ -1180,14 +1731,14 @@ evalcast(NODE *e)
 		    if (tissigned(tfrom))
 			cn->Nfconst = (float) cn->Niconst;
 		    else
-			cn->Nfconst = (float) (unsigned long) cn->Niconst;
+			cn->Nfconst = (float) (unsigned INT) cn->Niconst;
 		    break;
 		case TS_DOUBLE:
 		case TS_LNGDBL:
 		    if (tissigned(tfrom))
 			cn->Nfconst = (double) cn->Niconst;
 		    else
-			cn->Nfconst = (double) (unsigned long) cn->Niconst;
+			cn->Nfconst = (double) (unsigned INT) cn->Niconst;
 		    break;
 	    }
 	    cn->Nop = N_FCONST;
@@ -1204,7 +1755,7 @@ evalcast(NODE *e)
 	*/
 	case CAST_PT_PT:	/* Pointer type to pointer type */
 	    if (tisbytepointer(tfrom) && !tisbytepointer(tto))
-		    cn->Niconst = (long)(INT *)(char *)(cn->Niconst);
+		    cn->Niconst = (INT)(INT *)(char *)(cn->Niconst);
 	    else return e;
 	    break;
 
@@ -1224,23 +1775,46 @@ evalcast(NODE *e)
 **	Note special handling for chars, which KCC allows to
 **	have varied byte sizes.
 */
-static long
-tolong(TYPE *t, long val)
+static INT
+targetint(int bits, int uns, INT val)
+{
+    unsigned INT mask, u;
+
+    /* Do not cast through the host C integer types here.  KCC targets
+    ** 18-bit short and 36-bit int/long even when the compiler itself is
+    ** built on a machine with 16-bit short and 32-bit int.  TGSIZ_CHAR is
+    ** a conservative storage-width estimate when KCC is self-hosted.
+    */
+    if (bits >= (int)(sizeof(unsigned INT) * TGSIZ_CHAR))
+	mask = ~(unsigned INT)0;
+    else
+	mask = ((unsigned INT)1 << bits) - 1;
+    u = (unsigned INT)val & mask;
+    if (!uns && bits > 0 && (u & ((unsigned INT)1 << (bits - 1))))
+	u |= ~mask;
+    return (INT)u;
+}
+
+static INT
+tolong(TYPE *t, INT val)
 {
     switch(t->Tspec) {
-	case TS_SHORT:	return (short) val;
-	case TS_INT:	return (int) val;
-	case TS_LONG:	return (long) val;
-	case TS_USHORT:	return (unsigned short) val;
-	case TS_UINT:	return (unsigned int) val;
-	case TS_ULONG:	return (unsigned long) val;
+	case TS_SHORT:	return targetint(TGSIZ_SHORT, 0, val);
+	case TS_INT:	return targetint(tbitsize(t), 0, val);
+	case TS_LONG:	return targetint(TGSIZ_LONG, 0, val);
+	case TS_USHORT:	return targetint(TGSIZ_SHORT, 1, val);
+	case TS_UINT:	return targetint(tbitsize(t), 1, val);
+	case TS_ULONG:	return targetint(TGSIZ_LONG, 1, val);
+	case TS_LONGLONG:	return (INT) val;
+	case TS_ULONGLONG:	return (unsigned INT) val;
 
 	case TS_BITF:
 	case TS_CHAR:  /* return (char) val;          */
 	    if (val & (1 << (tbitsize(t)-1)))	/* If sign bit set */
-		return val | (((long)-1) << tbitsize(t));
+		return val | (INT)~(((unsigned INT)1 << tbitsize(t)) - 1);
 	    /* Else drop through to handle like unsigned */
 
+	/* FALLTHROUGH */
 	case TS_UBITF:
 	case TS_UCHAR: /* return (unsigned char) val; */
 	    return val & ((1<<tbitsize(t))-1);	/* Mask off */
@@ -1351,6 +1925,7 @@ ecanon(NODE *n)
 }
 
 #if 0	/* Comments about discarded values */
+/*
 
 	There are three ways used internally within KCC to indicate
 to the code generator that an expression's value is to be discarded:
@@ -1370,6 +1945,7 @@ checks the statement context cases and ensures that NF_DISCARD is set
 for those expressions.  The code generator does a similar
 context-dependent setting as a backup.
 
+*/
 #endif
 
 /* EVALDISCARD - Used by CCSTMT parsing.
@@ -1476,6 +2052,7 @@ edisc(NODE *n)
 		case Q_DOT:			/* May be lvalue, find out */
 		    if (!(n->Nflag & NF_LVALUE))
 			return edisc(n->Nleft);
+		/* FALLTHROUGH */
 		case Q_MEMBER:			/* Always an lvalue */
 		    if (tisanyvolat(n->Ntype))
 			return n;		/* Volatile, leave alone! */
@@ -1526,6 +2103,7 @@ edisc(NODE *n)
 	    }
 	    /* Drop through to flush unary operator */
 
+	/* FALLTHROUGH */
 	case TKTY_BOOLUN:	/* Unary boolean operator (only '!') */
 	    ++discnt;		/* Say something flushed */
 	    return edisc(n->Nleft);
@@ -1545,6 +2123,7 @@ edisc(NODE *n)
 	    /* Not a logical boolean operator, drop thru to treat
 	    ** like binary operator
 	    */
+	/* FALLTHROUGH */
 	case TKTY_BINOP:	/* Binary operator - check both operands */
 	    ++discnt;			/* Will always flush something. */
 	    ln = edisc(n->Nleft);
@@ -1633,11 +2212,8 @@ edisc(NODE *n)
 ** its operand for the lvalue objects and bypassing the first level.
 */
 int
-sideffp(n)
-NODE *n;
+sideffp(struct node * n)
 {
-    extern char *nopname[];
-
     switch(tok[n->Nop].tktype) {
 	case TKTY_RWOP:		/* Similar to primary expression */
 	    if (n->Nop == Q_ASM)	/* asm() code has side-eff */ 
@@ -1650,6 +2226,7 @@ NODE *n;
 		case Q_DOT:			/* May be lvalue, find out */
 		    if (!(n->Nflag & NF_LVALUE))
 			return sideffp(n->Nleft);
+		/* FALLTHROUGH */
 		case Q_MEMBER:			/* Always an lvalue */
 		    if (tisanyvolat(n->Ntype))
 			return 1;
@@ -1731,7 +2308,7 @@ istrue(NODE *test, NODE *bindings)
 /*      recursive expression evaluator      */
 /* ---------------------------------------- */
 
-static long
+static INT
 value(NODE *test, NODE *bindings)
 {
     if (test == NULL) return 0;

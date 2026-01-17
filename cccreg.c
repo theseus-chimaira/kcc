@@ -71,14 +71,10 @@ int drbits[NREGS] = {		/* Double-register bits */
 */
 
 int
-changereg(to, from, p)
-int to, from;
-PCODE *p;
+changereg(int to, int from, struct pcode * p)
 {
-#if SYS_CSI		/*  Reg linkage */
-    if (Register_Preserve (from))
-	return 0;			/* avoid faulty optimizations */
-#endif
+    if (Register_Preserve(to) || Register_Preserve(from))
+	return 0;		/* preserved variables are not disposable temps */
     return creg(to, from, p, (PCODE *)NULL, previous);
 }
 
@@ -94,8 +90,7 @@ PCODE *p;
 static SYMBOL *uptolab = NULL;
 
 SYMBOL *
-cregupto(lab)
-SYMBOL *lab;		/* Label identifying the jump we can't pass over */
+cregupto(struct symbol * lab)
 {
     SYMBOL *tmp = uptolab;
     uptolab = lab;
@@ -103,8 +98,7 @@ SYMBOL *lab;		/* Label identifying the jump we can't pass over */
 }
 
 static SYMBOL *
-jumplab(p)		/* Return label for jump instr, NULL if not jump */
-PCODE *p;
+jumplab(struct pcode * p)
 {
     switch (p->Pop&POF_OPCODE) {
 	case P_JRST:
@@ -129,9 +123,7 @@ PCODE *p;
 **		...
 */
 static int
-crossfence(to, from, p, dguard, dstart)
-int to, from;
-PCODE *p, *dguard, *dstart;
+crossfence(int to, int from, struct pcode * p, struct pcode * dguard, struct pcode * dstart)
 {
     if (p->Pop == P_JRST && prevskips(p)	/* A JRST, skipped over by */
       && (p = before(p)) != NULL
@@ -232,6 +224,7 @@ pnegreg(int r, PCODE *p)
 	case P_TRN:   case P_TDN:	case P_CAM:   case P_SKIP:
 	case P_FLTR:  case P_FADR:	case P_FSBR:
 	    if (p->Preg != r) break;
+	/* FALLTHROUGH */
 	default:
 	    return 0;
 	}
@@ -251,16 +244,13 @@ pnegreg(int r, PCODE *p)
 */
 
 int
-ufcreg(r)
-int r;
+ufcreg(int r)
 {
     if (previous && previous->Ptype == PTA_REGIS /* && !prevskips */
       && previous->Pop == P_MOVE
       && previous->Preg == r
-#if SYS_CSI		/*  Reg linkage */
-      && Register_Nopreserve (r)
-      && Register_Nopreserve (previous->Pr2) /* avoid faulty opts */
-#endif
+      && Register_Nopreserve(r)
+      && Register_Nopreserve(previous->Pr2)
       && optobj) {
 	r = previous->Pr2;	/* Remember the new reg */
 	dropinstr(previous);	/* Flush now-useless move, fix "previous" */
@@ -279,8 +269,7 @@ int r;
 */
 
 static int
-creg(to, from, p, dguard, dstart)
-PCODE *p, *dguard, *dstart;
+creg(int to, int from, struct pcode * p, struct pcode * dguard, struct pcode * dstart)
 {
     if (to == from) return 1;		/* already right */
     if (p == NULL) return 0;		/* nothing to change */
@@ -311,9 +300,11 @@ PCODE *p, *dguard, *dstart;
 	    } else p->Preg = to;	/* otherwise just make change */
 	    return 1;			/* and return winnitude */
 	}				/* otherwise treat as PRC_RCHG */
+    /* FALLTHROUGH */
     case PRC_RCHG:
 	if (p->Ptype == PTA_REGIS && p->Preg == from && p->Pr2 == to &&
 	    dguard == NULL) switch (p->Pop) {
+	/* FALLTHROUGH */
 	case P_ADD: case P_IMUL: case P_IOR: case P_AND: case P_XOR:
 	case P_FADR: case P_FMPR:
 
@@ -338,6 +329,7 @@ PCODE *p, *dguard, *dstart;
 	   ;  /* do nothing */
 	}
 
+    /* FALLTHROUGH */
     case PRC_RSAME:
     case PRC_RCHG_DSAME:
 	if (p->Preg == to) return 0;	/* conflict, lose */
@@ -390,6 +382,7 @@ completely.  Sigh.  --KLH
 	int_error("creg: bad PRC_ val");
 					/* Drop through */
 
+    /* FALLTHROUGH */
     case PRC_UNKNOWN:			/* Unknown changes (PUSHJ) */
 	return 0;			/* give it up */
     }
@@ -414,8 +407,7 @@ completely.  Sigh.  --KLH
 */
 
 static int
-cregok (p, r)
-PCODE *p;
+cregok (struct pcode * p, int r)
 {
     if (p == NULL) return 0;
     if (rchange (p->Pop) == PRC_RSET
@@ -436,8 +428,7 @@ PCODE *p;
 */
 
 static int
-cregbefore(to, from, p, dguard, dstart)
-PCODE *p, *dguard, *dstart;
+cregbefore(int to, int from, struct pcode * p, struct pcode * dguard, struct pcode * dstart)
 {
     if (to == from) return 1;		/* already right */
 #if 1
@@ -462,10 +453,12 @@ PCODE *p, *dguard, *dstart;
 	case PRC_DSET_RSAME:   case PRC_DCHG_RSAME:
 	    break;			/* mem is single word, normal case */
 
+
 	case PRC_RCHG_DSAME:	case PRC_DSAME:
 	case PRC_DSET:	    case PRC_DCHG: /* can't deal with doublewords */
 	    if (p->Pr2 != from && p->Pr2 != from - 1 &&
 		p->Pr2 != to && p->Pr2 != to - 1) break; /* safe, go on */
+	/* FALLTHROUGH */
 	default:			/* else fall through to loserville */
 	    return 0;
 	}				/* break falls into standard reg chk */
@@ -513,8 +506,7 @@ PCODE *p, *dguard, *dstart;
 */
 
 static int
-craddhack(to, from, p)
-PCODE *p;
+craddhack(int to, int from, struct pcode * p)
 {
     if (p->Ptype != PTV_IMMED || p->Pvalue != 1) return 0; /* pretest failed */
     switch (p->Pop) {			/* is opI R,1; see if P_ADDI or P_SUBI */
@@ -558,17 +550,16 @@ static int rvread, rvwrit;	/* Static for speed */
 ** RBREF, RBSET, RBMOD, RBUSE, RBCHG
 ** RREF, RSET, RMOD, RUSE, RCHG
 */
-int rbref(p) PCODE *p; { rvsset(p); return rvread & ~rvwrit; }
-int rbset(p) PCODE *p; { rvsset(p); return rvwrit & ~rvread; }
-int rbmod(p) PCODE *p; { rvsset(p); return rvread & rvwrit; }
-int rbuse(p) PCODE *p; { rvsset(p); return rvread; }
-int rbchg(p) PCODE *p; { rvsset(p); return rvwrit; }
-int rbin (p) PCODE *p; { rvsset(p); return rvread | rvwrit; }
+int rbref(PCODE *p) { rvsset(p); return rvread & ~rvwrit; }
+int rbset(PCODE *p) { rvsset(p); return rvwrit & ~rvread; }
+int rbmod(PCODE *p) { rvsset(p); return rvread & rvwrit; }
+int rbuse(PCODE *p) { rvsset(p); return rvread; }
+int rbchg(PCODE *p) { rvsset(p); return rvwrit; }
+int rbin(PCODE *p) { rvsset(p); return rvread | rvwrit; }
 #endif
 
 static void
-rvsset(p)
-PCODE *p;
+rvsset(struct pcode * p)
 {
     static int r;		/* Avoid stack fiddling, for speed */
     rvread = rvwrit = 0;
@@ -672,14 +663,12 @@ PCODE *p;
 ** RBINADDR(p)	Mask of registers used in addr.
 */
 int
-rbincode(p)
-PCODE *p;
+rbincode(struct pcode * p)
 {	return rbinreg(p) | rbinaddr(p);
 }
 
 int
-rbinreg(p)
-PCODE *p;
+rbinreg(struct pcode * p)
 {
     switch (rchange(p->Pop)) {
 	case PRC_RSAME:	/* nice single word op? */
@@ -699,6 +688,7 @@ PCODE *p;
 	    int_error("rbinreg: bad rchange");
 	    /* Drop thru */
 
+	/* FALLTHROUGH */
 	case PRC_UNKNOWN:		/* PUSHJ */
 	    return -1;			/* Assume all regs affected! */
     }
@@ -708,9 +698,7 @@ PCODE *p;
 **	 See whether instruction uses double-word mem operand
 */
 static int
-rbinmem(p, r)
-PCODE *p;
-int r;
+rbinmem(struct pcode * p, int r)
 {
     switch (rchange(p->Pop)) {
 	case PRC_RSAME:	/* nice single word op? */
@@ -730,14 +718,14 @@ int r;
 	    int_error("rbinmem: bad rchange");
 	    /* Drop thru */
 
+	/* FALLTHROUGH */
 	case PRC_UNKNOWN:		/* PUSHJ */
 	    return -1;			/* Assume all regs affected! */
     }
 }
 
 int
-rbinaddr(p)
-register PCODE *p;
+rbinaddr(struct pcode * p)
 {
     switch (p->Ptype & PTF_ADRMODE) {
     case PTA_REGIS:			/* register to register */
@@ -759,6 +747,7 @@ register PCODE *p;
 	    return rbinmem(p, (int) p->Poffset);
 	/* Drop thru to return 0 */
 
+    /* FALLTHROUGH */
     case PTA_RCONST:		/* Simple integer in pvalue */
     case PTA_ONEREG:		/* no address, just register */
     case PTA_PCONST:		/* [<pointer of addr+offset+bsize>] */
@@ -778,8 +767,10 @@ register PCODE *p;
 **	register number in "r" and return TRUE if that register matches
 **	one in the mask that RBxxx(p) would return.
 */
-int rruse(p,r) PCODE *p; { rvsset(p); return (rvread) & rbits[r]; }
-int rrchg(p,r) PCODE *p; { rvsset(p); return (rvwrit) & rbits[r]; }
+int rruse(struct pcode * p, int r)
+{ rvsset(p); return (rvread) & rbits[r]; }
+int rrchg(struct pcode * p, int r)
+{ rvsset(p); return (rvwrit) & rbits[r]; }
 
 #if 0	/* 5/91 KCC size */
 int rrref(p,r) PCODE *p; { rvsset(p); return (rvread & ~rvwrit) & rbits[r]; }
@@ -791,9 +782,8 @@ int rrin (p,r) PCODE *p; { rvsset(p); return (rvread | rvwrit) & rbits[r]; }
 /* RINCODE(p, reg) - returns TRUE if register "reg" is used in any way
 **	by the specified pseudo-op.
 */
-rincode(p, reg)
-PCODE *p;
-int reg;
+int
+rincode(struct pcode * p, int reg)
 {
     return rinreg(p, reg) || rinaddr(p, reg);
 }
@@ -802,9 +792,7 @@ int reg;
 **	the address of the specified pseudo-op.
 */
 int
-rinaddr(p, reg)
-PCODE *p;
-int reg;
+rinaddr(struct pcode * p, int reg)
 {
     return rbinaddr(p) & rbits[reg];
 }
@@ -824,9 +812,7 @@ int reg;
 ** like OP R,x.
 */
 int
-rinreg(p, reg)
-PCODE *p;
-int reg;
+rinreg(struct pcode * p, int reg)
 {
 	switch (rchange(p->Pop)) {
 	    case PRC_RSAME:	/* nice single word op? */
@@ -850,6 +836,7 @@ int reg;
 
 	    default:
 		int_error("rinreg: bad rchange");
+	    /* FALLTHROUGH */
 	    case PRC_UNKNOWN:		/* PUSHJ */
 		return 4;		/* Assume it was used, somehow. */
 	}

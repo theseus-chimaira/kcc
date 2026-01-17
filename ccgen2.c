@@ -15,29 +15,16 @@
 
 /* Imported functions */
 extern SYMBOL *newlabel(void);		/* CCSYM */
+extern SYMBOL *symfidstr(char *), *symgcreat(char *);
 extern int elembsize(TYPE *);			/* CCSYM */
 extern INT sizetype(TYPE *), sizeptobj(TYPE *);
-extern void				/* CCCODE */
-	codek0(int, VREG *, VREG *), codek4(int, VREG *, VREG *),
-	code4s(int, VREG *, VREG *, int, INT),
-	code0(int, VREG *, VREG *), code1(int, VREG *, INT),
-	codebp(int, int, INT, int, SYMBOL *, INT),
-	code3(int, VREG *, SYMBOL *), code4(int, VREG *, VREG *),
-	code5(int, VREG *), code6(int, VREG *, SYMBOL *),
-	codemdx(int, int, SYMBOL *, INT, int), code8(int, VREG *, INT),
-	code9(int, VREG *, double, int),
-	code10(int, VREG *, SYMBOL *, INT, INT), code13(int, VREG *, INT),
-	codestr(char *, int), codlabel(SYMBOL *), fixprev(void),
-	flushcode(void);
-extern void code4m(int, VREG *, VREG *, char *), code5m(int, VREG *, char *);
-extern void code00(int, int, int), code40(int,int,int,INT); /* Reg linkage */
-extern int codcreg(VREG *, VREG *);		/* CCCODE */
+extern int cmptype(TYPE *, TYPE *);
+extern void foldhalfstore(void);		/* CCCODE */
+extern void genadata(NODE *), genstmt(NODE *);	/* CCGEN1 */
 extern int sideffp(NODE *);		/* CCEVAL */
-extern int vrispair(VREG *);
 extern void folddiv(VREG *);
 extern int unjump(SYMBOL *);
 extern SYMBOL *cregupto(SYMBOL *);	/* CCCREG for gternary() */
-extern PCODE *before(PCODE *);
 extern VREG *vrdget(void);
 extern void vrfree (VREG *);
 extern VREG *vrget(void);
@@ -52,6 +39,9 @@ extern void vrlowiden (VREG *);
 extern VREG *vrretdget(void);
 extern VREG *vrretget(void);
 extern void vrallspill(void);	/* VERY non-optimal!! */
+extern void vrspillothers(VREG *, VREG *);
+extern void vrunspillall(void);
+extern int rfree(int);
 
 /* Exported functions */
 VREG *genexpr(NODE *);
@@ -69,10 +59,13 @@ static void gor(NODE *, SYMBOL *, int),
 	gand(NODE *, SYMBOL *, int),
 	gboolop(NODE *, int);
 static VREG *gassign(NODE *),
+	*grotate(NODE *),
 	*gbinary(NODE *),
 	*garithop(int, VREG *, VREG *, int),
 	*gptrop(int, VREG *, VREG *, TYPE *, TYPE *),
 	*gptraddend(TYPE *, NODE *),
+	*gmaybitadjust(VREG *, VREG *, TYPE *, int),
+	*gmaybitsub(VREG *, VREG *, TYPE *),
 	*glogical(NODE *),
 	*gunary(NODE *),
 	*gcast(NODE *),
@@ -84,11 +77,49 @@ static VREG *gassign(NODE *),
 	*gcall(NODE *);
 static void emit_blissargs(NODE *);
 static INT sizeargs(NODE *);
+static int gccabi_direct_reg_args(NODE *, int, TYPE *, int);
+static int gccabi_direct_tail_ok(NODE *);
 static void gfnarg(NODE *);
 static VREG *gaddress(NODE *);
 static void pitopc(VREG *, int, int, int);
 static  int bptrref(NODE *);
-static void gasm(NODE *);
+static INT packedmembyte(INT);
+static INT packedmembit(INT);
+static int packedcross(INT);
+static int packedbit(INT);
+static int packedbitscalar(INT);
+static int packedbitagg(INT);
+static int packedptrderef(NODE *), bitptrderef(NODE *), maybitptrderef(NODE *), bitptrmember(NODE *);
+static VREG *gmaybitload(NODE *);
+static VREG *gmaybitstore(VREG *, NODE *);
+static INT packedoffbit(INT);
+static VREG *gpackedload(NODE *);
+static VREG *gpackedstore(VREG *, NODE *);
+static VREG *gpackedcopy(NODE *, NODE *, TYPE *);
+static VREG *gpackedbitbase(NODE *, INT *);
+static VREG *gpackedbitvalue(NODE *, TYPE *);
+static VREG *gpackedbitstorereg(NODE *, VREG *, TYPE *);
+static VREG *gpackedbitcopy(NODE *, NODE *, TYPE *);
+static VREG *gpackedcopyreg(NODE *, VREG *, TYPE *);
+static void gasm(NODE *), gjffo(NODE *);
+static void gdimemload(VREG *, VREG *, int);
+static void gdimemstore(VREG *, VREG *);
+static void gdimove(VREG *, VREG *);
+static VREG *gdimode_from_int(VREG *, TYPE *, TYPE *, NODE *);
+static void gretmove(TYPE *, VREG *, VREG *);
+static VREG *gdimodeadd(VREG *, VREG *);
+static VREG *gdimodesub(VREG *, VREG *);
+static VREG *gdimodemul(VREG *, VREG *);
+static VREG *gdimodedivmod(VREG *, VREG *, int, int);
+static VREG *gdimodehelper(VREG *, VREG *, int, int);
+static void gdimodeneg(VREG *);
+static VREG *gdimodebitwise(int, VREG *, VREG *);
+static void gdimodecompl(VREG *);
+static int gdimodezero(NODE *, int, int);
+static int dimode_power2_exp(INT, INT);
+static int dimode_negative_power2_exp(INT, INT);
+static VREG *gdimodeshift(int, VREG *, VREG *, int);
+
 #if 0
 static VREG *rgetmem(VREG *reg, TYPE *t, int byte, int keep);
 #else
@@ -107,7 +138,7 @@ static void gfnarg();
 static VREG *gaddress();
 static void pitopc();
 static int bptrref();
-static void gasm();
+static void gasm(), gjffo();
 #endif
 
 /* GENEXPR - Main function for expression code generation.
@@ -182,7 +213,7 @@ void
 relflush (VREG *reg)
 {
     int r;			/* get physical register */
-    PCODE *p, *before();
+    PCODE *p;
 
     if (reg == NULL)
 	return;
@@ -230,6 +261,206 @@ relflush (VREG *reg)
 ** statement.
 */
 
+/* GTERNARY_NORMAL_OK - Can this marked scalar ?: avoid AC1?
+** Keep the expression-shape check in sync with CCDECL.
+*/
+static int
+gternary_normal_expr(NODE *n, int depth)
+{
+    int op;
+
+    if (n == NULL)
+        return 1;
+    if (depth > 128)
+        return 0;
+    op = n->Nop;
+    switch (op) {
+    case Q_IDENT:
+    case N_ICONST:
+    case N_PCONST:
+    case N_ECONST:
+    case N_FCONST:
+    case N_SCONST:
+    case N_VCONST:
+        return 1;
+    case N_CAST:
+    case N_ADDR:
+    case N_PTR:
+    case N_NEG:
+    case Q_COMPL:
+    case Q_NOT:
+        return gternary_normal_expr(n->Nleft, depth + 1);
+    case Q_DOT:
+    case Q_MEMBER:
+    case Q_PLUS:
+    case Q_MINUS:
+    case Q_MPLY:
+    case Q_LSHFT:
+    case Q_RSHFT:
+    case Q_LESS:
+    case Q_GREAT:
+    case Q_LEQ:
+    case Q_GEQ:
+    case Q_EQUAL:
+    case Q_NEQ:
+    case Q_ANDT:
+    case Q_XORT:
+    case Q_OR:
+    case Q_LAND:
+    case Q_LOR:
+        return gternary_normal_expr(n->Nleft, depth + 1)
+            && gternary_normal_expr(n->Nright, depth + 1);
+    default:
+        return 0;
+    }
+}
+
+static int
+gternary_normal_ok(NODE *n)
+{
+    if (!n || !(n->Nflag & NF_QUERYNORMAL) || n->Nop != Q_QUERY
+      || sizetype(n->Ntype) != 1 || !n->Nright)
+        return 0;
+    return gternary_normal_expr(n->Nleft, 0)
+        && gternary_normal_expr(n->Nright->Nleft, 0)
+        && gternary_normal_expr(n->Nright->Nright, 0);
+}
+
+/* GABSQUERY - recognize the canonical signed absolute-value ternary.
+**
+** Fold only the deliberately narrow, side-effect-safe forms
+**
+**     x < 0 ? -x : x
+**     0 > x ? -x : x
+**
+** for a non-volatile one-word signed identifier or a simple *p dereference.
+*/
+static int
+gsamepureexpr(NODE *a, NODE *b, int depth)
+{
+    if (a == b)
+        return 1;
+    if (!a || !b || a->Nop != b->Nop || depth > 12)
+        return 0;
+
+    switch (a->Nop) {
+    case Q_IDENT:
+        return a->Nid == b->Nid;
+    case N_ICONST:
+        return a->Niconst == b->Niconst;
+    case N_PTR:
+    case N_ADDR:
+        return gsamepureexpr(a->Nleft, b->Nleft, depth + 1);
+    case N_CAST:
+        return a->Ncast == b->Ncast
+            && gsamepureexpr(a->Nleft, b->Nleft, depth + 1);
+    case Q_DOT:
+    case Q_MEMBER:
+        return a->Nxoff == b->Nxoff
+            && gsamepureexpr(a->Nleft, b->Nleft, depth + 1);
+    case Q_PLUS:
+    case Q_MINUS:
+    case Q_MPLY:
+    case Q_LSHFT:
+        return gsamepureexpr(a->Nleft, b->Nleft, depth + 1)
+            && gsamepureexpr(a->Nright, b->Nright, depth + 1);
+    default:
+        return 0;
+    }
+}
+
+static int
+gsamepure(NODE *a, NODE *b)
+{
+    if (!a || !b || sideffp(a) || sideffp(b))
+        return 0;
+    return gsamepureexpr(a, b, 0);
+}
+
+static int
+gabszero(NODE *n)
+{
+    return n && n->Nop == N_ICONST && n->Niconst == 0;
+}
+
+static NODE *
+gabsquery_id(NODE *n)
+{
+    NODE *cond, *yes, *no, *id;
+
+    if (!optgen || !n || n->Nop != Q_QUERY || sizetype(n->Ntype) != 1
+      || !n->Nright)
+        return NULL;
+
+    cond = n->Nleft;
+    yes = n->Nright->Nleft;
+    no = n->Nright->Nright;
+    if (!cond || !yes || !no)
+        return NULL;
+
+    /* Accept both equivalent branch orientations:
+    **
+    **     negative-or-zero ? -x : x
+    **     positive-or-zero ?  x : -x
+    **
+    ** Strict comparisons are also valid because -0 == 0.
+    */
+    if (yes->Nop == N_NEG && yes->Nleft
+      && gsamepure(yes->Nleft, no)) {
+        id = no;
+        if (!((cond->Nop == Q_LESS || cond->Nop == Q_LEQ)
+              && gsamepure(cond->Nleft, id) && gabszero(cond->Nright))
+          && !((cond->Nop == Q_GREAT || cond->Nop == Q_GEQ)
+              && gabszero(cond->Nleft) && gsamepure(cond->Nright, id)))
+            return NULL;
+    } else if (no->Nop == N_NEG && no->Nleft
+      && gsamepure(yes, no->Nleft)) {
+        id = yes;
+        if (!((cond->Nop == Q_GREAT || cond->Nop == Q_GEQ)
+              && gsamepure(cond->Nleft, id) && gabszero(cond->Nright))
+          && !((cond->Nop == Q_LESS || cond->Nop == Q_LEQ)
+              && gabszero(cond->Nleft) && gsamepure(cond->Nright, id)))
+            return NULL;
+    } else
+        return NULL;
+
+    if (tisunsign(id->Ntype) || tisanyvolat(id->Ntype) || sideffp(id))
+        return NULL;
+
+    /* Restrict the value itself to addressable scalar lvalues.  The address
+    ** expression beneath N_PTR may be more complex (for example a[i]), but
+    ** gsamepure() requires it to be structurally identical and side-effect
+    ** free at every occurrence.
+    */
+    if (id->Nop != Q_IDENT && id->Nop != N_PTR
+      && id->Nop != Q_DOT && id->Nop != Q_MEMBER)
+        return NULL;
+
+    return id;
+}
+
+static VREG *
+gabsquery(NODE *n)
+{
+    NODE *id;
+    VREG *r;
+
+    id = gabsquery_id(n);
+    if (!id)
+        return NULL;
+
+    if (!Register_Id(id)) {
+        r = vrget();
+        r->Vrtype = id->Ntype;
+        code4(P_MOVM, r, gaddress(id));
+        return r;
+    }
+
+    r = genexpr(id);
+    code0(P_MOVM, r, r);
+    return r;
+}
+
 static VREG *
 gternary (NODE *n)
 {
@@ -237,10 +468,16 @@ gternary (NODE *n)
     int siz;
     NODE *nfirst, *nsecond;
     VREG *reg;
+    int normalmerge;
+    VREG *absreg;
 #if NEWTERN
     int uptof = 0;
     SYMBOL *savupto;
 #endif
+
+    absreg = gabsquery(n);
+    if (absreg)
+        return absreg;
 
     /* find the pieces of code we're going to use */
     siz = sizetype(n->Ntype);		/* Find size of overall result */
@@ -267,11 +504,14 @@ gternary (NODE *n)
 	siz = 0;
 	}
 
+    normalmerge = optgen && siz == 1 && gternary_normal_ok(n);
 #if 1
-    /* Clean up previously allocated registers */
+    /* Clean up previously allocated return registers unless liveness
+    ** analysis marked this scalar conditional for a normal-AC merge.
+    */
     if (siz == 2)
 	vrfree(vrretdget());		/* Make sure ACs 1 & 2 free */
-    else if (siz >= 1)
+    else if (siz >= 1 && !normalmerge)
 	vrfree(vrretget());	/* else just ensure AC1 free */
     /* Else void return value */
 #endif
@@ -292,6 +532,10 @@ gternary (NODE *n)
     ** top of page.
     */
     vrallspill();
+    if (normalmerge) {
+        reg = vrget();
+        reg->Vrtype = n->Ntype;
+    }
 
     /* There are three possible configurations:
     ** (1) Both nfirst and nsecond exist.  Failing test jumps to "false".
@@ -303,7 +547,8 @@ gternary (NODE *n)
     ** We've already set up the "false" label to be the same as "done"
     ** if either of the latter two cases holds.
     */
-    reg = NULL;			/* Ensure no return reg initially */
+    if (!normalmerge)
+        reg = NULL;		/* Ensure no return reg initially */
     gboolean(n->Nleft, false,		/* Generate code to test condition */
 		nfirst == NULL);	/* (reverse sense if 1st is gone) */
 
@@ -319,18 +564,22 @@ gternary (NODE *n)
 		    nsecond->Nleft->Nop == N_FNCALL))
 	     && vrtoreal(reg) != R_RETVAL)	/* and 1st val in diff reg, */
 		{
-		code0(siz == 2 ? P_DMOVE : P_MOVE,	/* then put 1st val */
-				VR_RETVAL, reg);	/* into this reg! */
+		gretmove(n->Ntype, VR_RETVAL, reg);
 		reg = (siz == 2 ? vrdget() : vrget());
 		}
 	    else if (optgen)		/* One more optimization try */
 		backreg(reg);		/* Flush a MOVE R,S as we don't care */
 					/* at this point what phys reg is */
 #else
-	    if (Register_Id(nfirst))
+            if (normalmerge) {
+                if (Register_Id(nfirst))
+                    code00(P_MOVE, reg->Vrloc, nfirst->Nid->Sreg);
+                else
+                    gretmove(n->Ntype, reg, genexpr(nfirst));
+            } else if (Register_Id(nfirst))
 		code00(P_MOVE, R_RETVAL, nfirst->Nid->Sreg);
 	    else
-		code0(siz == 2 ? P_DMOVE : P_MOVE, VR_RETVAL, genexpr(nfirst));
+		gretmove(n->Ntype, VR_RETVAL, genexpr(nfirst));
 #endif
 	    }
 	else
@@ -352,12 +601,20 @@ gternary (NODE *n)
 		savupto = cregupto(done);	/* Set fence for changereg */
 		uptof++;			/* say fence set */
 		}
-	    if (Register_Id(nsecond))
+            if (normalmerge) {
+                if (Register_Id(nsecond))
+                    code00(P_MOVE, reg->Vrloc, nsecond->Nid->Sreg);
+                else
+                    gretmove(n->Ntype, reg, genexpr(nsecond));
+            } else if (Register_Id(nsecond))
 		code00(P_MOVE, R_RETVAL, nsecond->Nid->Sreg);
 	    else
-		code0 (siz == 2 ? P_DMOVE : P_MOVE, VR_RETVAL, genexpr(nsecond));
+		gretmove(n->Ntype, VR_RETVAL, genexpr(nsecond));
 #else
-	    code0 (siz == 2 ? P_DMOVE : P_MOVE, VR_RETVAL, genexpr(nsecond));
+            if (normalmerge)
+                gretmove(n->Ntype, reg, genexpr(nsecond));
+            else
+	        gretmove(n->Ntype, VR_RETVAL, genexpr(nsecond));
 #endif
 	    }
 	else
@@ -378,7 +635,7 @@ gternary (NODE *n)
 	** (non-return) reg to avoid hogging reg 1 and interfering with
 	** common sub-expression matching.
 	*/
-	if (siz > 0 && siz != 2		/* Only one register? */
+	if (!normalmerge && siz > 0 && siz != 2	/* Only one register? */
 		 && optobj)
 	    {
 	    reg = vrget();		/* Get normal reg */
@@ -399,13 +656,1423 @@ gternary (NODE *n)
 #else
     if (siz <= 0)
 	return NULL;		/* Void */
-    reg = (siz == 2 ? vrretdget() : vrretget());	/* One or two return regs */
+    if (!normalmerge)
+        reg = (tisdimode(n->Ntype) || siz == 2 ? vrretdget() : vrretget());
 #endif
 #endif
     reg->Vrtype = n->Ntype;		/* Set C type of result obj */
     return reg;
 }
-
+
+/* Split a long long constant node into high/low 36-bit words. */
+
+/* Return the bit number of an exact positive 71-bit power of two. */
+static int
+dimode_power2_exp(INT hi, INT lo)
+{
+    int n;
+
+    hi &= dimode_hi36mask();
+    lo &= dimode_lo35mask();
+    if (hi != 0 && lo != 0)
+        return -1;
+    if (lo != 0) {
+        if ((lo & (lo - 1)) != 0)
+            return -1;
+        for (n = 0; lo > 1; lo >>= 1)
+            ++n;
+        return n;
+    }
+    if (hi != 0) {
+        if ((hi & (hi - 1)) != 0)
+            return -1;
+        for (n = 35; hi > 1; hi >>= 1)
+            ++n;
+        return n;
+    }
+    return -1;
+}
+
+/* Return the bit number of an exact negative 71-bit power of two. */
+static int
+dimode_negative_power2_exp(INT hi, INT lo)
+{
+    hi &= dimode_hi36mask();
+    lo &= dimode_lo35mask();
+    if ((hi & ((INT)1 << 35)) == 0)
+        return -1;
+
+    hi = -hi;
+    if (lo != 0)
+        --hi;
+    lo = -lo;
+    return dimode_power2_exp(hi, lo);
+}
+
+/* Load integral DImode value from memory at idx into pair q. */
+static void
+gdimemload(VREG *q, VREG *idx, int keep)
+{
+    int ar;
+
+    ar = vrreal(idx);
+    codek4(P_MOVE, q, idx);
+    codemdx(P_MOVE, vrreal(VR2(q)), NULL, 1, ar);
+    if (!keep)
+	vrfree(idx);
+}
+
+/* Store integral DImode pair reg at memory address ra. */
+static void
+gdimemstore(VREG *reg, VREG *ra)
+{
+    int ar, hi, lo, n;
+    int hflags, lflags;
+    char buf[80];
+
+    /*
+     * Keep the two DImode value ACs stable while the destination address is
+     * forced into a real AC.  Non-optimized code can otherwise reload the
+     * address into the AC recorded for the low DImode half and then emit a
+     * store of the address word instead of the saved low value.
+     */
+    (void) vrstoreal(reg, VR2(reg));
+    hi = vrreal(reg);
+    lo = vrreal(VR2(reg));
+    hflags = reg->Vrflags;
+    lflags = VR2(reg)->Vrflags;
+    reg->Vrflags |= VRF_LOCK;
+    VR2(reg)->Vrflags |= VRF_LOCK;
+    ar = vrtoreal(ra);
+    reg->Vrflags = hflags;
+    VR2(reg)->Vrflags = lflags;
+    flushcode();
+    n = sprintf(buf,
+	"\tMOVEM\t%o,0(%o)\n"
+	"\tMOVEM\t%o,1(%o)\n",
+	hi, ar, lo, ar);
+    codestr(buf, n);
+    vrfree(ra);
+}
+
+
+/* Widen a one-word integral value into KCC's two-word DImode form. */
+static VREG *
+gdimode_from_int(VREG *r, TYPE *tfrom, TYPE *tto, NODE *ln)
+{
+    VREG *q;
+    int hi, lo, n;
+    int rflags;
+    char buf[160];
+
+    if (!r)
+	return (VREG *)-1;
+    if (tisdimode(tfrom))
+	return r;
+
+    if (tisunsign(tfrom))
+	r = gintwiden(r, tfrom, uinttype, ln);
+    else
+	r = gintwiden(r, tfrom, inttype, ln);
+    if (!r)
+	return (VREG *)-1;
+
+    /*
+     * Do not widen the existing scalar VREG in place.  The low-direction
+     * vrwiden path can leave stale virtual-register tracking in -n output,
+     * so later DImode stores use the wrong AC for the low word.  Allocate a
+     * fresh pair, copy the scalar into the low half, and then synthesize the
+     * sign/zero high half in the tracked pair.
+     */
+    rflags = r->Vrflags;
+    r->Vrflags |= VRF_LOCK;
+    q = vrdget();
+    r->Vrflags = rflags;
+    q->Vrtype = tto;
+    VR2(q)->Vrtype = tto;
+
+    (void) vrstoreal(q, VR2(q));
+    (void) vrtoreal(r);
+    hi = vrreal(q);
+    lo = vrreal(VR2(q));
+    n = sprintf(buf,
+	"\tMOVE\t%o,0%o\n"
+	"\tMOVE\t%o,0%o\n"
+	"\t%s\t%o,-043\n"
+	"\tAND\t%o,[0377777777777]\n",
+	lo, vrreal(r),
+	hi, vrreal(r),
+	(tisunsign(tfrom) ? "LSH" : "ASH"), hi,
+	lo);
+    codestr(buf, n);
+    vrfree(r);
+    return q;
+}
+
+/* Copy integral DImode pair src into pair dest. */
+static void
+gdimove(VREG *dest, VREG *src)
+{
+    code0(P_MOVE, dest, src);
+    code0(P_MOVE, VR2(dest), VR2(src));
+}
+
+/* Move expression result into return-value register(s). */
+static void
+gretmove(TYPE *t, VREG *dst, VREG *src)
+{
+    if (tisdimode(t))
+	gdimove(dst, src);
+    else if (sizetype(t) == 2)
+	code0(P_DMOVE, dst, src);
+    else
+	code0(P_MOVE, dst, src);
+}
+
+/* Return a free physical AC not listed in avoid[0..navoid-1], or 0. */
+static int
+gdimode_try_ac(int avoid[], int navoid)
+{
+    int r, i, conflict;
+
+    for (r = 1; r < NREGS; r++)
+	{
+	if (!rfree(r))
+	    continue;
+	conflict = 0;
+	for (i = 0; i < navoid; i++)
+	    if (avoid[i] == r)
+		{
+		conflict = 1;
+		break;
+		}
+	if (!conflict)
+	    return r;
+	}
+    return 0;
+}
+
+/* Return the high AC of a free adjacent pair outside the avoid set. */
+static int
+gdimode_try_pair(int avoid[], int navoid)
+{
+    int r, i, conflict;
+
+    for (r = 1; r + 1 < NREGS; r++)
+	{
+	if (!rfree(r) || !rfree(r + 1))
+	    continue;
+	conflict = 0;
+	for (i = 0; i < navoid; i++)
+	    if (avoid[i] == r || avoid[i] == r + 1)
+		{
+		conflict = 1;
+		break;
+		}
+	if (!conflict)
+	    return r;
+	}
+    return 0;
+}
+
+/* Pick a free physical AC not listed in avoid[0..navoid-1]. */
+static int
+gdimode_pick_ac(int avoid[], int navoid)
+{
+    int r;
+
+    if ((r = gdimode_try_ac(avoid, navoid)) != 0)
+	return r;
+    int_error("gdimode_pick_ac: no scratch AC");
+    return 1;
+}
+
+
+/* Emit a final true-jump for signed DImode relational comparisons.
+** KCC's DImode value is carried as a signed high word plus a masked low
+** word.  Signed ordering therefore compares the high word first, and only
+** compares the low word when the high words are equal.  The low word is
+** kept below 2^32, so a signed subtract is safe for the equality case on
+** the PDP-6/KA10 baseline.  The generated JUMPN skips the following JRST
+** emitted by gboolean() when the relation is true. */
+
+static int
+gdimode_signed_relop_skip(VREG *r1, VREG *r2, int op)
+{
+    static int labno = 0;
+    int rhi, rlo;
+    int th, tl, flag;
+    int avoid[5], navoid;
+    char buf[1400];
+    int n, lab;
+    char *hrel, *lrel;
+
+    switch (op)
+	{
+	case P_CAM+POF_ISSKIP+POS_SKPL:
+	    hrel = "CAML";
+	    lrel = "CAML";
+	    break;
+	case P_CAM+POF_ISSKIP+POS_SKPLE:
+	    hrel = "CAML";
+	    lrel = "CAMLE";
+	    break;
+	case P_CAM+POF_ISSKIP+POS_SKPG:
+	    hrel = "CAMG";
+	    lrel = "CAMG";
+	    break;
+	case P_CAM+POF_ISSKIP+POS_SKPGE:
+	    hrel = "CAMG";
+	    lrel = "CAMGE";
+	    break;
+	default:
+	    return 0;
+	}
+
+    /* Fast path: compare two resident, non-overlapping pairs directly.
+    ** Only one flag AC is needed; both operands die after the comparison. */
+    if (!(r1->Vrflags & VRF_SPILLED)
+      && !(VR2(r1)->Vrflags & VRF_SPILLED)
+      && !(r2->Vrflags & VRF_SPILLED)
+      && !(VR2(r2)->Vrflags & VRF_SPILLED))
+	{
+	int a[5], na, f;
+	int h1 = vrreal(r1), l1 = vrreal(VR2(r1));
+	int h2 = vrreal(r2), l2 = vrreal(VR2(r2));
+
+	if (h1 != l1 && h1 != h2 && h1 != l2
+	  && l1 != h2 && l1 != l2 && h2 != l2)
+	    {
+	    na = 0;
+	    a[na++] = h1; a[na++] = l1;
+	    a[na++] = h2; a[na++] = l2;
+	    if ((f = gdimode_try_ac(a, na)) != 0)
+		{
+		lab = labno++;
+		n = sprintf(buf,
+		    "\tSETZ\t%o,\n"
+		    "\t%s\t%o,%o\n"
+		    "\tJRST\t%%DICMP%dH\n"
+		    "\tJRST\t%%DICMP%dT\n"
+		    "%%DICMP%dH:\n"
+		    "\tCAME\t%o,%o\n"
+		    "\tJRST\t%%DICMP%dD\n"
+		    "\tJRST\t%%DICMP%dE\n"
+		    "%%DICMP%dE:\n"
+		    "\t%s\t%o,%o\n"
+		    "\tJRST\t%%DICMP%dD\n"
+		    "%%DICMP%dT:\n"
+		    "\tMOVEI\t%o,1\n"
+		    "%%DICMP%dD:\n"
+		    "\tJUMPN\t%o,.+2\n",
+		    f, hrel, h1, h2, lab, lab, lab,
+		    h1, h2, lab, lab, lab, lrel, l1, l2,
+		    lab, lab, f, lab, f);
+		codestr(buf, n);
+		vrfree(r1);
+		vrfree(r2);
+		return 1;
+		}
+	    }
+	}
+
+    (void) vrstoreal(r1, VR2(r1));
+    flushcode();
+    n = sprintf(buf,
+	"\tPUSH\t17,%o\n"
+	"\tPUSH\t17,%o\n",
+	vrreal(r1), vrreal(VR2(r1)));
+    codestr(buf, n);
+    stackoffset += 2;
+
+    (void) vrstoreal(r2, VR2(r2));
+    flushcode();
+    rhi = vrreal(r2);
+    rlo = vrreal(VR2(r2));
+
+    navoid = 0;
+    avoid[navoid++] = rhi;
+    avoid[navoid++] = rlo;
+    th = gdimode_pick_ac(avoid, navoid);
+    avoid[navoid++] = th;
+    tl = gdimode_pick_ac(avoid, navoid);
+    avoid[navoid++] = tl;
+    flag = gdimode_pick_ac(avoid, navoid);
+    lab = labno++;
+
+    n = sprintf(buf,
+	"\tSETZ\t%o,\n"
+	"\tMOVE\t%o,-1(17)\n"
+	"\tMOVE\t%o,0(17)\n"
+	"\t%s\t%o,%o\n"
+	"\tJRST\t%%DICMP%dH\n"
+	"\tJRST\t%%DICMP%dT\n"
+	"%%DICMP%dH:\n"
+	"\tCAME\t%o,%o\n"
+	"\tJRST\t%%DICMP%dD\n"
+	"\tJRST\t%%DICMP%dE\n"
+	"%%DICMP%dE:\n"
+	"\t%s\t%o,%o\n"
+	"\tJRST\t%%DICMP%dD\n"
+	"%%DICMP%dT:\n"
+	"\tMOVEI\t%o,1\n"
+	"%%DICMP%dD:\n"
+	"\tSUB\t17,[2,,2]\n"
+	"\tJUMPN\t%o,.+2\n",
+	flag,
+	th,
+	tl,
+	hrel, th, rhi,
+	lab,
+	lab,
+	lab,
+	th, rhi,
+	lab,
+	lab,
+	lab,
+	lrel, tl, rlo,
+	lab,
+	lab,
+	flag,
+	lab,
+	flag);
+    codestr(buf, n);
+    stackoffset -= 2;
+    vrfree(r1);
+    vrfree(r2);
+    vrunspillall();
+    return 1;
+}
+
+/* Emit a final true-jump for unsigned DImode relational comparisons.
+** Both halves are compared in unsigned order by toggling the 36-bit sign
+** bit before using the machine's signed CAM skip instructions.  The final
+** JUMPN has the same "skip if true" contract as gdimode_signed_relop_skip(). */
+static int
+gdimode_unsigned_relop_skip(VREG *r1, VREG *r2, int op)
+{
+    static int labno = 0;
+    int rhi, rlo;
+    int th, tl, flag;
+    int avoid[5], navoid;
+    char buf[1600];
+    int n, lab;
+    char *hrel, *lrel;
+
+    switch (op)
+	{
+	case P_CAM+POF_ISSKIP+POS_SKPL:
+	    hrel = "CAML";
+	    lrel = "CAML";
+	    break;
+	case P_CAM+POF_ISSKIP+POS_SKPLE:
+	    hrel = "CAML";
+	    lrel = "CAMLE";
+	    break;
+	case P_CAM+POF_ISSKIP+POS_SKPG:
+	    hrel = "CAMG";
+	    lrel = "CAMG";
+	    break;
+	case P_CAM+POF_ISSKIP+POS_SKPGE:
+	    hrel = "CAMG";
+	    lrel = "CAMGE";
+	    break;
+	default:
+	    return 0;
+	}
+
+    /* Fast path: compare resident pairs directly.  Unsigned high-word
+    ** ordering is obtained by toggling the sign bit in place; low words
+    ** are already masked to 35 bits and therefore compare as nonnegative. */
+    if (!(r1->Vrflags & VRF_SPILLED)
+      && !(VR2(r1)->Vrflags & VRF_SPILLED)
+      && !(r2->Vrflags & VRF_SPILLED)
+      && !(VR2(r2)->Vrflags & VRF_SPILLED))
+	{
+	int a[5], na, f;
+	int h1 = vrreal(r1), l1 = vrreal(VR2(r1));
+	int h2 = vrreal(r2), l2 = vrreal(VR2(r2));
+
+	if (h1 != l1 && h1 != h2 && h1 != l2
+	  && l1 != h2 && l1 != l2 && h2 != l2)
+	    {
+	    na = 0;
+	    a[na++] = h1; a[na++] = l1;
+	    a[na++] = h2; a[na++] = l2;
+	    if ((f = gdimode_try_ac(a, na)) != 0)
+		{
+		lab = labno++;
+		n = sprintf(buf,
+		    "\tTLC\t%o,400000\n"
+		    "\tTLC\t%o,400000\n"
+		    "\tSETZ\t%o,\n"
+		    "\t%s\t%o,%o\n"
+		    "\tJRST\t%%DIUCMP%dH\n"
+		    "\tJRST\t%%DIUCMP%dT\n"
+		    "%%DIUCMP%dH:\n"
+		    "\tCAME\t%o,%o\n"
+		    "\tJRST\t%%DIUCMP%dD\n"
+		    "\tJRST\t%%DIUCMP%dE\n"
+		    "%%DIUCMP%dE:\n"
+		    "\t%s\t%o,%o\n"
+		    "\tJRST\t%%DIUCMP%dD\n"
+		    "%%DIUCMP%dT:\n"
+		    "\tMOVEI\t%o,1\n"
+		    "%%DIUCMP%dD:\n"
+		    "\tJUMPN\t%o,.+2\n",
+		    h1, h2, f, hrel, h1, h2, lab, lab, lab,
+		    h1, h2, lab, lab, lab, lrel, l1, l2,
+		    lab, lab, f, lab, f);
+		codestr(buf, n);
+		vrfree(r1);
+		vrfree(r2);
+		return 1;
+		}
+	    }
+	}
+
+    (void) vrstoreal(r1, VR2(r1));
+    flushcode();
+    n = sprintf(buf,
+	"\tPUSH\t17,%o\n"
+	"\tPUSH\t17,%o\n",
+	vrreal(r1), vrreal(VR2(r1)));
+    codestr(buf, n);
+    stackoffset += 2;
+
+    (void) vrstoreal(r2, VR2(r2));
+    flushcode();
+    rhi = vrreal(r2);
+    rlo = vrreal(VR2(r2));
+
+    navoid = 0;
+    avoid[navoid++] = rhi;
+    avoid[navoid++] = rlo;
+    th = gdimode_pick_ac(avoid, navoid);
+    avoid[navoid++] = th;
+    tl = gdimode_pick_ac(avoid, navoid);
+    avoid[navoid++] = tl;
+    flag = gdimode_pick_ac(avoid, navoid);
+    lab = labno++;
+
+    n = sprintf(buf,
+	"\tSETZ\t%o,\n"
+	"\tMOVE\t%o,-1(17)\n"
+	"\tTLC\t%o,400000\n"
+	"\tMOVE\t%o,0(17)\n"
+	"\tTLC\t%o,400000\n"
+	"\tTLC\t%o,400000\n"
+	"\t%s\t%o,%o\n"
+	"\tJRST\t%%DIUCMP%dH\n"
+	"\tJRST\t%%DIUCMP%dT\n"
+	"%%DIUCMP%dH:\n"
+	"\tCAME\t%o,%o\n"
+	"\tJRST\t%%DIUCMP%dD\n"
+	"\tJRST\t%%DIUCMP%dE\n"
+	"%%DIUCMP%dE:\n"
+	"\t%s\t%o,%o\n"
+	"\tJRST\t%%DIUCMP%dD\n"
+	"%%DIUCMP%dT:\n"
+	"\tMOVEI\t%o,1\n"
+	"%%DIUCMP%dD:\n"
+	"\tSUB\t17,[2,,2]\n"
+	"\tJUMPN\t%o,.+2\n",
+	flag,
+	th, th,
+	tl, tl,
+	rhi,
+	hrel, th, rhi,
+	lab,
+	lab,
+	lab,
+	th, rhi,
+	lab,
+	lab,
+	lab,
+	lrel, tl, rlo,
+	lab,
+	lab,
+	flag,
+	lab,
+	flag);
+    codestr(buf, n);
+    stackoffset -= 2;
+    vrfree(r1);
+    vrfree(r2);
+    vrunspillall();
+    return 1;
+}
+
+/* 71-bit DImode add/sub in one codestr (refs adddi_reg_reg / subdi_reg). */
+static VREG *
+gdimode_addsub(VREG *r1, VREG *r2, int is_sub)
+{
+    int r1hi, r1lo, r2hi, r2lo;
+    char buf[384];
+    int n;
+
+    /* The low halves are canonical unsigned 35-bit values.  Their sign bit
+    ** after ADD/SUB is therefore exactly the carry/borrow bit; apply it
+    ** directly to the high result instead of allocating a scratch AC or
+    ** spilling all live registers under pressure. */
+    if (!(r1->Vrflags & VRF_SPILLED)
+      && !(VR2(r1)->Vrflags & VRF_SPILLED)
+      && !(r2->Vrflags & VRF_SPILLED)
+      && !(VR2(r2)->Vrflags & VRF_SPILLED))
+        {
+        r1hi = vrreal(r1);
+        r1lo = vrreal(VR2(r1));
+        r2hi = vrreal(r2);
+        r2lo = vrreal(VR2(r2));
+        if (r1hi == r2hi || r1hi == r2lo
+          || r1lo == r2hi || r1lo == r2lo)
+            r1hi = 0;
+        }
+    else
+        r1hi = 0;
+
+    if (r1hi == 0)
+        {
+        vrallspill();
+        (void) vrstoreal(r1, VR2(r1));
+        (void) vrstoreal(r2, VR2(r2));
+        (void) vrstoreal(r2, r1);
+        r1hi = vrreal(r1);
+        r1lo = vrreal(VR2(r1));
+        r2hi = vrreal(r2);
+        r2lo = vrreal(VR2(r2));
+        }
+
+    if (is_sub)
+        {
+        static int sublab;
+        int lab = sublab++;
+        n = sprintf(buf,
+            "\tSUB\t%o,%o\n"
+            "\tJUMPGE\t%o,%%DISUB%d\n"
+            "\tADD\t%o,[400000000000]\n"
+            "\tSUBI\t%o,1\n"
+            "%%DISUB%d:\n"
+            "\tSUB\t%o,%o\n",
+            r1lo, r2lo, r1lo, lab, r1lo, r1hi, lab, r1hi, r2hi);
+        }
+    else
+        {
+        static int addlab;
+        int lab = addlab++;
+        n = sprintf(buf,
+            "\tADD\t%o,%o\n"
+            "\tJUMPGE\t%o,%%DIADD%d\n"
+            "\tAND\t%o,[377777777777]\n"
+            "\tADDI\t%o,1\n"
+            "%%DIADD%d:\n"
+            "\tADD\t%o,%o\n",
+            r1lo, r2lo, r1lo, lab, r1lo, r1hi, lab, r1hi, r2hi);
+        }
+    codestr(buf, n);
+    vrfree(r2);
+    return r1;
+}
+
+/* 71-bit DImode add: r1 += r2, release r2. */
+static VREG *
+gdimodeadd(VREG *r1, VREG *r2)
+{
+    return gdimode_addsub(r1, r2, 0);
+}
+
+/* 71-bit DImode subtract: r1 -= r2, release r2. */
+static VREG *
+gdimodesub(VREG *r1, VREG *r2)
+{
+    return gdimode_addsub(r1, r2, 1);
+}
+
+/* 71-bit DImode multiply: r1 *= r2, release r2 (muldi3_71_no_dmul). */
+static VREG *
+gdimodemul(VREG *r1, VREG *r2)
+{
+    int r1hi, r1lo, r2hi, r2lo;
+    int ahi, alo, bhi, blo;
+    int scrlo, prodhi, prodlo;
+    int avoid[9], navoid;
+    char buf[512];
+    int n;
+
+    (void) vrstoreal(r1, VR2(r1));
+    (void) vrstoreal(r2, VR2(r2));
+    (void) vrstoreal(r2, r1);
+
+    ahi = r1hi = vrreal(r1);
+    alo = r1lo = vrreal(VR2(r1));
+    bhi = r2hi = vrreal(r2);
+    blo = r2lo = vrreal(VR2(r2));
+
+    navoid = 0;
+    avoid[navoid++] = r1hi;
+    avoid[navoid++] = r1lo;
+    avoid[navoid++] = r2hi;
+    avoid[navoid++] = r2lo;
+    scrlo = gdimode_pick_ac(avoid, navoid);
+    avoid[navoid++] = scrlo;
+
+    /* Both input pairs remain live and unmodified until the final copy-out.
+    ** The old four-AC snapshot was only needed by the former vrallspill path. */
+    prodhi = gdimode_try_pair(avoid, navoid);
+    if (prodhi == 0)
+	int_error("gdimodemul: no product AC pair");
+    prodlo = prodhi + 1;
+    avoid[navoid++] = prodhi;
+    avoid[navoid++] = prodlo;
+
+    /* ACs are addressable as memory locations 0-17.  The operand
+    ** snapshots can therefore feed MUL/IMUL directly; do not round-trip
+    ** them through the stack merely to obtain a memory operand. */
+    n = sprintf(buf,
+	"\tMOVE\t%o,0%o\n"
+	"\tMUL\t%o,0%o\n"
+	"\tAND\t%o,[0377777777777]\n",
+	prodhi, alo,
+	prodhi, blo,
+	prodlo);
+    codestr(buf, n);
+
+    /* Cross terms: ahi*blo and alo*bhi. */
+    n = sprintf(buf,
+	"\tMOVE\t%o,0%o\n"
+	"\tIMUL\t%o,0%o\n"
+	"\tADD\t%o,0%o\n"
+	"\tMOVE\t%o,0%o\n"
+	"\tIMUL\t%o,0%o\n"
+	"\tADD\t%o,0%o\n",
+	scrlo, ahi, scrlo, blo, prodhi, scrlo,
+	scrlo, bhi, scrlo, alo, prodhi, scrlo);
+    codestr(buf, n);
+
+    /* The result is computed modulo 2^71.  ahi and bhi are already the
+    ** upper two's-complement words, so adding the two cross products to
+    ** the carry from alo*blo gives the correct high 36 bits for both
+    ** signed and unsigned multiplication.  No separate sign correction
+    ** is needed. */
+    n = sprintf(buf,
+	"\tAND\t%o,[0377777777777]\n",
+	prodlo);
+    codestr(buf, n);
+
+    r1hi = vrreal(r1);
+    r1lo = vrreal(VR2(r1));
+    /* prodhi/prodlo were allocated with both destination words in the
+    ** avoid set, so the final copy has no overlap and needs no snapshots. */
+    n = sprintf(buf,
+	"\tMOVE\t%o,0%o\n"
+	"\tMOVE\t%o,0%o\n",
+	r1hi, prodhi, r1lo, prodlo);
+    codestr(buf, n);
+
+    vrfree(r2);
+    return r1;
+}
+
+/* 71-bit DImode divide/modulo.  This is a compact restoring divider used
+** for the PDP-6/KA10 baseline where there is no useful native DImode DIV.
+** Values are represented as high36:low35. */
+
+/* Call a shared runtime DImode divider.  The helper uses the canonical
+** AC1:AC2 / AC3:AC4 argument convention and returns AC1:AC2.  Other live
+** volatile values are spilled, but the two operands remain resident until
+** copied through four temporary stack words; this avoids destructive
+** parallel-copy cycles without allocator state. */
+static VREG *
+gdimodehelper(VREG *r1, VREG *r2, int ts, int wantmod)
+{
+    SYMBOL *s;
+    VREG *res;
+    TYPE *rtype;
+    char *name;
+    int a1, a2, a3, a4;
+
+    rtype = r1->Vrtype;
+    vrspillothers(r1, r2);
+    (void) vrstoreal(r1, r2);
+    a1 = vrreal(r1);
+    a2 = vrreal(VR2(r1));
+    a3 = vrreal(r2);
+    a4 = vrreal(VR2(r2));
+
+    code00(P_PUSH, R_SP, a1);
+    code00(P_PUSH, R_SP, a2);
+    code00(P_PUSH, R_SP, a3);
+    code00(P_PUSH, R_SP, a4);
+    stackoffset += 4;
+    vrfree(r1);
+    vrfree(r2);
+
+    codemdx(P_MOVE, 1, (SYMBOL *)NULL, -3, R_SP);
+    codemdx(P_MOVE, 2, (SYMBOL *)NULL, -2, R_SP);
+    codemdx(P_MOVE, 3, (SYMBOL *)NULL, -1, R_SP);
+    codemdx(P_MOVE, 4, (SYMBOL *)NULL, 0, R_SP);
+
+    if (tspisunsigned(ts))
+        name = wantmod ? "__kcc_umoddi3" : "__kcc_udivdi3";
+    else
+        name = wantmod ? "__kcc_moddi3" : "__kcc_divdi3";
+    s = symfidstr(name);
+    if (s == NULL)
+        {
+        s = symgcreat(name);
+        s->Sclass = SC_EXTREF;
+        }
+    ++s->Srefs;
+    code6(P_PUSHJ, VR_SP, s);
+    code8(P_ADJSP, VR_SP, -4);
+    stackoffset -= 4;
+
+    res = vrretdget();
+    res->Vrtype = rtype;
+    return res;
+}
+
+static VREG *
+gdimodedivmod(VREG *r1, VREG *r2, int ts, int wantmod)
+{
+    int nhi, nlo, dhi, dlo;
+    int qhi, qlo, rhi, rlo;
+    int cnt, tmp1, tmp2, sgn;
+    int avoid[16], navoid;
+    int is_signed;
+    static int divlab;
+    int lab;
+    char buf[4000];
+    int n;
+
+    int fast;
+
+    is_signed = (ts == TS_LONGLONG);
+
+    {
+    int helperkind = (wantmod ? 1 : 0) + (tspisunsigned(ts) ? 2 : 0);
+    if (((fndimodcalls >> (helperkind * 4)) & 017) > 1)
+        return gdimodehelper(r1, r2, ts, wantmod);
+    }
+
+    /* Try the common register-resident case before disturbing any live
+    ** virtual register.  Raw divider scratch ACs are safe only when every
+    ** one is currently unassigned; if the complete set is unavailable, use
+    ** the old spill path unchanged.  Operands have already been evaluated,
+    ** so choosing either path cannot duplicate their side effects. */
+    fast = !(r1->Vrflags & VRF_SPILLED)
+        && !(VR2(r1)->Vrflags & VRF_SPILLED)
+        && !(r2->Vrflags & VRF_SPILLED)
+        && !(VR2(r2)->Vrflags & VRF_SPILLED);
+
+retry_alloc:
+    if (!fast)
+        {
+        vrallspill();
+        (void) vrstoreal(r1, VR2(r1));
+        (void) vrstoreal(r2, VR2(r2));
+        (void) vrstoreal(r2, r1);
+        }
+
+    nhi = vrreal(r1);
+    nlo = vrreal(VR2(r1));
+    dhi = vrreal(r2);
+    dlo = vrreal(VR2(r2));
+
+    /* Distinct resident operand words are required because the restoring
+    ** loop destructively shifts the numerator and normalizes the divisor. */
+    if (fast && (nhi == nlo || nhi == dhi || nhi == dlo
+        || nlo == dhi || nlo == dlo || dhi == dlo))
+        {
+        fast = 0;
+        goto retry_alloc;
+        }
+
+    navoid = 0;
+    avoid[navoid++] = nhi;
+    avoid[navoid++] = nlo;
+    avoid[navoid++] = dhi;
+    avoid[navoid++] = dlo;
+#define DIVAC(v) ((v = gdimode_try_ac(avoid, navoid)) != 0 \
+                  ? (avoid[navoid++] = v, 1) : 0)
+    qhi = qlo = 0;
+    if ((!wantmod && (!DIVAC(qhi) || !DIVAC(qlo)))
+        || !DIVAC(rhi) || !DIVAC(rlo) || !DIVAC(cnt)
+        || !DIVAC(tmp1) || !DIVAC(tmp2)
+        || (is_signed && !DIVAC(sgn)))
+        {
+        if (fast)
+            {
+            fast = 0;
+            goto retry_alloc;
+            }
+        int_error("gdimodedivmod: no scratch AC");
+        }
+#undef DIVAC
+
+    /* A signed operation returns either quotient or remainder, never both.
+    ** Keep only the sign needed by that result: numerator XOR divisor for a
+    ** quotient, numerator alone for a remainder. */
+    if (!is_signed)
+        sgn = 0;
+
+    lab = divlab++;
+
+    if (is_signed)
+        {
+        n = sprintf(buf,
+            "\tSETZ\t%o,\n"
+            "\tMOVE\t%o,%o\n"
+            "\tLSH\t%o,-43\n"
+            "\tANDI\t%o,1\n"
+            "\tJUMPE\t%o,%%DIDIV%dN\n"
+            "\tMOVN\t%o,%o\n"
+            "\tSKIPE\t%o\n"
+            "\tSUBI\t%o,1\n"
+            "\tMOVN\t%o,%o\n"
+            "\tAND\t%o,[377777777777]\n"
+            "%%DIDIV%dN:\n",
+            sgn,
+            sgn, nhi,
+            sgn,
+            sgn,
+            sgn, lab,
+            nhi, nhi,
+            nlo,
+            nhi,
+            nlo, nlo,
+            nlo,
+            lab);
+        codestr(buf, n);
+
+        if (wantmod)
+            n = sprintf(buf,
+                "\tMOVE\t%o,%o\n"
+                "\tLSH\t%o,-43\n"
+                "\tANDI\t%o,1\n"
+                "\tJUMPE\t%o,%%DIDIV%dD\n"
+                "\tMOVN\t%o,%o\n"
+                "\tSKIPE\t%o\n"
+                "\tSUBI\t%o,1\n"
+                "\tMOVN\t%o,%o\n"
+                "\tAND\t%o,[377777777777]\n"
+                "%%DIDIV%dD:\n",
+                tmp2, dhi,
+                tmp2,
+                tmp2,
+                tmp2, lab,
+                dhi, dhi,
+                dlo,
+                dhi,
+                dlo, dlo,
+                dlo,
+                lab);
+        else
+            n = sprintf(buf,
+                "\tMOVE\t%o,%o\n"
+                "\tLSH\t%o,-43\n"
+                "\tANDI\t%o,1\n"
+                "\tXOR\t%o,%o\n"
+                "\tJUMPE\t%o,%%DIDIV%dD\n"
+                "\tMOVN\t%o,%o\n"
+                "\tSKIPE\t%o\n"
+                "\tSUBI\t%o,1\n"
+                "\tMOVN\t%o,%o\n"
+                "\tAND\t%o,[377777777777]\n"
+                "%%DIDIV%dD:\n",
+                tmp2, dhi,
+                tmp2,
+                tmp2,
+                sgn, tmp2,
+                tmp2, lab,
+                dhi, dhi,
+                dlo,
+                dhi,
+                dlo, dlo,
+                dlo,
+                lab);
+        codestr(buf, n);
+        }
+
+    if (wantmod)
+        n = sprintf(buf,
+            "\tAND\t%o,[377777777777]\n"
+            "\tAND\t%o,[377777777777]\n"
+            "\tSETZ\t%o,\n"
+            "\tSETZ\t%o,\n"
+            "\tMOVEI\t%o,107\n"
+            "%%DIDIV%dL:\n"
+            /* bit = top bit of numerator; numerator <<= 1 */
+            "\tMOVE\t%o,%o\n"
+            "\tLSH\t%o,-43\n"
+            "\tANDI\t%o,1\n"
+            "\tMOVE\t%o,%o\n"
+            "\tLSH\t%o,-42\n"
+            "\tANDI\t%o,1\n"
+            "\tLSH\t%o,1\n"
+            "\tAND\t%o,[377777777777]\n"
+            "\tLSH\t%o,1\n"
+            "\tIOR\t%o,%o\n"
+            "\tAND\t%o,[777777777777]\n"
+            /* rem = (rem << 1) | bit */
+            "\tMOVE\t%o,%o\n"
+            "\tLSH\t%o,-42\n"
+            "\tANDI\t%o,1\n"
+            "\tLSH\t%o,1\n"
+            "\tAND\t%o,[377777777777]\n"
+            "\tIOR\t%o,%o\n"
+            "\tLSH\t%o,1\n"
+            "\tIOR\t%o,%o\n"
+            "\tAND\t%o,[777777777777]\n"
+            /* if rem < den, do not subtract */
+            "\tMOVE\t%o,%o\n"
+            "\tTLC\t%o,400000\n"
+            "\tMOVE\t%o,%o\n"
+            "\tTLC\t%o,400000\n"
+            "\tCAML\t%o,%o\n"
+            "\t JRST\t%%DIDIV%dHC\n"
+            "\tJRST\t%%DIDIV%dNS\n"
+            "%%DIDIV%dHC:\n"
+            "\tCAME\t%o,%o\n"
+            "\t JRST\t%%DIDIV%dSUB\n"
+            "\tCAML\t%o,%o\n"
+            "\t JRST\t%%DIDIV%dSUB\n"
+            "\tJRST\t%%DIDIV%dNS\n"
+            "%%DIDIV%dSUB:\n"
+            "\tSUB\t%o,%o\n"
+            "\tJUMPGE\t%o,%%DIDIV%dSB0\n"
+            "\tADD\t%o,[400000000000]\n"
+            "\tSUBI\t%o,1\n"
+            "%%DIDIV%dSB0:\n"
+            "\tSUB\t%o,%o\n"
+            "%%DIDIV%dNS:\n"
+            "\tSOJG\t%o,%%DIDIV%dL\n",
+            nlo, dlo,
+            rhi, rlo,
+            cnt,
+            lab,
+            tmp2, nhi,
+            tmp2,
+            tmp2,
+            tmp1, nlo,
+            tmp1,
+            tmp1,
+            nlo,
+            nlo,
+            nhi,
+            nhi, tmp1,
+            nhi,
+            tmp1, rlo,
+            tmp1,
+            tmp1,
+            rlo,
+            rlo,
+            rlo, tmp2,
+            rhi,
+            rhi, tmp1,
+            rhi,
+            tmp1, rhi,
+            tmp1,
+            tmp2, dhi,
+            tmp2,
+            tmp1, tmp2,
+            lab,
+            lab,
+            lab,
+            tmp1, tmp2,
+            lab,
+            rlo, dlo,
+            lab,
+            lab,
+            lab,
+            rlo, dlo,
+            rlo, lab,
+            rlo,
+            rhi,
+            lab,
+            rhi, dhi,
+            lab,
+            cnt, lab);
+    else
+        {
+        n = sprintf(buf,
+        "\tAND\t%o,[377777777777]\n"
+        "\tAND\t%o,[377777777777]\n"
+        "\tSETZ\t%o,\n"
+        "\tSETZ\t%o,\n"
+        "\tSETZ\t%o,\n"
+        "\tSETZ\t%o,\n"
+        "\tMOVEI\t%o,107\n"
+        "%%DIDIV%dL:\n"
+        /* q <<= 1 */
+        "\tMOVE\t%o,%o\n"
+        "\tLSH\t%o,-42\n"
+        "\tANDI\t%o,1\n"
+        "\tLSH\t%o,1\n"
+        "\tAND\t%o,[377777777777]\n"
+        "\tLSH\t%o,1\n"
+        "\tIOR\t%o,%o\n"
+        "\tAND\t%o,[777777777777]\n"
+        /* bit = top bit of numerator; numerator <<= 1 */
+        "\tMOVE\t%o,%o\n"
+        "\tLSH\t%o,-43\n"
+        "\tANDI\t%o,1\n"
+        "\tMOVE\t%o,%o\n"
+        "\tLSH\t%o,-42\n"
+        "\tANDI\t%o,1\n"
+        "\tLSH\t%o,1\n"
+        "\tAND\t%o,[377777777777]\n"
+        "\tLSH\t%o,1\n"
+        "\tIOR\t%o,%o\n"
+        "\tAND\t%o,[777777777777]\n"
+        /* rem = (rem << 1) | bit */
+        "\tMOVE\t%o,%o\n"
+        "\tLSH\t%o,-42\n"
+        "\tANDI\t%o,1\n"
+        "\tLSH\t%o,1\n"
+        "\tAND\t%o,[377777777777]\n"
+        "\tIOR\t%o,%o\n"
+        "\tLSH\t%o,1\n"
+        "\tIOR\t%o,%o\n"
+        "\tAND\t%o,[777777777777]\n"
+        /* if rem < den, do not subtract */
+        "\tMOVE\t%o,%o\n"
+        "\tTLC\t%o,400000\n"
+        "\tMOVE\t%o,%o\n"
+        "\tTLC\t%o,400000\n"
+        "\tCAML\t%o,%o\n"
+        "\t JRST\t%%DIDIV%dHC\n"
+        "\tJRST\t%%DIDIV%dNS\n"
+        "%%DIDIV%dHC:\n"
+        "\tCAME\t%o,%o\n"
+        "\t JRST\t%%DIDIV%dSUB\n"
+        "\tCAML\t%o,%o\n"
+        "\t JRST\t%%DIDIV%dSUB\n"
+        "\tJRST\t%%DIDIV%dNS\n"
+        "%%DIDIV%dSUB:\n"
+        "\tSUB\t%o,%o\n"
+        "\tJUMPGE\t%o,%%DIDIV%dSB0\n"
+        "\tADD\t%o,[400000000000]\n"
+        "\tSUBI\t%o,1\n"
+        "%%DIDIV%dSB0:\n"
+        "\tSUB\t%o,%o\n"
+        "\tIORI\t%o,1\n"
+        "%%DIDIV%dNS:\n"
+        "\tSOJG\t%o,%%DIDIV%dL\n",
+        nlo, dlo,
+        qhi, qlo,
+        rhi, rlo,
+        cnt,
+        lab,
+        tmp1, qlo,
+        tmp1,
+        tmp1,
+        qlo,
+        qlo,
+        qhi,
+        qhi, tmp1,
+        qhi,
+        tmp2, nhi,
+        tmp2,
+        tmp2,
+        tmp1, nlo,
+        tmp1,
+        tmp1,
+        nlo,
+        nlo,
+        nhi,
+        nhi, tmp1,
+        nhi,
+        tmp1, rlo,
+        tmp1,
+        tmp1,
+        rlo,
+        rlo,
+        rlo, tmp2,
+        rhi,
+        rhi, tmp1,
+        rhi,
+        tmp1, rhi,
+        tmp1,
+        tmp2, dhi,
+        tmp2,
+        tmp1, tmp2,
+        lab,
+        lab,
+        lab,
+        tmp1, tmp2,
+        lab,
+        rlo, dlo,
+        lab,
+        lab,
+        lab,
+        rlo, dlo,
+        rlo, lab,
+        rlo,
+        rhi,
+        lab,
+        rhi, dhi,
+        qlo,
+        lab,
+        cnt, lab);
+        }
+    codestr(buf, n);
+
+    if (is_signed)
+        {
+        if (wantmod)
+            {
+            n = sprintf(buf,
+                "\tJUMPE\t%o,%%DIDIV%dMR\n"
+                "\tMOVN\t%o,%o\n"
+                "\tSKIPE\t%o\n"
+                "\tSUBI\t%o,1\n"
+                "\tMOVN\t%o,%o\n"
+                "\tAND\t%o,[377777777777]\n"
+                "%%DIDIV%dMR:\n",
+                sgn, lab,
+                rhi, rhi,
+                rlo,
+                rhi,
+                rlo, rlo,
+                rlo,
+                lab);
+            codestr(buf, n);
+            }
+        else
+            {
+            n = sprintf(buf,
+                "\tJUMPE\t%o,%%DIDIV%dMQ\n"
+                "\tMOVN\t%o,%o\n"
+                "\tSKIPE\t%o\n"
+                "\tSUBI\t%o,1\n"
+                "\tMOVN\t%o,%o\n"
+                "\tAND\t%o,[377777777777]\n"
+                "%%DIDIV%dMQ:\n",
+                sgn, lab,
+                qhi, qhi,
+                qlo,
+                qhi,
+                qlo, qlo,
+                qlo,
+                lab);
+            codestr(buf, n);
+            }
+        }
+
+    n = sprintf(buf,
+        "\tMOVE\t%o,%o\n"
+        "\tMOVE\t%o,%o\n",
+        vrreal(r1), (wantmod ? rhi : qhi),
+        vrreal(VR2(r1)), (wantmod ? rlo : qlo));
+    codestr(buf, n);
+
+    vrfree(r2);
+    return r1;
+}
+
+/* 71-bit DImode negation in place (negdi2 / __negdi2). */
+static void
+gdimodeneg(VREG *r)
+{
+    int hi, lo;
+    char buf[160];
+    int n;
+
+    (void) vrstoreal(r, VR2(r));
+    hi = vrreal(r);
+    lo = vrreal(VR2(r));
+
+    /* Negate high36:low35 in place.  The high word needs one extra
+    ** decrement exactly when the low 35-bit word is nonzero.  Masking the
+    ** negated low word supplies modulo-2^35 reduction without a scratch AC. */
+    n = sprintf(buf,
+	"\tMOVN\t%o,%o\n"
+	"\tSKIPE\t%o\n"
+	"\tSUBI\t%o,1\n"
+	"\tMOVN\t%o,%o\n"
+	"\tAND\t%o,[0377777777777]\n",
+	hi, hi,
+	lo,
+	hi,
+	lo, lo,
+	lo);
+    codestr(buf, n);
+}
+
+/* 71-bit DImode bitwise and/or/xor: independent ops on both words (anddi_reg_reg). */
+static VREG *
+gdimodebitwise(int op, VREG *r1, VREG *r2)
+{
+    int r1hi, r1lo, r2hi, r2lo;
+    const char *mn;
+    char buf[128];
+    int n;
+
+    /* Bitwise DImode operations need no scratch AC.  Preserve already
+    ** resident, non-overlapping pairs instead of spilling every live value.
+    ** Fall back to the historical path when either pair is spilled or the
+    ** physical pairs overlap. */
+    if (!(r1->Vrflags & VRF_SPILLED)
+      && !(VR2(r1)->Vrflags & VRF_SPILLED)
+      && !(r2->Vrflags & VRF_SPILLED)
+      && !(VR2(r2)->Vrflags & VRF_SPILLED))
+        {
+        r1hi = vrreal(r1);
+        r1lo = vrreal(VR2(r1));
+        r2hi = vrreal(r2);
+        r2lo = vrreal(VR2(r2));
+        if (r1hi == r2hi || r1hi == r2lo
+          || r1lo == r2hi || r1lo == r2lo)
+            r1hi = 0;
+        }
+    else
+        r1hi = 0;
+
+    if (r1hi == 0)
+        {
+        vrallspill();
+        (void) vrstoreal(r1, VR2(r1));
+        (void) vrstoreal(r2, VR2(r2));
+        (void) vrstoreal(r2, r1);
+
+        r1hi = vrreal(r1);
+        r1lo = vrreal(VR2(r1));
+        r2hi = vrreal(r2);
+        r2lo = vrreal(VR2(r2));
+        }
+
+    switch (op)
+	{
+	case Q_ANDT:
+	case Q_ASAND:
+	    mn = "AND";
+	    break;
+	case Q_OR:
+	case Q_ASOR:
+	    mn = "IOR";
+	    break;
+	case Q_XORT:
+	case Q_ASXOR:
+	    mn = "XOR";
+	    break;
+	default:
+	    int_error("gdimodebitwise: bad op %d", op);
+	    mn = "AND";
+	}
+
+    n = sprintf(buf,
+	"\t%s\t%o,%o\n"
+	"\t%s\t%o,%o\n",
+	mn, r1hi, r2hi,
+	mn, r1lo, r2lo);
+    codestr(buf, n);
+
+    vrfree(r2);
+    return r1;
+}
+
+/* 71-bit DImode ones-complement (~) on both words (onecmpldi_reg). */
+static void
+gdimodecompl(VREG *r)
+{
+    int hi, lo;
+    char buf[64];
+    int n;
+
+    (void) vrstoreal(r, VR2(r));
+    hi = vrreal(r);
+    lo = vrreal(VR2(r));
+    /* Both words carry the sign bit in the GCC ABI representation.
+    ** Complement both complete words so ~(DImode)0 becomes (-1, -1). */
+    n = sprintf(buf,
+        "\tSETCA\t%o,\n"
+        "\tSETCA\t%o,\n",
+        hi, lo);
+    codestr(buf, n);
+}
+
+/* 71-bit DImode shift via LSHC/ASHC (ashldi3 / ashrdi3 / lshrdi3). */
+static VREG *
+gdimodeshift(int op, VREG *r1, VREG *r2, int ts)
+{
+    int hi, lo;
+    int shop;
+    int direct_ashc = 0;
+    char buf[384];
+    int n;
+
+    (void) vrstoreal(r1, VR2(r1));
+    (void) vrtoreal(r2);
+    hi = vrreal(r1);
+    lo = vrreal(VR2(r1));
+
+    shop = P_LSHC;
+    switch (op)
+        {
+        case Q_LSHFT:
+        case Q_ASLSH:
+            break;
+        case Q_RSHFT:
+        case Q_ASRSH:
+            code0(P_MOVN, r2, r2); /* same as garithop scalar >> */
+            if (ts != TS_ULONGLONG)
+                {
+                shop = P_ASHC;
+                direct_ashc = 1;
+                }
+            break;
+        default:
+            int_error("gdimodeshift: bad op %d", op);
+        }
+
+    /* KCC DImode is a canonical high36:low35 pair.  PDP-10 ASHC already
+    ** treats its low accumulator as a 35-bit continuation for arithmetic
+    ** right shifts, so signed right shift can operate on that form directly.
+    ** LSHC instead sees a contiguous 72-bit pair; left shifts and unsigned
+    ** right shifts therefore need a temporary representation conversion.
+    */
+    if (!direct_ashc)
+        {
+        n = sprintf(buf,
+            "\tTLZ\t%o,0400000\n"
+            "\tTRNE\t%o,1\n"
+            "\t TLO\t%o,0400000\n"
+            "\tLSH\t%o,-1\n",
+            lo,
+            hi,
+            lo,
+            hi);
+        codestr(buf, n);
+        }
+
+    code4(shop, r1, r2);
+
+    hi = vrreal(r1);
+    lo = vrreal(VR2(r1));
+    if (direct_ashc)
+        {
+        n = sprintf(buf,
+            "\tAND\t%o,[0377777777777]\n",
+            lo);
+        }
+    else
+        {
+        n = sprintf(buf,
+            "\tLSH\t%o,1\n"
+            "\tJUMPGE\t%o,.+2\n"
+            "\t TRO\t%o,1\n"
+            "\tAND\t%o,[0377777777777]\n",
+            hi,
+            lo,
+            hi,
+            lo);
+        }
+    codestr(buf, n);
+    vrfree(r2);
+    return r1;
+}
+
 /* GBOOLEAN - Generate code for boolean expressions
 **	jump to false label if expr not true
 **	reverse sense of test if reverse bit set
@@ -512,6 +2179,155 @@ gand(NODE *n, SYMBOL *false, int reverse)
     gboolean(n->Nright, false, reverse);
 }
 
+
+/* GBOOLOPBASE - Map a relational tree operator to its CAM skip form. */
+static int
+gboolopbase(int nop)
+{
+    switch (nop) {
+    case Q_EQUAL: return P_CAM+POF_ISSKIP+POS_SKPE;
+    case Q_NEQ:   return P_CAM+POF_ISSKIP+POS_SKPN;
+    case Q_LEQ:   return P_CAM+POF_ISSKIP+POS_SKPLE;
+    case Q_GEQ:   return P_CAM+POF_ISSKIP+POS_SKPGE;
+    case Q_LESS:  return P_CAM+POF_ISSKIP+POS_SKPL;
+    case Q_GREAT: return P_CAM+POF_ISSKIP+POS_SKPG;
+    default:
+        int_error("gboolop: bad op %d", nop);
+        return P_CAM+POF_ISSKIP+POS_SKPE;
+    }
+}
+
+/* GBOOLMASKZERO - Emit a direct halfword test for (value & mask) ==/!= 0. */
+static int
+gboolmaskzero(NODE *n, int op, int reverse)
+{
+    NODE *a, *v, *mc;
+    INT mask, low, high;
+    VREG *r;
+
+    if (n->Nop != Q_EQUAL && n->Nop != Q_NEQ)
+        return 0;
+    a = v = mc = NULL;
+    if (n->Nright && (n->Nright->Nop == N_ICONST
+      || n->Nright->Nop == N_PCONST) && n->Nright->Niconst == 0)
+        a = n->Nleft;
+    else if (n->Nleft && (n->Nleft->Nop == N_ICONST
+      || n->Nleft->Nop == N_PCONST) && n->Nleft->Niconst == 0)
+        a = n->Nright;
+
+    if (a && a->Nop == Q_ANDT) {
+        if (a->Nright && a->Nright->Nop == N_ICONST) {
+            v = a->Nleft;
+            mc = a->Nright;
+        } else if (a->Nleft && a->Nleft->Nop == N_ICONST) {
+            v = a->Nright;
+            mc = a->Nleft;
+        }
+    }
+    if (!v || !mc || sizetype(v->Ntype) != 1 || tisbytepointer(v->Ntype))
+        return 0;
+
+    mask = mc->Niconst & ((INT)0777777777777);
+    low = mask & 0777777L;
+    high = (mask >> 18) & 0777777L;
+    if ((low == 0) == (high == 0))
+        return 0;
+
+    r = genexpr(v);
+    if (reverse)
+        op = revop(op);
+    if (high == 0)
+        code8(op ^ (P_CAM ^ P_TRN), r, low);
+    else
+        code8(op ^ (P_CAM ^ P_TLN), r, high);
+    vrfree(r);
+    return 1;
+}
+
+/* GBOOLZERO - Emit a direct CAI for a legal one-word zero comparison. */
+static int
+gboolzero(NODE *n, int op, int reverse)
+{
+    NODE *v;
+    VREG *r;
+    int zright;
+
+    v = NULL;
+    zright = 0;
+    if (n->Nright
+      && (n->Nright->Nop == N_ICONST || n->Nright->Nop == N_PCONST)
+      && n->Nright->Niconst == 0) {
+        v = n->Nleft;
+        zright = 1;
+    } else if ((n->Nop == Q_EQUAL || n->Nop == Q_NEQ)
+      && n->Nleft
+      && (n->Nleft->Nop == N_ICONST || n->Nleft->Nop == N_PCONST)
+      && n->Nleft->Niconst == 0)
+        v = n->Nright;
+
+    if (!v || sizetype(v->Ntype) != 1 || tisbytepointer(v->Ntype))
+        return 0;
+    if (!(((n->Nop == Q_EQUAL || n->Nop == Q_NEQ)
+          && (tisinteg(v->Ntype) || v->Ntype->Tspec == TS_PTR))
+       || (zright && tisinteg(v->Ntype) && !tisunsign(v->Ntype))))
+        return 0;
+
+    r = genexpr(v);
+    if (reverse)
+        op = revop(op);
+    code8(op ^ (P_CAM ^ P_CAI), r, 0);
+    vrfree(r);
+    return 1;
+}
+
+/* GDIMODEZERO - Emit a direct two-word zero test for == and !=. */
+static int
+gdimodezero(NODE *n, int op, int reverse)
+{
+    NODE *v;
+    VREG *r;
+    int hi, lo;
+
+    if (n->Nop != Q_EQUAL && n->Nop != Q_NEQ)
+        return 0;
+
+    v = NULL;
+    if (n->Nright
+      && (n->Nright->Nop == N_ICONST || n->Nright->Nop == N_PCONST)
+      && n->Nright->Niconst == 0)
+        v = n->Nleft;
+    else if (n->Nleft
+      && (n->Nleft->Nop == N_ICONST || n->Nleft->Nop == N_PCONST)
+      && n->Nleft->Niconst == 0)
+        v = n->Nright;
+
+    if (!v || !tisdimode(v->Ntype))
+        return 0;
+
+    r = genexpr(v);
+    vrunspillall();
+    (void) vrstoreal(r, VR2(r));
+    flushcode();
+    hi = vrreal(r);
+    lo = vrreal(VR2(r));
+    if (reverse)
+        op = revop(op);
+
+    /* The surrounding boolean generator expects the final instruction to
+    ** skip exactly when the relation is true.  If low is nonzero, bypass
+    ** the high-word equality test.  != needs TRNA to turn either nonzero
+    ** half into the final skip. */
+    code00(P_SKIP+POF_ISSKIP+POS_SKPN, lo, lo);
+    code00(P_SKIP+POF_ISSKIP+POS_SKPE, hi, hi);
+    if (op == (P_CAM+POF_ISSKIP+POS_SKPN)) {
+        flushcode();
+        codestr("\tTRNA\n", 6);
+    }
+    vrfree(r);
+    vrunspillall();
+    return 1;
+}
+
 /* GBOOLOP - Generate code for == > < <= >= !=
 **
 */
@@ -521,34 +2337,10 @@ gboolop(NODE *n, int reverse)
     int op;
     VREG *r1, *r2;
 
-    /*
-    ** Generate operands and skip instruction for the test
-    **
-    ** Note that floating point can use the same comparison
-    ** instructions as integers, so we don't have to test for them.
-    */
-
-    switch (n->Nop)
-	{
-	case Q_EQUAL:
-	    op = P_CAM+POF_ISSKIP+POS_SKPE;
-	    break;
-	case Q_NEQ:
-	    op = P_CAM+POF_ISSKIP+POS_SKPN;
-	    break;
-	case Q_LEQ:
-	    op = P_CAM+POF_ISSKIP+POS_SKPLE;
-	    break;
-	case Q_GEQ:
-	    op = P_CAM+POF_ISSKIP+POS_SKPGE;
-	    break;
-	case Q_LESS:
-	    op = P_CAM+POF_ISSKIP+POS_SKPL;
-	    break;
-	case Q_GREAT:
-	    op = P_CAM+POF_ISSKIP+POS_SKPG;
-	    break;
-	}
+    op = gboolopbase(n->Nop);
+    if (gboolmaskzero(n, op, reverse) || gboolzero(n, op, reverse)
+      || gdimodezero(n, op, reverse))
+        return;
 
     /* May need to munch on char pointers to get into comparable form */
     switch (n->Nop)
@@ -557,8 +2349,26 @@ gboolop(NODE *n, int reverse)
 	case Q_GEQ:
 	case Q_LESS:
 	case Q_GREAT:
-	    if (tisunsign(n->Nleft->Ntype))	/* If operands are unsigned */
+	    if (tisunsign(n->Nleft->Ntype) && !tisdimode(n->Nleft->Ntype))
 		{
+		/* A constant right operand can be biased at compile time.
+		** Avoid materializing it in a second AC merely to toggle the
+		** sign bit before CAM.  Keep the variable operand on the
+		** established TLC path so unsigned ordering remains signed CAM
+		** ordering after the bias.
+		*/
+		if (n->Nright->Nop == N_ICONST)
+		    {
+		    INT c = n->Nright->Niconst & ((INT)0777777777777);
+
+		    r1 = genexpr(n->Nleft);
+		    code8(P_TLC, r1, 0400000L);
+		    if (reverse)
+			op = revop(op);
+		    code1(op, r1, c ^ ((INT)0400000000000));
+		    vrfree(r1);
+		    return;
+		    }
 		r1 = genexpr(n->Nleft);		/* Get operand 1 */
 		code8(P_TLC, r1, 0400000L);	/* and flip sign bit */
 		r2 = genexpr(n->Nright);	/* Ditto for operand 2 */
@@ -596,6 +2406,7 @@ gboolop(NODE *n, int reverse)
 		}
 	    /* Else just fall through for normal expression evaluation */
 
+	/* FALLTHROUGH */
 	case Q_EQUAL:
 	case Q_NEQ:
 	    r1 = genexpr (n->Nleft);	/* calculate values to compare */
@@ -613,6 +2424,194 @@ gboolop(NODE *n, int reverse)
     ** to look at both pairs of words, so we use a cascaded pair or
     ** trio of comparisons.
     */
+
+    if (tisdimode(n->Nleft->Ntype))
+	{
+	int unsig = tisunsign(n->Nleft->Ntype);
+
+	vrunspillall();
+	switch (op)
+	    {
+	    case P_CAM+POF_ISSKIP+POS_SKPE:
+		{
+		int lhi, llo, rhi, rlo;
+
+		(void) vrstoreal(r1, VR2(r1));
+		(void) vrstoreal(r2, VR2(r2));
+		flushcode();
+		lhi = vrreal(r1);
+		llo = vrreal(VR2(r1));
+		rhi = vrreal(r2);
+		rlo = vrreal(VR2(r2));
+		code00(P_CAM+POF_ISSKIP+POS_SKPN, llo, rlo);
+		code00(P_CAM+POF_ISSKIP+POS_SKPE, lhi, rhi);
+		vrfree(r1);
+		vrfree(r2);
+		vrunspillall();
+		return;
+		}
+	    case P_CAM+POF_ISSKIP+POS_SKPN:
+		{
+		int lhi, llo, rhi, rlo;
+
+		(void) vrstoreal(r1, VR2(r1));
+		(void) vrstoreal(r2, VR2(r2));
+		flushcode();
+		lhi = vrreal(r1);
+		llo = vrreal(VR2(r1));
+		rhi = vrreal(r2);
+		rlo = vrreal(VR2(r2));
+		code00(P_CAM+POF_ISSKIP+POS_SKPN, llo, rlo);
+		code00(P_CAM+POF_ISSKIP+POS_SKPE, lhi, rhi);
+		flushcode();
+		codestr("\tTRNA\n", 6);
+		vrfree(r1);
+		vrfree(r2);
+		vrunspillall();
+		return;
+		}
+	    case P_CAM+POF_ISSKIP+POS_SKPL:
+	    case P_CAM+POF_ISSKIP+POS_SKPLE:
+	    case P_CAM+POF_ISSKIP+POS_SKPG:
+	    case P_CAM+POF_ISSKIP+POS_SKPGE:
+		if (!unsig && gdimode_signed_relop_skip(r1, r2, op))
+		    return;
+		if (unsig && gdimode_unsigned_relop_skip(r1, r2, op))
+		    return;
+		{
+		int llo, rlo, t1, t2, th1, th2;
+		int avoid[8], navoid;
+		char buf[128];
+		int n, lcmp, hcmp, h2cmp;
+		int savehi, needstk, usestk;
+		int lhi;
+
+		savehi = (!unsig
+		    && (op == (P_CAM+POF_ISSKIP+POS_SKPG)
+		     || op == (P_CAM+POF_ISSKIP+POS_SKPGE)));
+
+		(void) vrstoreal(r1, VR2(r1));
+		flushcode();
+		llo = vrreal(VR2(r1));
+		lhi = vrreal(r1);
+		navoid = 0;
+		avoid[navoid++] = lhi;
+		avoid[navoid++] = llo;
+		t1 = gdimode_pick_ac(avoid, navoid);
+		n = sprintf(buf,
+		    "\tMOVE\t%o,%o\n"
+		    "\tTLC\t%o,400000\n",
+		    t1, llo, t1);
+		codestr(buf, n);
+
+		(void) vrstoreal(r2, VR2(r2));
+		flushcode();
+		rlo = vrreal(VR2(r2));
+		needstk = (vrreal(VR2(r1)) != llo) || (vrreal(r1) != lhi);
+		usestk = needstk;
+		navoid = 0;
+		avoid[navoid++] = vrreal(r1);
+		avoid[navoid++] = vrreal(r2);
+		avoid[navoid++] = t1;
+		avoid[navoid++] = rlo;
+		if (usestk)
+		    {
+		    avoid[navoid++] = vrreal(VR2(r1));
+		    avoid[navoid++] = vrreal(VR2(r2));
+		    th1 = gdimode_pick_ac(avoid, navoid);
+		    avoid[navoid++] = th1;
+		    th2 = gdimode_pick_ac(avoid, navoid);
+		    avoid[navoid++] = th2;
+		    }
+		t2 = gdimode_pick_ac(avoid, navoid);
+		n = sprintf(buf,
+		    "\tMOVE\t%o,%o\n"
+		    "\tTLC\t%o,400000\n",
+		    t2, rlo, t2);
+		codestr(buf, n);
+
+		if (usestk)
+		    {
+		    n = sprintf(buf,
+			"\tMOVE\t%o,37777777777(17)\n"
+			"\tMOVE\t%o,0(17)\n",
+			th1, th2);
+		    codestr(buf, n);
+		    }
+
+		switch (op)
+		    {
+		    case P_CAM+POF_ISSKIP+POS_SKPL:
+			hcmp = unsig ? P_CAM+POF_ISSKIP+POS_SKPL
+				     : P_CAM+POF_ISSKIP+POS_SKPLE;
+			lcmp = P_CAM+POF_ISSKIP+POS_SKPG;
+			h2cmp = P_CAM+POF_ISSKIP+POS_SKPN;
+			break;
+		    case P_CAM+POF_ISSKIP+POS_SKPLE:
+			hcmp = P_CAM+POF_ISSKIP+POS_SKPL;
+			lcmp = P_CAM+POF_ISSKIP+POS_SKPG;
+			h2cmp = P_CAM+POF_ISSKIP+POS_SKPLE;
+			break;
+		    case P_CAM+POF_ISSKIP+POS_SKPG:
+			hcmp = P_CAM+POF_ISSKIP+POS_SKPG;
+			lcmp = P_CAM+POF_ISSKIP+POS_SKPLE;
+			h2cmp = P_CAM+POF_ISSKIP+POS_SKPGE;
+			break;
+		    default:
+			hcmp = P_CAM+POF_ISSKIP+POS_SKPG;
+			lcmp = P_CAM+POF_ISSKIP+POS_SKPL;
+			h2cmp = P_CAM+POF_ISSKIP+POS_SKPGE;
+			break;
+		    }
+
+		if (savehi && op == (P_CAM+POF_ISSKIP+POS_SKPGE))
+		    {
+		    if (needstk)
+			code00(P_CAM+POF_ISSKIP+POS_SKPLE, th2, th1);
+		    else
+			code00(P_CAM+POF_ISSKIP+POS_SKPLE,
+			    vrreal(r2), vrreal(r1));
+		    }
+		else if (savehi && op == (P_CAM+POF_ISSKIP+POS_SKPG))
+		    {
+		    if (needstk)
+			code00(P_CAM+POF_ISSKIP+POS_SKPG, th1, th2);
+		    else
+			code0(P_CAM+POF_ISSKIP+POS_SKPG, r1, r2);
+		    }
+		else if (!unsig && hcmp == (P_CAM+POF_ISSKIP+POS_SKPLE))
+		    code00(hcmp, vrreal(r2), vrreal(r1));
+		else if (!unsig && hcmp == (P_CAM+POF_ISSKIP+POS_SKPG) && needstk)
+		    code00(hcmp, th2, th1);
+		else if (!unsig && hcmp == (P_CAM+POF_ISSKIP+POS_SKPG))
+		    code0(hcmp, r1, r2);
+		else
+		    code0(hcmp, r1, r2);
+		if (!unsig && op == (P_CAM+POF_ISSKIP+POS_SKPL))
+		    code00(P_CAM+POF_ISSKIP+POS_SKPN, vrreal(r2), vrreal(r1));
+		code00(lcmp, t1, t2);
+		if (savehi && needstk)
+		    {
+		    code00(P_CAM+POF_ISSKIP+POS_SKPN, th1, th2);
+		    code00(h2cmp, th1, th2);
+		    }
+		else
+		    code0(h2cmp, r1, r2);
+		}
+		vrfree(r1);
+		vrfree(r2);
+		vrunspillall();
+		return;
+	    }
+	(void) vrstoreal(r1, VR2(r1));
+	(void) vrstoreal(r2, VR2(r2));
+	flushcode();
+	code0(op, r1, r2);
+	vrfree(r1);
+	vrfree(r2);
+	vrunspillall();
+	return;
+	}
 
     if (   n->Nleft->Ntype->Tspec == TS_DOUBLE
 	|| n->Nleft->Ntype->Tspec == TS_LNGDBL )
@@ -645,9 +2644,16 @@ gboolop(NODE *n, int reverse)
 		code0(P_CAM+POF_ISSKIP+POS_SKPN, VR2(r1), VR2(r2));
 		break;
 	    case P_CAM+POF_ISSKIP+POS_SKPN:
-		code0(P_CAM+POF_ISSKIP+POS_SKPN, VR2(r1), VR2(r2));
-		code0(P_CAM+POF_ISSKIP+POS_SKPE, r1, r2);
-		code5(P_TRN+POF_ISSKIP+POS_SKPA, 0);
+		/*
+		** Overall skip for double != must be true if either word
+		** differs.  Keep the final TRNA out of the peepholer,
+		** otherwise the following JRST/MOVEI pair can be folded into
+		** a SKIPA shape that skips the update on the true path.
+		*/
+		code0(P_CAM+POF_ISSKIP+POS_SKPN, r1, r2);
+		code0(P_CAM+POF_ISSKIP+POS_SKPE, VR2(r1), VR2(r2));
+		flushcode();
+		codestr("\tTRNA\n", 6);
 		vrfree(r1);
 		return;
 	    }
@@ -656,6 +2662,89 @@ gboolop(NODE *n, int reverse)
     vrfree(r1);
 }
 
+/* GASSIGNABS - Handle direct absolute-value assignment forms. */
+static int
+gassignabs(NODE *n, NODE *nod, INT siz, int ptr, int volat, int lconv,
+    VREG **result)
+{
+    NODE *absid;
+    VREG *r, *ra;
+
+    absid = gabsquery_id(n->Nright);
+    if (!absid || siz != 1 || ptr || volat || lconv != CAST_NONE
+      || n->Nascast != CAST_NONE || Register_Id(nod) || sideffp(nod))
+        return 0;
+
+    if (gsamepure(nod, absid)) {
+        r = vrget();
+        r->Vrtype = n->Ntype;
+        code4(P_MOVM + POF_BOTH, r, gaddress(nod));
+        *result = r;
+        return 1;
+    }
+    if (!(n->Nflag & NF_DISCARD))
+        return 0;
+
+    if (Register_Id(absid) && nod->Nop == N_PTR) {
+        ra = gaddress(nod);
+        code40(P_MOVMM, absid->Nid->Sreg, vrreal(ra), 0);
+        vrfree(ra);
+        *result = NULL;
+        return 1;
+    }
+    r = genexpr(absid);
+    code4(P_MOVMM, r, gaddress(nod));
+    vrfree(r);
+    *result = NULL;
+    return 1;
+}
+
+/* GASSIGNREG - Handle narrow word assignments whose RHS is a register var. */
+static int
+gassignreg(NODE *n, NODE *nod, INT siz, int ptr, int volat, int lconv,
+    VREG **result)
+{
+    VREG *r, *ra;
+    SYMBOL *msym;
+    int c, src, ar;
+
+    if (!optgen || siz != 1 || ptr || volat || lconv != CAST_NONE
+      || n->Nascast != CAST_NONE || !Register_Id(n->Nright))
+        return 0;
+
+    if ((n->Nflag & NF_DISCARD) && nod->Nop == Q_IDENT
+      && !tisanyvolat(n->Nright->Ntype)) {
+        c = nod->Nid->Sclass;
+        if (c == SC_ISTATIC || c == SC_XEXTREF || c == SC_EXLINK
+          || c == SC_EXTDEF || c == SC_EXTREF || c == SC_INTDEF
+          || c == SC_INTREF || c == SC_INLINK) {
+            msym = nod->Nid;
+            if (c == SC_ISTATIC)
+                msym = msym->Ssym;
+            codemdx(P_MOVEM, n->Nright->Nid->Sreg, msym, 0, 0);
+            *result = NULL;
+            return 1;
+        }
+    }
+
+    if (nod->Nop != N_PTR || sideffp(nod))
+        return 0;
+    src = n->Nright->Nid->Sreg;
+    ra = gaddress(nod);
+    ar = vrtoreal(ra);
+    code40(P_MOVEM, src, ar, 0);
+    vrfree(ra);
+    if (n->Nflag & NF_DISCARD) {
+        *result = NULL;
+        return 1;
+    }
+    r = (n->Nflag & NF_RETEXPR) ? vrretget() : vrget();
+    r->Vrtype = n->Ntype;
+    code00(P_MOVE, r->Vrloc, src);
+    *result = r;
+    return 1;
+}
+
 /* GASSIGN - Generate assignment expression.
 **	Various tricky stuff involved.
 ** Note the hair needed for handling compound assignment, because the f*ed-up
@@ -670,7 +2759,7 @@ gboolop(NODE *n, int reverse)
 static VREG *
 gassign(NODE *n)
 {
-    VREG *r1, *r2, *ra;
+    VREG *r1, *r2, *ra = NULL;
     int ptr, savaddr;
     INT siz;
     NODE *nod;		/* Points to lvalue (without conversion) */
@@ -700,9 +2789,111 @@ gassign(NODE *n)
     if ((volat = tisanyvolat(nod->Ntype)) != 0)
 	flushcode();		/* Barf, foil peepholer if volatile obj */
 
+    if (n->Nop == Q_ASGN && maybitptrderef(nod))
+        {
+        r1 = genexpr(n->Nright);
+        r1 = gmaybitstore(r1, nod);
+        if (volat)
+            flushcode();
+        return r1;
+        }
+
     if (n->Nop == Q_ASGN)	/* Simple assignment? */
 	{
+        if (tispacked(n->Ntype) && (n->Ntype->Tspec == TS_STRUCT || n->Ntype->Tspec == TS_UNION))
+            {
+            if (!(n->Nflag & NF_DISCARD))
+                error("value of GNU packed aggregate assignment is not yet supported");
+            r1 = gpackedcopy(nod, n->Nright, n->Ntype);
+            if (volat)
+                flushcode();
+            return r1;
+            }
+
+        if (gassignabs(n, nod, siz, ptr, volat, lconv, &r1))
+            return r1;
+
+        /* Two-word aggregate values may be materialized in AC1/AC2.
+        ** Preserve the destination address before evaluating the RHS, since
+        ** the destination itself may be an ABI argument resident in AC1.
+        ** C does not impose an evaluation order between these two operands.
+        */
+        if (siz == 2 && !ptr && !Register_Id(nod)
+          && (n->Ntype->Tspec == TS_STRUCT || n->Ntype->Tspec == TS_UNION))
+            {
+            int ar;
+
+            ra = gaddress(nod);
+            code0(P_PUSH, VR_SP, ra);
+            ++stackoffset;
+            r1 = genexpr(n->Nright);
+            ra = vrget();
+            ra->Vrtype = nod->Ntype;
+            ar = vrstoreal(ra, r1);
+            code00(P_POP, R_SP, ar);
+            --stackoffset;
+            r1 = stomem(r1, ra, siz, 0);
+            if (volat)
+                flushcode();
+            return r1;
+            }
+
+        if (gassignreg(n, nod, siz, ptr, volat, lconv, &r1))
+            return r1;
+
 	r1 = genexpr(n->Nright);	/* Generate value first */
+        if (tisinteg(nod->Ntype)
+          && (((nod->Nop == Q_MEMBER || nod->Nop == Q_DOT)
+               && (packedcross(nod->Nxoff) || packedbit(nod->Nxoff) || packedbitscalar(nod->Nxoff)))
+              || packedptrderef(nod) || bitptrmember(nod)))
+            {
+            r1 = gpackedstore(r1, nod);
+            if (volat)
+                flushcode();
+            return r1;
+            }
+	if (siz == 2 && r1 && r1->Vrtype && tisdimode(r1->Vrtype)
+	  && !Register_Id(nod) && !ptr)
+	    {
+	    int ar, hi, lo, nout, aflags;
+	    char buf[160];
+
+	    code0(P_PUSH, VR_SP, r1);
+	    code0(P_PUSH, VR_SP, VR2(r1));
+	    stackoffset += 2;
+	    vrfree(r1);
+	    ra = gaddress(nod);
+	    ar = vrtoreal(ra);
+	    aflags = ra->Vrflags;
+	    ra->Vrflags |= VRF_LOCK;
+	    r2 = vrdget();
+	    ra->Vrflags = aflags;
+	    r2->Vrtype = n->Ntype;
+	    VR2(r2)->Vrtype = n->Ntype;
+	    hi = vrreal(r2);
+	    lo = vrreal(VR2(r2));
+	    flushcode();
+	    if (tgcpu >= TGCPU_KI)
+		nout = sprintf(buf,
+		    "\tDMOVE\t%o,-1(17)\n"
+		    "\tSUB\t17,[2,,2]\n"
+		    "\tDMOVEM\t%o,0(%o)\n",
+		    hi, hi, ar);
+	    else
+		nout = sprintf(buf,
+		    "\tMOVE\t%o,-1(17)\n"
+		    "\tMOVE\t%o,0(17)\n"
+		    "\tSUB\t17,[2,,2]\n"
+		    "\tMOVEM\t%o,0(%o)\n"
+		    "\tMOVEM\t%o,1(%o)\n",
+		    hi, lo, hi, ar, lo, ar);
+	    codestr(buf, nout);
+	    stackoffset -= 2;
+	    vrfree(ra);
+	    if (volat)
+		flushcode();
+	    return r2;
+	    }
 	/* Special check for doing IDPB.  Safer to do here instead of
 	** in peephole, at least until peepholer fixed to allow keeping
 	** an index reg around!
@@ -739,11 +2930,32 @@ gassign(NODE *n)
 	    return ra;
 	    }
 	else
-	    r1 = stomem(r1,		/* Store the value */
-		gaddress(nod),		/* into address of lvalue */
-		/* Operand and operation types are same, so siz is correct */
-		siz,
-		ptr);			/* and flag saying if addr is ptr */
+	    {
+            /* A plain one-word automatic object already has a known
+            ** SP-relative address.  Store to it directly so address
+            ** materialization cannot reuse the physical AC holding r1.
+            */
+            if (siz == 1 && !ptr && lconv == CAST_NONE
+              && nod->Nop == Q_IDENT
+              && (nod->Nid->Sclass == SC_AUTO || nod->Nid->Sclass == SC_ARG))
+                {
+                INT off;
+
+                if (nod->Nid->Sclass == SC_AUTO)
+                    off = (nod->Nid->Svalue + 1) + fnframesave - stackoffset;
+                else
+                    off = (-nod->Nid->Svalue) - stackoffset;
+                codemdx(P_MOVEM, vrtoreal(r1), (SYMBOL *)NULL, off, R_SP);
+                }
+            else
+                r1 = stomem(r1,		/* Store the value */
+                    gaddress(nod),		/* into address of lvalue */
+                    /* Operand and operation types are same, so siz is correct */
+                    siz,
+                    ptr);			/* and flag saying if addr is ptr */
+	    if (n->Nflag & NF_DISCARD)
+		foldhalfstore();
+	    }
 	if (volat)
 	    flushcode();
 	return r1;
@@ -752,9 +2964,124 @@ gassign(NODE *n)
     /* Some compound assignment type.
     ** First, generate the right operand, including any conversions.
     */
+    vrunspillall();
+
+    /* A terminal commutative compound assignment with a register RHS can
+    ** use that physical AC as the PDP-10 BOTH result directly.  The lvalue
+    ** address is consumed before the return copy, so no general liveness
+    ** machinery is required.
+    **
+    **     return (*p += x) -> ADDB x,0(p); MOVE 1,x
+    */
+    if (optgen && (n->Nflag & NF_RETEXPR) && siz == 1 && !ptr && !volat
+      && lconv == CAST_NONE && n->Nascast == CAST_NONE
+      && Register_Id(n->Nright) && nod->Nop == N_PTR
+      && !sideffp(nod)
+      && (n->Nleft->Ntype->Tspec == TS_INT
+       || n->Nleft->Ntype->Tspec == TS_UINT
+       || n->Nleft->Ntype->Tspec == TS_LONG
+       || n->Nleft->Ntype->Tspec == TS_ULONG)) {
+        int mop, src, ar;
+
+        switch (n->Nop) {
+        case Q_ASPLUS: mop = P_ADD; break;
+        case Q_ASAND:  mop = P_AND; break;
+        case Q_ASOR:   mop = P_IOR; break;
+        case Q_ASXOR:  mop = P_XOR; break;
+        default:       mop = 0; break;
+        }
+        if (mop != 0) {
+            src = n->Nright->Nid->Sreg;
+            ra = gaddress(nod);
+            ar = vrtoreal(ra);
+            code40(mop + POF_BOTH, src, ar, 0);
+            vrfree(ra);
+            r1 = vrretget();
+            r1->Vrtype = n->Ntype;
+            code00(P_MOVE, r1->Vrloc, src);
+            return r1;
+        }
+    }
+
     r2 = (n->Ntype->Tspec == TS_PTR) ?		/* Doing pointer arith? */
 	gptraddend(n->Nleft->Ntype, n->Nright)	/* Operand for ptr arith */
 	: genexpr(n->Nright);			/* General-type operand */
+
+    if (tisinteg(nod->Ntype)
+      && (((nod->Nop == Q_MEMBER || nod->Nop == Q_DOT)
+           && (packedcross(nod->Nxoff) || packedbit(nod->Nxoff) || packedbitscalar(nod->Nxoff)))
+          || packedptrderef(nod) || bitptrmember(nod) || maybitptrderef(nod)))
+        {
+        if (sideffp(nod))
+            {
+            error("side effects in compound assignment of cross-word GNU packed member are not yet supported");
+            vrfree(r2);
+            return NULL;
+            }
+        r1 = maybitptrderef(nod) ? gmaybitload(nod) : gpackedload(nod);
+        if (lconv != CAST_NONE)
+            r1 = gcastr(lconv, r1, fromt, tot, nod);
+        r1 = garithop(n->Nop, r1, r2, n->Nleft->Ntype->Tspec);
+        if (n->Nascast != CAST_NONE)
+            r1 = gcastr(n->Nascast, r1, n->Nleft->Ntype, n->Ntype,
+                        (NODE *)NULL);
+        r1 = maybitptrderef(nod) ? gmaybitstore(r1, nod)
+                                  : gpackedstore(r1, nod);
+        if (volat)
+            flushcode();
+        return r1;
+        }
+
+    /* A discarded one-word compound assignment can use the PDP-10
+    ** memory-result form directly.  This avoids fetching the old value
+    ** into a second register and storing the result back afterwards:
+    **
+    **     MOVE  R,M          ADDB  S,M
+    **     ADD   R,S    ->
+    **     MOVEM R,M
+    **
+    ** Only commutative operations qualify.  Keep the case deliberately
+    ** narrow: no byte pointers, volatile objects, conversions, or lvalue
+    ** side effects.  The discarded-result flag proves that the updated
+    ** register value need not survive the operation.
+    */
+    if (optgen && (n->Nflag & NF_DISCARD) && siz == 1 && !ptr && !volat
+      && lconv == CAST_NONE && n->Nascast == CAST_NONE && !sideffp(nod)
+      && (n->Nleft->Ntype->Tspec == TS_INT
+       || n->Nleft->Ntype->Tspec == TS_UINT
+       || n->Nleft->Ntype->Tspec == TS_LONG
+       || n->Nleft->Ntype->Tspec == TS_ULONG)) {
+        int mop;
+
+        switch (n->Nop) {
+        case Q_ASPLUS: mop = P_ADD; break;
+        case Q_ASAND:  mop = P_AND; break;
+        case Q_ASOR:   mop = P_IOR; break;
+        case Q_ASXOR:  mop = P_XOR; break;
+        default:       mop = 0; break;
+        }
+        if (mop != 0) {
+            /* A register variable is a PDP-10 accumulator used as memory,
+            ** not 0(AC).  No address calculation is needed, so even a
+            ** computed RHS is safe here: the BOTH form updates the RHS AC
+            ** and the preserved accumulator in one instruction.
+            */
+            if (Register_Id(nod)) {
+                code14(mop + POF_BOTH, r2, nod->Nid->Sreg);
+                return r2;
+            }
+
+            /* For ordinary memory keep the direct form to leaf RHS values.
+            ** More complex expressions can leave a computed temporary live
+            ** across address generation/peephole processing.
+            */
+            if (n->Nright->Nop == Q_IDENT || n->Nright->Nop == N_ICONST
+              || n->Nright->Nop == N_PCONST) {
+                code4(mop + POF_BOTH, r2, gaddress(nod));
+                return r2;
+            }
+        }
+    }
 
     /* Then generate the left operand.  For the time being, the peephole
     ** optimizer is so screwed up that we can't keep the address around
@@ -826,6 +3153,90 @@ gassign(NODE *n)
     return r1;
 }
 
+/* GROTATE - Generate a native rotate for the canonical C rotate idiom.
+**
+** Match only the deliberately narrow, side-effect-free forms
+**
+**     (x << n) | (x >> (36 - n))
+**     (x << c) | (x >> (36 - c))
+**
+** where x and n are simple identifiers and x is unsigned.  Keeping this
+** check here avoids adding a new tree opcode or a general data-flow pass.
+** The source expression evaluates x twice, so folding is safe for a plain
+** identifier; volatile objects are excluded because their two reads are
+** observable.
+*/
+static VREG *
+grotate(NODE *n)
+{
+    NODE *ls, *rs, *lc, *rc, *var, *sub;
+    VREG *r1, *r2;
+    INT count;
+    int neg;
+
+    if (!optgen || n->Nop != Q_OR || sizetype(n->Ntype) != 1)
+        return NULL;
+
+    ls = n->Nleft;
+    rs = n->Nright;
+    if (ls && rs && ls->Nop == Q_RSHFT && rs->Nop == Q_LSHFT) {
+        NODE *t;
+
+        t = ls;
+        ls = rs;
+        rs = t;
+    }
+    if (!ls || !rs || ls->Nop != Q_LSHFT || rs->Nop != Q_RSHFT)
+        return NULL;
+    if (!ls->Nleft || !rs->Nleft
+      || ls->Nleft->Nop != Q_IDENT || rs->Nleft->Nop != Q_IDENT
+      || ls->Nleft->Nid != rs->Nleft->Nid
+      || !tisunsign(rs->Nleft->Ntype)
+      || sizetype(rs->Nleft->Ntype) != 1
+      || tisvolatile(ls->Nleft->Nid->Stype))
+        return NULL;
+
+    lc = ls->Nright;
+    rc = rs->Nright;
+    if (!lc || !rc)
+        return NULL;
+
+    if (lc->Nop == N_ICONST && rc->Nop == N_ICONST
+      && lc->Niconst >= 0 && lc->Niconst < TGSIZ_WORD
+      && rc->Niconst == TGSIZ_WORD - lc->Niconst) {
+        r1 = genexpr(ls->Nleft);
+        count = lc->Niconst;
+        code8(P_ROT, r1, count);
+        return r1;
+    }
+
+    if (lc->Nop == Q_IDENT) {
+        var = lc;
+        sub = rc;
+        neg = 0;
+    } else if (rc->Nop == Q_IDENT) {
+        var = rc;
+        sub = lc;
+        neg = 1;
+    } else
+        return NULL;
+
+    if (sub->Nop != Q_MINUS
+      || !sub->Nleft || sub->Nleft->Nop != N_ICONST
+      || sub->Nleft->Niconst != TGSIZ_WORD
+      || !sub->Nright || sub->Nright->Nop != Q_IDENT
+      || var->Nid != sub->Nright->Nid
+      || tisvolatile(var->Nid->Stype))
+        return NULL;
+
+    r1 = genexpr(ls->Nleft);
+    r2 = genexpr(var);
+    if (neg)
+        code0(P_MOVN, r2, r2);
+    code4(P_ROT, r1, r2);
+    return r1;
+}
+
 /* GBINARY - Generate code for binary operators.
 **
 */
@@ -833,6 +3244,454 @@ static VREG *
 gbinary(NODE *n)
 {
     VREG *r1, *r2;
+    NODE *masked, *maskconst, *inda, *indb, *indt;
+    static int p2lab, p2modlab;
+
+    if ((r1 = grotate(n)) != NULL)
+        return r1;
+
+    /* A DImode AND with a constant confined to the canonical 35-bit low
+    ** word does not need a second register pair.  This is the form produced
+    ** by unsigned remainder modulo a low-word power of two, and also covers
+    ** explicit masks.  Evaluate the variable operand once, clear its high
+    ** word, and apply the low mask directly. */
+    if (optgen && n->Nop == Q_ANDT && n->Ntype && tisdimode(n->Ntype)) {
+        NODE *val = NULL, *con = NULL;
+        INT chi, clo;
+
+        if (n->Nright && n->Nright->Nop == N_ICONST) {
+            val = n->Nleft;
+            con = n->Nright;
+        } else if (n->Nleft && n->Nleft->Nop == N_ICONST) {
+            val = n->Nright;
+            con = n->Nleft;
+        }
+        if (val && con) {
+            dimode_iconst_words(con, &chi, &clo);
+            if (chi == 0) {
+                int hi, lo;
+                char abuf[128];
+                int an;
+
+                r1 = genexpr(val);
+                (void) vrstoreal(r1, VR2(r1));
+                hi = vrreal(r1);
+                lo = vrreal(VR2(r1));
+                an = sprintf(abuf,
+                    "\tSETZ\t%o,\n"
+                    "\tAND\t%o,[%lo]\n",
+                    hi, lo, (long)clo);
+                codestr(abuf, an);
+                r1->Vrtype = n->Ntype;
+                return r1;
+            }
+        }
+    }
+
+    /* Unsigned division and remainder by a high-word power of two need
+    ** neither the restoring divider nor scratch ACs.  Division is a logical
+    ** pair shift.  Remainder keeps the low word and masks the high word to
+    ** the bits below the divisor. */
+    if (optgen && n->Ntype && n->Ntype->Tspec == TS_ULONGLONG
+      && (n->Nop == Q_DIV || n->Nop == Q_MOD)
+      && n->Nright && n->Nright->Nop == N_ICONST) {
+        INT chi, clo, mask;
+        int sh, hi, lo;
+        char abuf[128];
+        int an;
+
+        dimode_iconst_words(n->Nright, &chi, &clo);
+        sh = dimode_power2_exp(chi, clo);
+        if (sh >= 35 && sh <= 70) {
+            r1 = genexpr(n->Nleft);
+            (void) vrstoreal(r1, VR2(r1));
+            hi = vrreal(r1);
+            lo = vrreal(VR2(r1));
+            if (n->Nop == Q_DIV)
+                an = sprintf(abuf,
+                    "\tLSHC\t%o,-%o\n"
+                    "\tAND\t%o,[377777777777]\n",
+                    hi, sh, lo);
+            else if (sh == 35)
+                an = sprintf(abuf, "\tSETZ\t%o,\n", hi);
+            else {
+                mask = (((INT)1 << (sh - 35)) - 1)
+                     & dimode_hi36mask();
+                an = sprintf(abuf, "\tAND\t%o,[%lo]\n",
+                    hi, (long)mask);
+            }
+            codestr(abuf, an);
+            r1->Vrtype = n->Ntype;
+            return r1;
+        }
+    }
+
+    /* Signed division and remainder by a wide positive power of two use
+    ** the same magnitude-and-sign rules as the low-word forms.  The bias
+    ** or mask spans the complete canonical 36+35-bit pair, but still needs
+    ** no divider scratch ACs. */
+    if (optgen && n->Ntype && n->Ntype->Tspec == TS_LONGLONG
+      && (n->Nop == Q_DIV || n->Nop == Q_MOD)
+      && n->Nright && n->Nright->Nop == N_ICONST) {
+        INT chi, clo, himask;
+        int sh, negdiv;
+
+        dimode_iconst_words(n->Nright, &chi, &clo);
+        sh = dimode_power2_exp(chi, clo);
+        negdiv = 0;
+        if (sh < 0) {
+            sh = dimode_negative_power2_exp(chi, clo);
+            negdiv = 1;
+        }
+        if (sh >= 35 && sh <= 70) {
+            int hi, lo, lab;
+            char abuf[512];
+            int an;
+
+            himask = sh == 35 ? 0
+                : (((INT)1 << (sh - 35)) - 1) & dimode_hi36mask();
+            r1 = genexpr(n->Nleft);
+            (void) vrstoreal(r1, VR2(r1));
+            hi = vrreal(r1);
+            lo = vrreal(VR2(r1));
+            lab = n->Nop == Q_DIV ? p2lab++ : p2modlab++;
+            if (n->Nop == Q_DIV)
+                an = sprintf(abuf,
+                    "\tJUMPGE\t%o,%%DIWP%d\n"
+                    "\tADD\t%o,[377777777777]\n"
+                    "\tTLZE\t%o,400000\n"
+                    "\t ADDI\t%o,1\n"
+                    "\tADD\t%o,[%lo]\n"
+                    "%%DIWP%d:\n"
+                    "\tASHC\t%o,-%o\n"
+                    "\tAND\t%o,[377777777777]\n",
+                    hi, lab,
+                    lo,
+                    lo,
+                    hi,
+                    hi, (long)himask,
+                    lab,
+                    hi, sh,
+                    lo);
+            else
+                an = sprintf(abuf,
+                    "\tJUMPGE\t%o,%%DIWM%dP\n"
+                    "\tMOVN\t%o,%o\n"
+                    "\tSKIPE\t%o\n"
+                    "\t SUBI\t%o,1\n"
+                    "\tMOVN\t%o,%o\n"
+                    "\tAND\t%o,[377777777777]\n"
+                    "\tAND\t%o,[%lo]\n"
+                    "\tSKIPE\t%o\n"
+                    "\t SETO\t%o,\n"
+                    "\tMOVN\t%o,%o\n"
+                    "\tAND\t%o,[377777777777]\n"
+                    "\tJRST\t%%DIWM%dD\n"
+                    "%%DIWM%dP:\n"
+                    "\tAND\t%o,[%lo]\n"
+                    "%%DIWM%dD:\n",
+                    hi, lab,
+                    hi, hi, lo, hi, lo, lo, lo,
+                    hi, (long)himask,
+                    lo, hi, lo, lo, lo,
+                    lab, lab,
+                    hi, (long)himask,
+                    lab);
+            codestr(abuf, an);
+            if (n->Nop == Q_DIV && negdiv)
+                gdimodeneg(r1);
+            r1->Vrtype = n->Ntype;
+            return r1;
+        }
+    }
+
+    /* Signed DImode remainder by a positive or negative power of two is the masked
+    ** magnitude with the original sign restored.  This preserves C
+    ** truncation-toward-zero semantics and needs no divider scratch ACs.
+    ** Restrict the fold to masks wholly within the canonical low word. */
+    if (optgen && n->Nop == Q_MOD && n->Ntype
+      && n->Ntype->Tspec == TS_LONGLONG
+      && n->Nright && n->Nright->Nop == N_ICONST) {
+        INT chi, clo;
+        int sh;
+
+        dimode_iconst_words(n->Nright, &chi, &clo);
+        sh = dimode_power2_exp(chi, clo);
+        if (sh < 0)
+            sh = dimode_negative_power2_exp(chi, clo);
+        if (sh > 0 && sh < 35) {
+            int hi, lo, lab;
+            char abuf[320];
+            int an;
+
+            r1 = genexpr(n->Nleft);
+            (void) vrstoreal(r1, VR2(r1));
+            hi = vrreal(r1);
+            lo = vrreal(VR2(r1));
+            lab = p2modlab++;
+            an = sprintf(abuf,
+                "\tJUMPGE\t%o,%%DIM2%dP\n"
+                "\tMOVN\t%o,%o\n"
+                "\tSKIPE\t%o\n"
+                "\t SUBI\t%o,1\n"
+                "\tMOVN\t%o,%o\n"
+                "\tAND\t%o,[377777777777]\n"
+                "\tSETZ\t%o,\n"
+                "\tAND\t%o,[%lo]\n"
+                "\tSKIPE\t%o\n"
+                "\t SETO\t%o,\n"
+                "\tMOVN\t%o,%o\n"
+                "\tAND\t%o,[377777777777]\n"
+                "\tJRST\t%%DIM2%dD\n"
+                "%%DIM2%dP:\n"
+                "\tSETZ\t%o,\n"
+                "\tAND\t%o,[%lo]\n"
+                "%%DIM2%dD:\n",
+                hi, lab,
+                hi, hi, lo, hi, lo, lo, lo,
+                hi, lo, (long)(clo - 1), lo, hi, lo, lo, lo,
+                lab, lab, hi, lo, (long)(clo - 1), lab);
+            codestr(abuf, an);
+            r1->Vrtype = n->Ntype;
+            return r1;
+        }
+    }
+
+    /* Signed DImode division by a positive or negative power of two can use an
+    ** arithmetic pair shift once negative dividends have been biased by
+    ** divisor-1.  This implements C truncation toward zero rather than the
+    ** floor-like result of a bare ASHC.  Restrict this fold to powers whose
+    ** mask is wholly in the canonical 35-bit low word; wider constants are
+    ** left to the general divider until wide constant folding is repaired. */
+    if (optgen && n->Nop == Q_DIV && n->Ntype
+      && n->Ntype->Tspec == TS_LONGLONG
+      && n->Nright && n->Nright->Nop == N_ICONST) {
+        INT chi, clo;
+        int sh, negdiv;
+
+        dimode_iconst_words(n->Nright, &chi, &clo);
+        sh = dimode_power2_exp(chi, clo);
+        negdiv = 0;
+        if (sh < 0) {
+            sh = dimode_negative_power2_exp(chi, clo);
+            negdiv = 1;
+        }
+        if (sh > 0 && sh < 35) {
+            {
+                int hi, lo, lab;
+                char abuf[256];
+                int an;
+
+                r1 = genexpr(n->Nleft);
+                (void) vrstoreal(r1, VR2(r1));
+                hi = vrreal(r1);
+                lo = vrreal(VR2(r1));
+                lab = p2lab++;
+                an = sprintf(abuf,
+                    "\tJUMPGE\t%o,%%DIP2%d\n"
+                    "\tADD\t%o,[%lo]\n"
+                    "\tTLZE\t%o,400000\n"
+                    "\t ADDI\t%o,1\n"
+                    "%%DIP2%d:\n"
+                    "\tASHC\t%o,-%o\n"
+                    "\tAND\t%o,[377777777777]\n",
+                    hi, lab,
+                    lo, (long)(clo - 1),
+                    lo,
+                    hi,
+                    lab,
+                    hi, sh,
+                    lo);
+                codestr(abuf, an);
+                if (negdiv)
+                    gdimodeneg(r1);
+                r1->Vrtype = n->Ntype;
+                return r1;
+            }
+        }
+    }
+
+    /* DImode division and remainder by one are exact identities for both
+    ** signed and unsigned values.  Evaluate the dividend once so calls and
+    ** other side effects are preserved; modulo then replaces only the value
+    ** with canonical zero. */
+    if (optgen && n->Ntype && tisdimode(n->Ntype)
+      && (n->Nop == Q_DIV || n->Nop == Q_MOD)
+      && n->Nright && n->Nright->Nop == N_ICONST) {
+        INT chi, clo;
+
+        dimode_iconst_words(n->Nright, &chi, &clo);
+        if (chi == 0 && clo == 1) {
+            r1 = genexpr(n->Nleft);
+            if (n->Nop == Q_MOD) {
+                vrfree(r1);
+                r1 = vrdget();
+                code5(P_SETZ, r1);
+                code5(P_SETZ, VR2(r1));
+            }
+            r1->Vrtype = n->Ntype;
+            return r1;
+        }
+    }
+
+    /* Signed DImode division and remainder by -1 do not need the restoring
+    ** divider.  C leaves the minimum/-1 overflow case undefined, so division
+    ** is exactly the existing in-place 71-bit negation.  Remainder is always
+    ** zero, but the dividend must still be evaluated for side effects. */
+    if (optgen && n->Ntype && n->Ntype->Tspec == TS_LONGLONG
+      && (n->Nop == Q_DIV || n->Nop == Q_MOD)
+      && n->Nright && n->Nright->Nop == N_ICONST) {
+        INT chi, clo;
+
+        dimode_iconst_words(n->Nright, &chi, &clo);
+        if (chi == dimode_hi36mask() && clo == dimode_lo35mask()) {
+            r1 = genexpr(n->Nleft);
+            if (n->Nop == Q_DIV)
+                gdimodeneg(r1);
+            else {
+                code5(P_SETZ, r1);
+                code5(P_SETZ, VR2(r1));
+            }
+            r1->Vrtype = n->Ntype;
+            return r1;
+        }
+    }
+
+    /* Fold DImode subtraction by zero before materializing a two-word zero
+    ** and entering the carry/borrow generator.  Addition by zero is already
+    ** removed by earlier tree folding; subtraction had escaped that pass.
+    ** Evaluating only the left operand preserves all side effects. */
+    if (optgen && n->Nop == Q_MINUS && n->Ntype && tisdimode(n->Ntype)
+      && n->Nright && n->Nright->Nop == N_ICONST
+      && n->Nright->Niconst == 0) {
+        r1 = genexpr(n->Nleft);
+        if (r1)
+            r1->Vrtype = n->Ntype;
+        return r1;
+    }
+
+    /* Canonical loop strength reduction.  The loop generator keeps
+    ** &array[i] current in indptrreg; replace repeated pointer arithmetic
+    ** with a disposable copy of that derived pointer.
+    */
+    if (indptrreg && indvarsym && indbasesym && n->Nop == Q_PLUS
+      && n->Nleft && n->Nright && n->Ntype
+      && n->Ntype->Tspec == TS_PTR) {
+        inda = n->Nleft;
+        indb = n->Nright;
+
+        if (inda->Nop == Q_IDENT && inda->Nid == indvarsym) {
+            indt = inda; inda = indb; indb = indt;
+        }
+        if (inda->Nop == Q_IDENT && inda->Nid == indbasesym
+          && indb->Nop == Q_IDENT && indb->Nid == indvarsym) {
+            r1 = vrget();
+            r1->Vrtype = n->Ntype;
+            (void)vrstoreal(indptrreg, r1);
+            code00(P_MOVE, vrreal(r1), vrreal(indptrreg));
+            return r1;
+        }
+    }
+
+    /* A packing helper may mask a field, cast it through an unsigned
+    ** full-word type, and mask it with the identical constant again.
+    ** The intervening casts do not change the representation, so the
+    ** outer AND is redundant.  Keep this deliberately narrow: only
+    ** identical right-hand constants and unsigned full-word casts qualify.
+    */
+    if (n->Nop == Q_ANDT && n->Nright && n->Nright->Nop == N_ICONST
+      && (n->Nright->Niconst & ~0777777L) == 0) {
+        masked = n->Nleft;
+        while (masked && masked->Nop == N_CAST
+          && masked->Ntype && tisunsign(masked->Ntype)
+          && tbitsize(masked->Ntype) == TGSIZ_WORD)
+            masked = masked->Nleft;
+        maskconst = (masked && masked->Nop == Q_ANDT)
+            ? masked->Nright : NULL;
+        if (maskconst && maskconst->Nop == N_ICONST
+          && maskconst->Niconst == n->Nright->Niconst) {
+            r1 = genexpr(n->Nleft);
+            if (r1)
+                r1->Vrtype = n->Ntype;
+            return r1;
+        }
+    }
+
+    /* Use native PDP-10 halfword extraction for the canonical packed-word
+    ** idioms.  This is exact for one-word integral values and avoids the
+    ** MOVE/LSH/AND sequences otherwise generated for kernel metadata.
+    */
+    if (n->Nop == Q_ANDT
+      && n->Nright && n->Nright->Nop == N_ICONST
+      && n->Nright->Niconst == 0777777L
+      && sizetype(n->Nleft->Ntype) == 1)
+	{
+	if (n->Nleft->Nop == Q_RSHFT
+	  && n->Nleft->Nright
+	  && n->Nleft->Nright->Nop == N_ICONST
+	  && n->Nleft->Nright->Niconst == 18
+	  && sizetype(n->Nleft->Nleft->Ntype) == 1)
+	    {
+	    r1 = genexpr(n->Nleft->Nleft);
+	    code0(P_HLRZ, r1, r1);
+	    return r1;
+	    }
+	r1 = genexpr(n->Nleft);
+	code0(P_HRRZ, r1, r1);
+	return r1;
+	}
+
+    /* Reuse an identical side-effect-free indexed fetch in a simple
+    ** one-word integer operation.  This is deliberately tree-local CSE:
+    ** no value table, basic-block walk, or persistent data-flow state.
+    **
+    **     p[i] + p[i]     -> load p[i] once; LSH R,1
+    **
+    ** Restrict the fold to dereferences and operators for which using the
+    ** same loaded value is exact.  Addition uses a one-bit logical shift;
+    ** for defined signed additions and for modulo unsigned arithmetic this is
+    ** identical to x+x, while avoiding an unsafe MOVE/ADD-R,R peephole path.
+    */
+    if (optgen && sizetype(n->Ntype) == 1 && tisinteg(n->Ntype)
+      && n->Nleft && n->Nright
+      && n->Nleft->Nop == N_PTR && n->Nright->Nop == N_PTR
+      && gsamepure(n->Nleft, n->Nright)) {
+        switch (n->Nop) {
+        case Q_PLUS:
+            r1 = genexpr(n->Nleft);
+            code8(P_LSH, r1, 1);
+            return r1;
+        case Q_ANDT:
+        case Q_OR:
+            return genexpr(n->Nleft);
+        default:
+            ;
+        }
+    }
+
+    /* A literal minus a one-word integer needs no literal temporary.
+    ** Negate the variable and add the literal instead:
+    **
+    **     MOVEI T,C       MOVN T,X
+    **     SUB   T,X   ->  ADDI T,C
+    **
+    ** At a return boundary, a register-resident RHS can be written directly
+    ** into AC1, avoiding the final return copy as well.
+    */
+    if (optgen && n->Nop == Q_MINUS && n->Nleft
+      && n->Nleft->Nop == N_ICONST && n->Nright
+      && sizetype(n->Ntype) == 1 && tisinteg(n->Ntype)) {
+        if ((n->Nflag & NF_RETEXPR) && Register_Id(n->Nright)) {
+            r1 = vrretget();
+            r1->Vrtype = n->Ntype;
+            code00(P_MOVN, r1->Vrloc, n->Nright->Nid->Sreg);
+        } else {
+            r1 = genexpr(n->Nright);
+            code0(P_MOVN, r1, r1);
+        }
+        code1(P_ADD, r1, n->Nleft->Niconst);
+        return r1;
+    }
 
     /*
     ** First, check for pointer arithmetic.  Legal operations are:
@@ -881,6 +3740,22 @@ gbinary(NODE *n)
 	    }
 	}
 
+    /* Keep literal bitwise operands literal.  Going through genexpr() would
+    ** first materialize the constant in an AC and rely on a later peephole
+    ** to recover the immediate form.  code1() already selects IORI/ANDI/XORI
+    ** or a literal as appropriate, so avoid the temporary entirely.
+    */
+    if (optgen && n->Nright->Nop == N_ICONST
+      && sizetype(n->Ntype) == 1 && tisinteg(n->Ntype)
+      && (n->Nop == Q_OR || n->Nop == Q_ANDT || n->Nop == Q_XORT))
+        {
+        r1 = genexpr(n->Nleft);
+        code1(n->Nop == Q_OR ? P_IOR :
+              (n->Nop == Q_ANDT ? P_AND : P_XOR),
+              r1, n->Nright->Niconst);
+        return r1;
+        }
+
     /* No pointer arithmetic involved, can just generate arithmetic stuff.
     ** Normally we generate the left operand first, but if the right operand
     ** is a function call then we reverse the order so as to avoid
@@ -899,8 +3774,10 @@ gbinary(NODE *n)
     else
 	{
 	r1 = genexpr(n->Nleft);		/* Normal order, left first */
+	if (tisdimode(n->Ntype))
+	    (void) vrstoreal(r1, VR2(r1)); /* keep left pair across right gen */
 	if ((n->Nop == Q_DIV || n->Nop == Q_MOD) && tisinteg(n->Ntype)
-		&& optgen)
+		&& !tisdimode(n->Ntype) && optgen)
 	    vrlowiden(r1);		/* Widen in preparation for div */
 	r2 = genexpr(n->Nright);	/* Now generate right operand */
 	}
@@ -919,10 +3796,7 @@ gbinary(NODE *n)
 */
 
 static VREG *
-garithop(op, r1, r2, ts)
-int op;			/* Operation to generate code for */
-int ts;			/* Type of the operands (TS_ value) */
-VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
+garithop(int op, struct vreg * r1, struct vreg * r2, int ts)
 {
     switch(op)
 	{
@@ -932,12 +3806,16 @@ VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
 		{
 		default:
 		    int_error("garithop: bad +");
+		/* FALLTHROUGH */
 		case TS_INT:
 		case TS_UINT:
 		case TS_LONG:
 		case TS_ULONG:
 		    code0(P_ADD,  r1, r2);
 		    break;
+		case TS_LONGLONG:
+		case TS_ULONGLONG:
+		    return gdimodeadd(r1, r2);
 		case TS_FLOAT:
 		    code0(P_FADR, r1, r2);
 		    break;
@@ -954,12 +3832,16 @@ VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
 		{
 		default:
 		    int_error("garithop: bad -");
+		/* FALLTHROUGH */
 		case TS_INT:
 		case TS_UINT:
 		case TS_LONG:
 		case TS_ULONG:
 		    code0(P_SUB,  r1, r2);
 		    break;
+		case TS_LONGLONG:
+		case TS_ULONGLONG:
+		    return gdimodesub(r1, r2);
 		case TS_FLOAT:
 		    code0(P_FSBR, r1, r2);
 		    break;
@@ -973,7 +3855,7 @@ VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
 	/*	* Unsigned Multiplication
 	**	MUL R,E
 	**	TRNE R,1	or	LSH R+1,1	or	LSH R+1,1
-	**	 TLOA R+1,400000	LSHC R,-1		LSHC R,-35.
+	**	 TLOA R+1,400000	LSHC R,-1		LSHC R,-43.
 	**	  TLZ R+1,400000
 	**	result in R+1		result in R+1		result in R
 	*/
@@ -983,6 +3865,10 @@ VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
 		{
 		default:
 		    int_error("garithop: bad *");
+		/* FALLTHROUGH */
+		case TS_LONGLONG:
+		case TS_ULONGLONG:
+		    return gdimodemul(r1, r2);
 		case TS_UINT:
 		case TS_ULONG:
 		    if (!vrispair(r1))	/* Unless already widened, */
@@ -1019,6 +3905,10 @@ VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
 		{
 		default:
 		    int_error("garithop: bad /");
+		/* FALLTHROUGH */
+		case TS_LONGLONG:
+		case TS_ULONGLONG:
+		    return gdimodedivmod(r1, r2, ts, 0);
 		case TS_INT:
 		case TS_UINT:
 		case TS_LONG:
@@ -1053,6 +3943,10 @@ VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
 		{
 		default:
 		    int_error("garithop: bad %%");
+		/* FALLTHROUGH */
+		case TS_LONGLONG:
+		case TS_ULONGLONG:
+		    return gdimodedivmod(r1, r2, ts, 1);
 		case TS_INT:
 		case TS_UINT:
 		case TS_LONG:
@@ -1069,14 +3963,22 @@ VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
 
 	case Q_ASRSH:
 	case Q_RSHFT:
+	    if (ts == TS_LONGLONG || ts == TS_ULONGLONG)
+		return gdimodeshift(op, r1, r2, ts);
 	    code0(P_MOVN, r2, r2);		/* negate arg to make right shift */
 					/* Then drop through to do shift */
+	/* FALLTHROUGH */
 	case Q_ASLSH:
 	case Q_LSHFT:
 	    switch (ts)
 		{
 		default:
 		    int_error("garithop: bad shift");
+
+		/* FALLTHROUGH */
+		case TS_LONGLONG:
+		case TS_ULONGLONG:
+		    return gdimodeshift(op, r1, r2, ts);
 
 		case TS_INT:	/* Signed values use arith shift for >> */
 		case TS_LONG:
@@ -1088,6 +3990,7 @@ VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
 		/* Drop thru if <<, for logical shift. */
 		/* According to CARM, << is always logical even if signed */
 
+		/* FALLTHROUGH */
 		case TS_UINT:		/* Unsigned values use logical shift */
 		case TS_ULONG:
 		    code4(P_LSH, r1, r2);	/* this takes arg as if PTA_RCONST */
@@ -1101,6 +4004,10 @@ VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
 		{
 		default:
 		    int_error("garithop: bad |");
+		/* FALLTHROUGH */
+		case TS_LONGLONG:
+		case TS_ULONGLONG:
+		    return gdimodebitwise(op, r1, r2);
 		case TS_INT:
 		case TS_UINT:
 		case TS_LONG:
@@ -1116,6 +4023,10 @@ VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
 		{
 		default:
 		    int_error("garithop: bad &");
+		/* FALLTHROUGH */
+		case TS_LONGLONG:
+		case TS_ULONGLONG:
+		    return gdimodebitwise(op, r1, r2);
 		case TS_INT:
 		case TS_UINT:
 		case TS_LONG:
@@ -1131,6 +4042,10 @@ VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
 		{
 		default:
 		    int_error("garithop: bad ^");
+		/* FALLTHROUGH */
+		case TS_LONGLONG:
+		case TS_ULONGLONG:
+		    return gdimodebitwise(op, r1, r2);
 		case TS_INT:
 		case TS_UINT:
 		case TS_LONG:
@@ -1165,10 +4080,7 @@ VREG *r1, *r2;		/* Registers operands are in (r2 is released) */
 ** to be added or subtracted.
 */
 static VREG *
-gptrop(op, r1, r2, lt, rt)
-int op;			/* Q_PLUS, Q_MINUS, Q_ASPLUS, Q_ASMINUS */
-VREG *r1, *r2;		/* Registers holding left and right operands */
-TYPE *lt, *rt;		/* Types of left and right operands */
+gptrop(int op, struct vreg * r1, struct vreg * r2, struct type * lt, struct type * rt)
 {
     INT size;
 
@@ -1179,10 +4091,14 @@ TYPE *lt, *rt;		/* Types of left and right operands */
 	    if (rt->Tspec == TS_PTR)	/* Handle case 4 */
 	    /* Handle case 4: ptr-ptr (make left operand first) */
 		{
+		if (tismaybitptr(lt))
+		    return gmaybitsub(r1, r2, lt);
 		if (tisbytepointer(lt))
 		    {
 		    vrlowiden(r1);			/* Must widen */
 		    code0(P_SUBBP, r1, r2);		/* Do the sub */
+		    if (previous && previous->Pop == P_SUBBP)
+			previous->Pbsize = tisbitptr(lt) ? 1 : (tispackedptr(lt) ? TGSIZ_CHAR : elembsize(lt));
 		    vrnarrow(r1 = VR2(r1));		/* Result in 2nd word */
 		    }
 		else
@@ -1200,6 +4116,8 @@ TYPE *lt, *rt;		/* Types of left and right operands */
 	/* Handle case 3: ptr-num.  Num must be generated by gptraddend. */
 	    if (r2 == NULL)
 		return r1;	/* Ensure have something to subtract */
+            if (tismaybitptr(lt))
+                return gmaybitadjust(r1, r2, lt, 1);
 	    if (tisbytepointer(lt))
 		{
 		code0(P_MOVN, r2, r2);
@@ -1215,6 +4133,8 @@ TYPE *lt, *rt;		/* Types of left and right operands */
 	/* Note that case 1 should be transformed into case 2 by caller. */
 	    if (r2 == NULL)
 		return r1;	/* Ensure something to add */
+            if (tismaybitptr(lt))
+                return gmaybitadjust(r1, r2, lt, 0);
 	    if (tisbytepointer(lt))		/* If ptr is a char ptr */
 		{
 		code0(P_ADJBP, r2, r1);	/* Adjust char pointer */
@@ -1229,6 +4149,173 @@ TYPE *lt, *rt;		/* Types of left and right operands */
     return r1;
 }
 
+/* GMAYBITADJUST - Adjust a representation-polymorphic exact-width pointer.
+**
+** The one-word pointer is self-describing.  An ordinary native byte pointer
+** advances one native byte per C element.  S=1 denotes KCC's continuous
+** packed bit stream, where one C object occupies its packed storage rounded
+** to 9-bit address units.  P_ADJBP is intentionally used for both paths:
+** PDP-6 expands it through KCC's software helper, while CPUs which provide
+** ADJBP may use the hardware instruction.
+*/
+static VREG *
+gmaybitadjust(VREG *ptr, VREG *count, TYPE *t, int neg)
+{
+    VREG *tmp, *p, *c, *r;
+    SYMBOL *bitlab, *done;
+    INT bits, stride;
+
+    bits = (t != NULL && t->Tsubt != NULL) ? tbitsize(t->Tsubt) : 0;
+    stride = ((bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR) * TGSIZ_CHAR;
+    if (stride <= 0)
+        stride = TGSIZ_CHAR;
+
+    /* Spill the two live inputs into real stack memory.  The PDP-6 ADJBP
+    ** expansion may need scratch ACs, so virtual-register liveness across
+    ** the two runtime-selected paths is deliberately avoided.
+    */
+    code0(P_PUSH, VR_SP, ptr);
+    code0(P_PUSH, VR_SP, count);
+    stackoffset += 2;
+    vrfree(ptr);
+    vrfree(count);
+
+    tmp = vrget();
+    codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, -1, R_SP);
+    code0(P_HLRZ, tmp, tmp);
+    code8(P_LSH, tmp, -6);
+    code1(P_AND, tmp, 077);
+    bitlab = newlabel();
+    done = newlabel();
+    code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
+    code6(P_JRST, (VREG *)NULL, bitlab);
+    vrfree(tmp);
+
+    /* Native byte-pointer representation. */
+    p = vrget();
+    c = vrget();
+    codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, -1, R_SP);
+    codemdx(P_MOVE, vrtoreal(c), (SYMBOL *)NULL, 0, R_SP);
+    if (neg)
+        code0(P_MOVN, c, c);
+    code0(P_ADJBP, c, p);
+    codemdx(P_MOVEM, vrtoreal(c), (SYMBOL *)NULL, -1, R_SP);
+    vrfree(p);
+    vrfree(c);
+    code6(P_JRST, (VREG *)NULL, done);
+    flushcode();
+
+    /* Logical packed representation. */
+    codlabel(bitlab);
+    p = vrget();
+    c = vrget();
+    codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, -1, R_SP);
+    codemdx(P_MOVE, vrtoreal(c), (SYMBOL *)NULL, 0, R_SP);
+    if (stride != 1)
+        code1(P_IMUL, c, stride);
+    if (neg)
+        code0(P_MOVN, c, c);
+    code0(P_ADJBP, c, p);
+    codemdx(P_MOVEM, vrtoreal(c), (SYMBOL *)NULL, -1, R_SP);
+    vrfree(p);
+    vrfree(c);
+    flushcode();
+
+    codlabel(done);
+    r = vrget();
+    r->Vrtype = t;
+    codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, -1, R_SP);
+    code8(P_ADJSP, VR_SP, -2);
+    stackoffset -= 2;
+    return r;
+}
+
+
+/* GMAYBITSUB - Subtract representation-polymorphic exact-width pointers.
+**
+** Both pointers must designate elements of the same array, as required by C,
+** so their runtime representations are the same.  Native pointers use their
+** encoded byte size; logical packed pointers use S=1 and return a bit count,
+** which is divided by the packed element stride to obtain a C element count.
+*/
+static VREG *
+gmaybitsub(VREG *left, VREG *right, TYPE *t)
+{
+    VREG *tmp, *l, *r, *res;
+    SYMBOL *bitlab, *done;
+    INT bits, stride, nsize;
+
+    bits = (t != NULL && t->Tsubt != NULL) ? tbitsize(t->Tsubt) : 0;
+    stride = ((bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR) * TGSIZ_CHAR;
+    if (stride <= 0)
+        stride = TGSIZ_CHAR;
+    nsize = elembsize(t);
+    if (nsize <= 0)
+        nsize = TGSIZ_CHAR;
+
+    code0(P_PUSH, VR_SP, left);
+    code0(P_PUSH, VR_SP, right);
+    stackoffset += 2;
+    vrfree(left);
+    vrfree(right);
+
+    tmp = vrget();
+    codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, -1, R_SP);
+    code0(P_HLRZ, tmp, tmp);
+    code8(P_LSH, tmp, -6);
+    code1(P_AND, tmp, 077);
+    bitlab = newlabel();
+    done = newlabel();
+    code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
+    code6(P_JRST, (VREG *)NULL, bitlab);
+    vrfree(tmp);
+
+    l = vrget();
+    r = vrget();
+    codemdx(P_MOVE, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
+    codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
+    vrlowiden(l);
+    code0(P_SUBBP, l, r);
+    if (previous && previous->Pop == P_SUBBP)
+        previous->Pbsize = nsize;
+    vrnarrow(l = VR2(l));
+    codemdx(P_MOVEM, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
+    vrfree(l);
+    vrfree(r);
+    code6(P_JRST, (VREG *)NULL, done);
+    flushcode();
+
+    codlabel(bitlab);
+    l = vrget();
+    r = vrget();
+    codemdx(P_MOVE, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
+    codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
+    vrlowiden(l);
+    code0(P_SUBBP, l, r);
+    if (previous && previous->Pop == P_SUBBP)
+        previous->Pbsize = 1;
+    vrnarrow(l = VR2(l));
+    if (stride > 1)
+        {
+        vrlowiden(l);
+        code1(P_IDIV, l, stride);
+        vrnarrow(l);
+        folddiv(l);
+        }
+    codemdx(P_MOVEM, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
+    vrfree(l);
+    vrfree(r);
+    flushcode();
+
+    codlabel(done);
+    res = vrget();
+    res->Vrtype = ptrdifftype;
+    codemdx(P_MOVE, vrtoreal(res), (SYMBOL *)NULL, -1, R_SP);
+    code8(P_ADJSP, VR_SP, -2);
+    stackoffset -= 2;
+    return res;
+}
+
 /* GPTRADDEND - Auxiliary to GPTROP.  This routine generates the
 **	proper value for adding or subtracting from a pointer.
 **	Note that it may return NULL if it determines that the value
@@ -1241,6 +4328,17 @@ gptraddend(TYPE *t, NODE *n)
 {
     VREG *r;
     INT size;
+
+    /* A function-boundary exact-width pointer is self-describing.  Keep
+    ** its C element count unscaled here; gmaybitadjust() selects native
+    ** byte-pointer stride versus logical S=1 bit stride at runtime.
+    */
+    if (tismaybitptr(t))
+        {
+        if (n->Nop == N_ICONST && n->Niconst == 0)
+            return NULL;
+        return genexpr(n);
+        }
 
     if (n->Nop == N_ICONST && optgen)		/* Do optimization */
 	{
@@ -1357,59 +4455,42 @@ gunary(NODE *n)
 		    }
 		}
 
-	/* Special check for doing ILDB.  Safer to do here instead of
-	** in peephole, at least until peepholer fixed to allow keeping
-	** an index reg around!
+        if (tisinteg(n->Ntype) && maybitptrderef(n))
+            {
+            r = gmaybitload(n);
+            if (volat)
+                flushcode();
+            return r;
+            }
+
+        if (tisinteg(n->Ntype) && (packedptrderef(n) || bitptrmember(n)))
+            {
+            r = gpackedload(n);
+            if (volat)
+                flushcode();
+            return r;
+            }
+
+	/* A register-resident pointer still points at memory.  The old
+	** Register_Id shortcut treated the pointed-to object itself as a
+	** register object, which fails for structures and is semantically
+	** wrong for every dereference.  Evaluate the pointer value normally
+	** and load through it.
 	*/
-	    if (Register_Id(n->Nleft))
-		{
-#if 0	/* Reg linkage */
-		if (optgen && tisbytepointer(n->Nleft->Ntype)) /* if byte ptr */
-		    {
-		    r = vrget();
-		    r->Vrtype = n->Ntype; /* Set C type of object in reg */
-		    if (n->Nleft->Nop == N_PREINC)	/* "*++(reg)" */
-			code0 (P_ILDB, r, gaddress (n->Nleft->Nleft));
-#if 0	/* add when LDBI, LDBD, and DLDB are defined here, below, and in 
-	 * gassign() for case N_PTR:
-	 */
-		    else if (n->Nleft->Nop == N_PREDEC)	/* "*--(reg) */
-			code0 (P_DLDB, r, gaddress (n->Nleft->Nleft));
-		    else if (n->Nleft->Nop == N_POSTINC)	/* "*(reg)++" */
-			code0 (P_LDBI, r, gaddress (n->Nleft->Nleft));
-		    else if (n->Nleft->Nop == N_POSTDEC)	/* "*(reg)--" */
-			code0 (P_LDBD, r, gaddress (n->Nleft->Nleft));
-		    else if (n->Nleft->Nop == NULL)
-			code0 (P_LDB, r, gaddress (n->Nleft->Nleft));
-#endif
-		    else	/* approximate getmem() for registers */
-#if 0
-			r = rgetmem(genexpr(n->Nleft), n->Ntype,
-				    tisbytepointer(n->Nleft->Ntype), 0);
-#else
-			r = rgetmem(genexpr(n->Nleft), n->Ntype, 0);
-#endif
-		    }
-		else		/* approximate getmem() for registers */
-#endif
-#if 0
-		    r = rgetmem(genexpr(n->Nleft), n->Ntype,
-			    tisbytepointer(n->Nleft->Ntype), 0);
-#else
-		    r = rgetmem(genexpr(n->Nleft), n->Ntype, 0);
-#endif
-		}
-	    else 
-	/* if "*++(exp)" of a byte pointer */ if (optgen && tisbytepointer(n->Nleft->Ntype) &&
-		    n->Nleft->Nop == N_PREINC)
+	    if (optgen && !Register_Id(n->Nleft)
+		&& tisbytepointer(n->Nleft->Ntype)
+		&& n->Nleft->Nop == N_PREINC)
 		{
 		r = vrget();
-		r->Vrtype = n->Ntype; /* Set C type of object in reg */
-		code4 (P_ILDB, r, gaddress(n->Nleft->Nleft));
+		r->Vrtype = n->Ntype;
+		if (Register_Id(n->Nleft->Nleft))
+		    code14(P_ILDB, r, n->Nleft->Nleft->Nid->Sreg);
+		else
+		    code4(P_ILDB, r, gaddress(n->Nleft->Nleft));
 		}
 	    else
 		r = getmem(genexpr(n->Nleft), n->Ntype,
-				    tisbytepointer(n->Nleft->Ntype), 0);
+			    tisbytepointer(n->Nleft->Ntype), 0);
 	    if (volat)
 		flushcode();
 	    return r;
@@ -1438,7 +4519,14 @@ gunary(NODE *n)
 		return r;
 		}
 	    r = genexpr(n->Nleft);
-	    if ( n->Ntype->Tspec == TS_DOUBLE
+	    if (tisdimode(n->Ntype))
+		{
+		if (!vrispair(r))
+		    int_error("gunary N_NEG: non-pair dimode %N", n);
+		flushcode();
+		gdimodeneg(r);
+		}
+	    else if ( n->Ntype->Tspec == TS_DOUBLE
 		    || n->Ntype->Tspec == TS_LNGDBL)
 		code0(P_DMOVN, r, r);
 	    else
@@ -1455,7 +4543,14 @@ gunary(NODE *n)
 		}
 
 	    r = genexpr(n->Nleft);
-	    code0(P_SETCM, r, r);
+	    if (tisdimode(n->Ntype))
+		{
+		if (!vrispair(r))
+		    int_error("gunary Q_COMPL: non-pair dimode %N", n);
+		gdimodecompl(r);
+		}
+	    else
+		code0(P_SETCM, r, r);
 	    return r;
 
 	default:
@@ -1501,15 +4596,142 @@ gcast(NODE *n)
 }
 
 static VREG *
-gcastr(cop, r, tfrom, tto, ln)
-int cop;	/* Cast op (a CAST_ value) */
-VREG *r;	/* Virtual reg holding value to cast.
-		** NOTE NOTE NOTE!!!  If this is NULL, we are merely testing
-		** to see whether a cast would be produced.  If there is
-		** no cast, NULL will be returned, else (VREG *)-1.
-		*/
-TYPE *tfrom, *tto;
-NODE *ln;	/* If non-null, is node that R was generated from. */
+gcastptr(VREG *r, TYPE *tfrom, TYPE *tto)
+{
+    int fsiz, tsiz;
+
+    /* Erasing the pointed-to type must not rewrite the runtime pointer.
+    ** Both native byte pointers and KCC's S=1 logical packed pointers are
+    ** valid opaque void * values and must round-trip unchanged.
+    */
+    if (tismaybitptr(tfrom) && tto != NULL && tto->Tspec == TS_PTR
+      && tto->Tsubt != NULL && tto->Tsubt->Tspec == TS_VOID) {
+        if (!r)
+            return (VREG *)-1;
+        r->Vrtype = tto;
+        return r;
+    }
+
+    /* A void pointer may contain either an ordinary word address or the
+    ** canonical S=1 packed bit address above.  Preserve S=1 verbatim; only
+    ** ordinary word pointers need normal word-to-byte conversion.
+    */
+    if (tfrom != NULL && tfrom->Tspec == TS_PTR
+      && tfrom->Tsubt != NULL && tfrom->Tsubt->Tspec == TS_VOID
+      && tismaybitptr(tto) && tisbytepointer(tto)) {
+        VREG *tmp;
+        SYMBOL *done;
+
+        if (!r)
+            return (VREG *)-1;
+        flushcode();
+        tmp = vrget();
+        code0(P_HLRZ, tmp, r);
+        code8(P_LSH, tmp, -6);
+        code1(P_AND, tmp, 077);
+        tsiz = elembsize(tto);
+        if (!tsiz)
+            tsiz = TGSIZ_CHAR;
+        done = newlabel();
+        code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
+        code6(P_JRST, (VREG *)NULL, done);
+        code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, tsiz);
+        code6(P_JRST, (VREG *)NULL, done);
+        vrfree(tmp);
+        pitopc(r, tsiz, 0, 0);
+        flushcode();
+        codlabel(done);
+        r->Vrtype = tto;
+        return r;
+    }
+
+    /* A function-boundary exact-width pointer may be either a native byte
+    ** pointer or KCC's S=1 logical packed pointer.  Width-changing casts
+    ** must rewrite only the native representation; the S=1 form already
+    ** names the exact starting bit and therefore only changes C type.
+    */
+    if (tismaybitptr(tfrom) && tisbytepointer(tto)) {
+        VREG *tmp;
+        SYMBOL *done;
+
+        fsiz = elembsize(tfrom);
+        tsiz = elembsize(tto);
+        if (!fsiz)
+            fsiz = TGSIZ_CHAR;
+        if (!tsiz)
+            tsiz = TGSIZ_CHAR;
+        if (fsiz == tsiz)
+            return r;
+        if (!r)
+            return (VREG *)-1;
+
+        tmp = vrget();
+        code0(P_HLRZ, tmp, r);
+        code8(P_LSH, tmp, -6);
+        code1(P_AND, tmp, 077);
+        done = newlabel();
+        code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
+        code6(P_JRST, (VREG *)NULL, done);
+        vrfree(tmp);
+
+        /* Native byte pointer.  NULL remains NULL; otherwise P_PTRCNV's
+        ** packed-member form preserves the exact bit address while changing
+        ** the byte size.
+        */
+        code6(P_JUMP+POS_SKPE, r, done);
+        code10(P_PTRCNV, r, (SYMBOL *)NULL, tsiz, -fsiz);
+        flushcode();
+        codlabel(done);
+        r->Vrtype = tto;
+        return r;
+    }
+
+    if (tisbytepointer(tfrom)) {
+        if (tisbytepointer(tto)) {
+            fsiz = elembsize(tfrom);
+            tsiz = elembsize(tto);
+            if (!fsiz) {
+                if (tischarpointer(tto))
+                    return r;
+                fsiz = TGSIZ_CHAR;
+            }
+            if (!tsiz) {
+                if (tischarpointer(tfrom))
+                    return r;
+                tsiz = TGSIZ_CHAR;
+            }
+            if (fsiz == tsiz)
+                return r;
+            if (!r)
+                return (VREG *)-1;
+            if ((fsiz == TGSIZ_CHAR && tsiz == TGSIZ_SHORT)
+              || (fsiz == TGSIZ_SHORT && tsiz == TGSIZ_CHAR)) {
+                code10(P_PTRCNV, r, (SYMBOL *)NULL, tsiz, fsiz);
+                return r;
+            }
+            code10(P_TDZ+POF_ISSKIP+POS_SKPE, r, (SYMBOL *)NULL, -1, 0);
+            code10(P_IOR, r, (SYMBOL *)NULL, tsiz, 0);
+            return r;
+        }
+        if (!r)
+            return (VREG *)-1;
+        code10(P_TDZ, r, (SYMBOL *)NULL, -1, 0);
+        return r;
+    }
+
+    if (tisbytepointer(tto)) {
+        if (!r)
+            return (VREG *)-1;
+        tsiz = elembsize(tto);
+        if (!tsiz)
+            tsiz = TGSIZ_CHAR;
+        pitopc(r, tsiz, 0, 0);
+    }
+    return r;
+}
+
+static VREG *
+gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct node * ln)
 {
     switch (cop)
 	{
@@ -1521,6 +4743,22 @@ NODE *ln;	/* If non-null, is node that R was generated from. */
 		relflush(r);	/* Release the register */
 	    return NULL;
 
+	case CAST_BOOL:
+	    if (!r)
+		return (VREG *)-1;
+	    /* Pair-valued scalar zero is represented by two zero words. */
+	    if (vrispair(r)) {
+		code0(P_IOR, r, VR2(r));
+		vrnarrow(r);
+	    }
+	    /* SKIPE leaves zero unchanged and skips the MOVEI; any nonzero
+	    ** value falls through and becomes the canonical value 1.
+	    */
+	    code0(P_SKIP+POF_ISSKIP+POS_SKPE, r, r);
+	    code1(P_MOVE, r, 1);
+	    r->Vrtype = tto;
+	    break;
+
 	case CAST_IT_PT:
 	    if (!r)					/* Just checking? */
 		return gintwiden(r, tfrom, uinttype, ln);
@@ -1530,7 +4768,75 @@ NODE *ln;	/* If non-null, is node that R was generated from. */
 
 	case CAST_IT_EN:
 	case CAST_IT_IT:
-	    if (!r)					/* Just checking? */
+	    if (tisdimode(tto) && !tisdimode(tfrom))
+		{
+		if (!r)
+		    return (VREG *)-1;
+		r = gdimode_from_int(r, tfrom, tto, ln);
+		}
+	    else if (tisdimode(tfrom) && !tisdimode(tto))
+		{
+		int bits;
+
+		if (!r)
+		    return (VREG *)-1;
+		bits = tbitsize(tto);
+
+		/* A normalized 71-bit value has only 35 independent low bits.
+		** Reconstruct destination bit 35 from bit 0 of the high word
+		** before discarding the high word.  This implements modulo 2^36
+		** conversion for both signed and unsigned full-word targets.
+		*/
+		if (bits == TGSIZ_WORD)
+		    {
+		    (void) vrstoreal(r, VR2(r));
+		    code8(P_TLZ, VR2(r), 0400000L);
+		    code8(P_TRN+POF_ISSKIP+POS_SKPE, r, 1);
+		    code8(P_TLO, VR2(r), 0400000L);
+		    }
+		vrnarrow(r = VR2(r));
+		r->Vrtype = tto;
+
+		/* For smaller targets, apply the same truncation and signedness
+		** conversion used by assignment and ordinary explicit casts.
+		*/
+		if (bits < TGSIZ_WORD)
+		    {
+		    if (tisunsign(tto))
+			code1(P_AND, r, ((INT)1 << bits) - 1);
+		    else if (bits == TGSIZ_HALFWD)
+			code0(P_HRRE, r, r);
+		    else
+			{
+			code8(P_TRN+POF_ISSKIP+POS_SKPE, r,
+			      ((INT)1 << (bits-1)));
+			code8(P_TRO+POF_ISSKIP+POS_SKPA, r,
+			      -((INT)1 << bits));
+			code1(P_AND, r, ((INT)1 << bits) - 1);
+			}
+		    }
+		}
+	    else if (tbitsize(tto) < tbitsize(tfrom))
+		{
+		int bits = tbitsize(tto);
+
+		/* Match assignment conversion for explicit narrow casts. */
+		if (!r)
+		    return (VREG *)-1;
+		if (tisunsign(tto))
+		    code1(P_AND, r, ((INT)1 << bits) - 1);
+		else if (bits == TGSIZ_HALFWD)
+		    code0(P_HRRE, r, r);
+		else
+		    {
+		    code8(P_TRN+POF_ISSKIP+POS_SKPE, r,
+			  ((INT)1 << (bits-1)));
+		    code8(P_TRO+POF_ISSKIP+POS_SKPA, r,
+			  -((INT)1 << bits));
+		    code1(P_AND, r, ((INT)1 << bits) - 1);
+		    }
+		}
+	    else if (!r)				/* Just checking? */
 		return gintwiden(r, tfrom, tto, ln);
 	    else
 #if 0	/* Later, Reg linkage */	
@@ -1545,66 +4851,9 @@ NODE *ln;	/* If non-null, is node that R was generated from. */
 	    break;
 
 	case CAST_PT_PT:			/* General ptr to ptr conversion */
-	    if (tisbytepointer(tfrom))
-		{
-		if (tisbytepointer(tto))
-		    {
-		/* Byte pointer to byte pointer, check sizes */
-		    int fsiz = elembsize(tfrom);
-		    int tsiz = elembsize(tto);
-		    if (!fsiz)
-			{
-		    /* (void *) to byte pointer. */
-			if (tischarpointer(tto))	/* If any kind of char obj, */
-			    break;			/* do no conversion. */
-			fsiz = TGSIZ_CHAR;		/* Else cvt as if (char *) */
-			}
-		    if (!tsiz)
-			{
-		    /* Byte pointer to (void *) */
-			if (tischarpointer(tfrom))	/* If any kind of char obj, */
-			    break;			/* do no conversion. */
-			tsiz = TGSIZ_CHAR;		/* Else cvt as if (char *) */
-			}
-		    if (fsiz == tsiz)
-			break;	/* No conversion needed? */
-
-		    if (!r)
-			return (VREG *)-1;	/* Need, stop if just chking */
-
-		/* If converting between char and short
-		** (9 and 18 bit bytes), use special op.
-		*/
-		    if (   (fsiz == TGSIZ_CHAR && tsiz == TGSIZ_SHORT)
-			|| (fsiz == TGSIZ_SHORT && tsiz == TGSIZ_CHAR))
-			{
-			code10(P_PTRCNV, r, (SYMBOL *)NULL, tsiz, fsiz);
-			break;
-			}
-
-		/* Odd size, convert to word pointer, then to byte pointer. */
-		    code10(P_TDZ+POF_ISSKIP+POS_SKPE,	/* Check for NULL */
-			r, (SYMBOL *)NULL, -1, 0);	/* Mask off P+S */
-		    code10(P_IOR, r, (SYMBOL *) NULL, tsiz, 0);	/* make BP */
-		    }
-		else
-		    {
-		/* Byte pointer (any kind!) to word pointer */
-		    if (!r)
-			return (VREG *)-1;	/* Stop if just checking. */
-		    code10(P_TDZ, r, (SYMBOL *) NULL, -1, 0); /* Mask off P+S */
-		    }
-		}
-	    else if (tisbytepointer(tto))
-		{
-		int tsiz;
-		/* Word pointer to byte pointer */
-		if (!r)
-		    return (VREG *)-1;	/* Stop if just checking. */
-		if ((tsiz = elembsize(tto)) == 0)   /* Check for (void *) */
-		    tsiz = TGSIZ_CHAR;
-		pitopc(r, tsiz, 0, 0);
-		}
+	    r = gcastptr(r, tfrom, tto);
+	    if (r == (VREG *)-1)
+		return r;
 	    break;
 
 	case CAST_FP_IT:
@@ -1618,7 +4867,8 @@ NODE *ln;	/* If non-null, is node that R was generated from. */
 		case TS_DOUBLE:
 		case TS_LNGDBL:
 		    code0(P_DFIX, r, r);	/* r must be a register pair */
-		    vrnarrow(r);		/* Use 1st AC as result */
+		    if (vrispair(r))
+			vrnarrow(r);		/* Use 1st AC as result */
 		    break;
 		}
 	/* Narrow the int here if needed */
@@ -1632,7 +4882,8 @@ NODE *ln;	/* If non-null, is node that R was generated from. */
 		    if (!r)
 			return (VREG *)-1;	/* Stop if just checking. */
 		    code0(P_DSNGL, r, r);	/* r must be a register pair! */
-		    vrnarrow(r);		/* Forget about the second word */
+		    if (vrispair(r))
+			vrnarrow(r);		/* Forget about the second word */
 		    break;
 		case castidx(TS_FLOAT,TS_DOUBLE):
 		case castidx(TS_FLOAT,TS_LNGDBL):
@@ -1675,6 +4926,18 @@ NODE *ln;	/* If non-null, is node that R was generated from. */
 		case TS_LNGDBL:
 		    vrlowiden(r);	/* Make into register pair */
 		    code5(P_SETZ, VR2(r)); /* zero the next reg */
+		    if ((tgcpu == TGCPU_PDP6 || tgcpu == TGCPU_KA)
+		      && (tissigned(tfrom) || tbitsize(tfrom) < TGSIZ_WORD))
+			{
+			/* PDP-6/KA10 have no FLTR instruction and the old
+			** ASHC/TLC/DFAD-zero normalization sequence is not
+			** reliable with the DAIMON helper path.  A single-float
+			** conversion in the high word plus a zero low word gives
+			** the expected double value for signed/small integer inputs.
+			*/
+			code0(P_FLTR, r, r);
+			break;
+			}
 		    if (tissigned(tfrom) || tbitsize(tfrom) < TGSIZ_WORD)
 			{
 			code8(P_ASHC, r, -8); /* shift out mantissa*/
@@ -1714,24 +4977,42 @@ static VREG *
 gintwiden(VREG *r, TYPE *tfrom, TYPE *tto, NODE *n)		
 /* Node that R was generated from (if any) */
 {
+    /* A narrowing N_CAST is normalized by gcastr().  Do not emit the same
+    ** mask/sign extension again for the implicit promotion of its result.
+    */
+    if (n && n->Nop == N_CAST
+      && tbitsize(n->Ntype) < tbitsize(n->Nleft->Ntype))
+	return r;
+
     if (tbitsize(tto) > tbitsize(tfrom))
 	{
 	if (tisunsign(tfrom))	/* Handle unsigned.  Easy, just mask off */
 	    {
 	    r = guintwiden(r, tbitsize(tfrom), n);
 	    }
-	else		/* Handle signed.  Harder, must test bit. */
+	else		/* Handle signed.  Harder, must extend the sign bit. */
 	    {
+	    int fbits = tbitsize(tfrom);
+
 	    if (!r)
 		return (VREG *)-1;		/* Stop if just checking. */
-	    if (tbitsize(tfrom) == TGSIZ_HALFWD)	/* Special case */
+	    if (fbits == TGSIZ_HALFWD)	/* Special case */
 		{
 		code0(P_HRRE, r, r);		/* Extend sign of halfwd */
 		return r;
 		}
-	    code8(P_TRN+POF_ISSKIP+POS_SKPE, r, (1<<(tbitsize(tfrom)-1)));
-	    code8(P_TRO+POF_ISSKIP+POS_SKPA, r, -(1 << tbitsize(tfrom)));
-	    code1(P_AND, r, (1 << tbitsize(tfrom))-1);	/* Positive, zap! */
+	    if (fbits == 32 && tbitsize(tto) == TGSIZ_WORD) {
+		/* Exact 32-bit integers occupy either a packed 32-bit field or
+		** a full word.  Discard any storage padding, then arithmetic
+		** shift back so target bit 31 becomes the PDP-10 sign bit.
+		*/
+		code8(P_LSH, r, TGSIZ_WORD - fbits);
+		code8(P_ASH, r, -(TGSIZ_WORD - fbits));
+		return r;
+	    }
+	    code8(P_TRN+POF_ISSKIP+POS_SKPE, r, ((INT)1 << (fbits-1)));
+	    code8(P_TRO+POF_ISSKIP+POS_SKPA, r, -((INT)1 << fbits));
+	    code1(P_AND, r, ((INT)1 << fbits)-1);	/* Positive, zap! */
 	    }
 	}
     return r;
@@ -1777,12 +5058,61 @@ gincdec(NODE *n, int inc, int pre)
     INT size = 1;		/* Default size for most common case */
     int savaddr;
     int volat;
+    int wantret = ((n->Nflag & NF_RETEXPR) && fnargkeepmask);
 
     if (n->Nflag & NF_DISCARD)	/* Will result be discarded? */
 	pre = 1;		/* If so, prefix form is always better! */
     n = n->Nleft;		/* Mainly interested in operand */
     if ((volat = tisvolatile(n->Ntype)) != 0)
 	flushcode();		/* Barfo, avoid optimiz of volatile obj */
+
+    /* _Bool increment/decrement applies the arithmetic operation after
+    ** integer promotion and then converts the result back to _Bool.  Since
+    ** a stored bool is canonical 0/1, ++ always stores 1 and -- toggles it.
+    ** Keep the original value separately for postfix expressions.
+    */
+    if (tisbool(n->Ntype))
+	{
+	if (Register_Id(n))
+	    {
+	    int sr = n->Nid->Sreg;
+	    r = vrget();
+	    r->Vrtype = n->Ntype;
+	    if (!pre)
+		code00(P_MOVE, r->Vrloc, sr);
+	    if (inc > 0)
+		codr1(P_MOVE, sr, 1);
+	    else
+		codr1(P_XOR, sr, 1);
+	    if (pre)
+		code00(P_MOVE, r->Vrloc, sr);
+	    }
+	else
+	    {
+	    ra = gaddress(n);
+	    r = getmem(ra, n->Ntype, 1, 1);
+	    r2 = NULL;
+	    if (!pre)
+		{
+		r2 = vrget();
+		r2->Vrtype = n->Ntype;
+		codek0(P_MOVE, r2, r);
+		}
+	    if (inc > 0)
+		code1(P_MOVE, r, 1);
+	    else
+		code1(P_XOR, r, 1);
+	    stomem(r, ra, 1, 0);
+	    if (!pre)
+		{
+		vrfree(r);
+		r = r2;
+		}
+	    }
+	if (volat)
+	    flushcode();
+	return r;
+	}
 
     if (Register_Id(n))
 	{
@@ -1795,8 +5125,11 @@ gincdec(NODE *n, int inc, int pre)
 	    case TS_FLOAT:
 		r = vrget();
 		r->Vrtype = n->Ntype;	/* Set C type of object in reg */
-		code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
+		if (!pre)
+		    code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
 		codr1(P_FADR, n->Nid->Sreg,(INT) ((inc > 0)? 1.0 : -1.0)); // FW KCC-NT
+		if (pre)
+		    code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
 		break;
 #if 0	/* for next version of KCC regs */
 	    case TS_DOUBLE:
@@ -1815,11 +5148,53 @@ gincdec(NODE *n, int inc, int pre)
 		else
 		    code9(P_DFAD, r, ((inc > 0)? 1.0 : -1.0), 1);
 		break;
-	    case TS_PTR:			/* Hacking pointer? */
 	    case TS_ENUM:
 	    case TS_BITF:
 	    case TS_UBITF:
 #endif
+	    case TS_PTR:
+		size = sizeptobj(n->Ntype);
+		if (!size)
+		    int_error("gincdec: 0-size reg ptr %N", n);
+		if (tisbytepointer(n->Ntype))
+		    {
+		    if (!pre)
+			{
+			r = vrget();
+			r->Vrtype = n->Ntype;
+			code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
+			}
+
+		    /* ADJBP needs separate count/result and pointer operands.
+		    ** Use KCC's reserved scratch AC and flush around the
+		    ** sequence so register coalescing cannot make them alias.
+		    */
+		    flushcode();
+		    codr1(P_MOVE, R_SCRREG, inc * size);
+		    code00(P_ADJBP, R_SCRREG, n->Nid->Sreg);
+		    code00(P_MOVE, n->Nid->Sreg, R_SCRREG);
+		    flushcode();
+
+		    if (pre)
+			{
+			r = vrget();
+			r->Vrtype = n->Ntype;
+			code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
+			}
+		    }
+		else
+		    {
+		    r = vrget();
+		    r->Vrtype = n->Ntype;
+		    if (!pre)
+			code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
+		    codr1(P_ADD, n->Nid->Sreg,
+			  (INT)((inc > 0) ? size : -size));
+		    if (pre)
+			code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
+		    }
+		break;
+
 	    case TS_INT:
 	    case TS_UINT:
 	    case TS_LONG:
@@ -1830,8 +5205,11 @@ gincdec(NODE *n, int inc, int pre)
 	    case TS_USHORT:
 		r = vrget();
 		r->Vrtype = n->Ntype;	/* Set C type of object in reg */
-		code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
+		if (!pre)
+		    code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
 		codr1(P_ADD, n->Nid->Sreg,((inc > 0)? 1 : -1));
+		if (pre)
+		    code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
 		break;
 	    default:
 		int_error("gincdec: bad reg type %N", n);
@@ -1839,6 +5217,137 @@ gincdec(NODE *n, int inc, int pre)
 	    }
 	}
     else
+	{
+	/* DImode is represented by an ordinary two-word integral type, so it
+	** has no unique Tspec switch arm.  Handle it before the scalar switch.
+	** Keep the lvalue address alive across the load/update/store sequence;
+	** this also guarantees that indirect and indexed lvalues are evaluated
+	** exactly once.
+	*/
+	if (tisdimode(n->Ntype))
+	    {
+	    static int dimodeinclab;
+	    int lab;
+	    int rflags, r2flags;
+	    char buf[192];
+	    int len;
+
+	    ra = gaddress(n);
+	    r = getmem(ra, n->Ntype, 0, 1);
+	    if (!pre)
+		{
+		rflags = r->Vrflags;
+		r2flags = VR2(r)->Vrflags;
+		r->Vrflags |= VRF_LOCK;
+		VR2(r)->Vrflags |= VRF_LOCK;
+		r2 = vrdget();
+		r->Vrflags = rflags;
+		VR2(r)->Vrflags = r2flags;
+		r2->Vrtype = n->Ntype;
+		VR2(r2)->Vrtype = n->Ntype;
+		gdimove(r2, r);
+		}
+
+	    (void) vrstoreal(r, VR2(r));
+	    lab = dimodeinclab++;
+	    if (inc > 0)
+		len = sprintf(buf,
+		    "\tADDI\t%o,1\n"
+		    "\tJUMPGE\t%o,%%DIINC%d\n"
+		    "\tAND\t%o,[377777777777]\n"
+		    "\tADDI\t%o,1\n"
+		    "%%DIINC%d:\n",
+		    vrreal(VR2(r)), vrreal(VR2(r)), lab,
+		    vrreal(VR2(r)), vrreal(r), lab);
+	    else
+		len = sprintf(buf,
+		    "\tSUBI\t%o,1\n"
+		    "\tJUMPGE\t%o,%%DIDEC%d\n"
+		    "\tADD\t%o,[400000000000]\n"
+		    "\tSUBI\t%o,1\n"
+		    "%%DIDEC%d:\n",
+		    vrreal(VR2(r)), vrreal(VR2(r)), lab,
+		    vrreal(VR2(r)), vrreal(r), lab);
+	    codestr(buf, len);
+	    stomem(r, ra, 2, 0);
+	    if (!pre)
+		{
+		vrfree(r);
+		r = r2;
+		}
+	    if (volat)
+		flushcode();
+	    return r;
+	    }
+
+
+        if (((n->Nop == Q_MEMBER || n->Nop == Q_DOT)
+             && (packedcross(n->Nxoff) || packedbit(n->Nxoff) || packedbitscalar(n->Nxoff)))
+          || packedptrderef(n) || bitptrmember(n))
+            {
+            TYPE *optype;
+
+            if (sideffp(n))
+                {
+                error("side effects in increment of cross-word GNU packed member are not yet supported");
+                return NULL;
+                }
+            r = gpackedload(n);
+            if (!pre)
+                {
+                r2 = vrget();
+                r2->Vrtype = n->Ntype;
+                codek0(P_MOVE, r2, r);
+                }
+            code1((inc > 0 ? P_ADD : P_SUB), r, 1);
+            optype = (tbitsize(n->Ntype) < TGSIZ_WORD) ? inttype : n->Ntype;
+            if (optype != n->Ntype)
+                r = gcastr(CAST_IT_IT, r, optype, n->Ntype, n);
+            (void) gpackedstore(r, n);
+            if (!pre)
+                {
+                vrfree(r);
+                r = r2;
+                }
+            if (volat)
+                flushcode();
+            return r;
+            }
+
+        /* Function-boundary exact-width pointers may be either native byte
+        ** pointers or logical S=1 pointers.  Increment/decrement must retain
+        ** that runtime representation and therefore uses the same dynamic
+        ** adjustment path as p +/- 1.  Keep the lvalue address across the
+        ** load/adjust/store sequence so it is evaluated exactly once.
+        */
+        if (tismaybitptr(n->Ntype))
+            {
+            VREG *cnt, *old;
+
+            ra = gaddress(n);
+            r = getmem(ra, n->Ntype, 0, 1);
+            old = NULL;
+            if (!pre)
+                {
+                old = vrget();
+                old->Vrtype = n->Ntype;
+                codek0(P_MOVE, old, r);
+                }
+            cnt = vrget();
+            cnt->Vrtype = inttype;
+            code1(P_MOVE, cnt, 1);
+            r = gmaybitadjust(r, cnt, n->Ntype, inc < 0);
+            stomem(r, ra, 1, 0);
+            if (!pre)
+                {
+                vrfree(r);
+                r = old;
+                }
+            if (volat)
+                flushcode();
+            return r;
+            }
+
 	switch (n->Ntype->Tspec)
 	    {
 	    case TS_FLOAT:
@@ -1925,17 +5434,25 @@ gincdec(NODE *n, int inc, int pre)
 			vrfree(r);
 			r = r2;
 			}
+
+		/* Consecutive byte-pointer inc/dec operations can otherwise be
+		** folded incorrectly by the peephole pass because simulated ADJBP
+		** sequences update a memory byte pointer through helper code rather
+		** than a single ordinary memory op.  Keep the update boundary exact.
+		*/
+		    flushcode();
 		    break;		/* Break out to return R */
 		    }
 	    /* Drop through to handle non-char pointer as integer */
 
 
+	    /* FALLTHROUGH */
 	    case TS_ENUM:
 	    case TS_INT:
 	    case TS_UINT:
 	    case TS_LONG:
 	    case TS_ULONG:
-		r = vrget();
+		r = wantret ? vrretget() : vrget();
 		r->Vrtype = n->Ntype;	/* Set C type of obj in reg */
 		if (size == 1)
 		    code4((inc > 0 ? P_AOS : P_SOS), r, gaddress(n));
@@ -1976,6 +5493,7 @@ gincdec(NODE *n, int inc, int pre)
 		int_error("gincdec: bad type %N", n);
 		return NULL;
 	    }
+	}
     if (volat)
 	flushcode();		/* Finish up after volatile obj */
     return r;
@@ -2007,6 +5525,846 @@ gincdec(NODE *n, int inc, int pre)
 ** we simply flush out all peephole code before and after generating the
 ** fetch from (or store into) a volatile object!  Crude, but should work.
 */
+/* GMAYBITLOAD - Load through a function-boundary exact-width pointer.
+** The raw pointer is self-describing: S=1 denotes KCC's logical packed bit
+** stream; any other S retains the ordinary native byte-pointer semantics.
+*/
+static VREG *
+gmaybitload(NODE *n)
+{
+    VREG *base, *tmp, *r, *p, *q, *b;
+    SYMBOL *bitlab, *done;
+    int bits, i;
+
+    bits = tbitsize(n->Ntype);
+
+    /* Keep the representation-polymorphic pointer in real stack memory.
+    ** PDP-6 ADJBP expansion can spill several ACs, so a long-lived virtual
+    ** register is not a reliable anchor across the bit-at-a-time path.
+    */
+    base = genexpr(n->Nleft);
+    code0(P_PUSH, VR_SP, base);
+    ++stackoffset;
+
+    tmp = vrget();
+    codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, 0, R_SP);
+    code0(P_HLRZ, tmp, tmp);
+    code8(P_LSH, tmp, -6);
+    code1(P_AND, tmp, 077);
+    bitlab = newlabel();
+    done = newlabel();
+    code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
+    code6(P_JRST, (VREG *)NULL, bitlab);
+    vrfree(tmp);
+
+    r = vrget();
+    r->Vrtype = uinttype;
+    p = vrget();
+    codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, 0, R_SP);
+    code0(P_LDB, r, p);
+    code6(P_JRST, (VREG *)NULL, done);
+    flushcode();
+
+    codlabel(bitlab);
+    code5(P_SETZ, r);
+    for (i = 0; i < bits; ++i)
+        {
+        p = vrget();
+        if (i == 0)
+            codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, 0, R_SP);
+        else
+            {
+            b = vrget();
+            codemdx(P_MOVE, vrtoreal(b), (SYMBOL *)NULL, 0, R_SP);
+            code1(P_MOVE, p, i);
+            code0(P_ADJBP, p, b);
+            flushcode();
+            }
+        q = vrget();
+        q->Vrtype = uinttype;
+        code0(P_LDB, q, p);
+        if (i != 0)
+            code8(P_LSH, r, 1);
+        code0(P_IOR, r, q);
+        }
+    flushcode();
+    codlabel(done);
+    code8(P_ADJSP, VR_SP, -1);
+    --stackoffset;
+    return gcastr(CAST_IT_IT, r, uinttype, n->Ntype, (NODE *)NULL);
+}
+
+/* GMAYBITSTORE - Store through a representation-polymorphic pointer.
+** Native byte pointers use one DPB.  S=1 pointers store the exact-width
+** value one bit at a time into the continuous packed stream.  The pointer
+** and value are anchored in stack memory because PDP-6 ADJBP simulation
+** may consume scratch accumulators.
+*/
+static VREG *
+gmaybitstore(VREG *reg, NODE *n)
+{
+    VREG *base, *tmp, *p, *q, *v, *r;
+    SYMBOL *bitlab, *done;
+    int bits, i, shift;
+
+    bits = tbitsize(n->Ntype);
+    base = genexpr(n->Nleft);
+    code0(P_PUSH, VR_SP, base);
+    code0(P_PUSH, VR_SP, reg);
+    stackoffset += 2;
+    vrfree(base);
+    vrfree(reg);
+
+    tmp = vrget();
+    codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, -1, R_SP);
+    code0(P_HLRZ, tmp, tmp);
+    code8(P_LSH, tmp, -6);
+    code1(P_AND, tmp, 077);
+    bitlab = newlabel();
+    done = newlabel();
+    code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
+    code6(P_JRST, (VREG *)NULL, bitlab);
+    vrfree(tmp);
+
+    p = vrget();
+    v = vrget();
+    codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, -1, R_SP);
+    codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+    code0(P_DPB, v, p);
+    vrfree(p);
+    vrfree(v);
+    code6(P_JRST, (VREG *)NULL, done);
+    flushcode();
+
+    codlabel(bitlab);
+    for (i = 0; i < bits; ++i)
+        {
+        p = vrget();
+        codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, -1, R_SP);
+        if (i != 0)
+            {
+            q = vrget();
+            code1(P_MOVE, q, i);
+            code0(P_ADJBP, q, p);
+            vrfree(p);
+            p = q;
+            }
+        v = vrget();
+        codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+        shift = bits - i - 1;
+        if (shift != 0)
+            code8(P_LSH, v, -shift);
+        code1(P_AND, v, 1);
+        code0(P_DPB, v, p);
+        vrfree(v);
+        vrfree(p);
+        }
+    flushcode();
+
+    codlabel(done);
+    r = vrget();
+    r->Vrtype = n->Ntype;
+    codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
+    code8(P_ADJSP, VR_SP, -2);
+    stackoffset -= 2;
+    return r;
+}
+
+/* GPACKEDLOAD - Load a scalar packed member that crosses a word.
+** Keep the address as a native 9-bit PDP-10 byte pointer throughout.
+** A packed scalar occupies ceil(bits/9) C address units; if the final unit
+** is partial, its value bits occupy the high part and its low bits are
+** padding.  Assemble at most four fragments into one 36-bit accumulator.
+*/
+static VREG *
+gpackedload(NODE *n)
+{
+    VREG *base, *p, *q, *r;
+    int bits, units, tail, i, nbits, saveflags;
+
+    bits = tbitsize(n->Ntype);
+    if (bitptrderef(n) || bitptrmember(n))
+        {
+        int done, bflags;
+        VREG *acc;
+
+        base = gaddress(n);
+        bflags = base->Vrflags;
+        base->Vrflags |= VRF_LOCK;
+        acc = vrget();
+        acc->Vrtype = uinttype;
+        code5(P_SETZ, acc);
+        for (done = 0; done < bits; ++done)
+            {
+            p = vrget();
+            if (done == 0)
+                codek0(P_MOVE, p, base);
+            else
+                {
+                code1(P_MOVE, p, done);
+                codek0(P_ADJBP, p, base);
+                }
+            q = vrget();
+            q->Vrtype = uinttype;
+            code0(P_LDB, q, p);
+            vrfree(p);
+            if (done != 0)
+                code8(P_LSH, acc, 1);
+            code0(P_IOR, acc, q);
+            }
+        base->Vrflags = bflags;
+        vrfree(base);
+        return gcastr(CAST_IT_IT, acc, uinttype, n->Ntype, (NODE *)NULL);
+        }
+    if (packedbit(n->Nxoff) || packedbitscalar(n->Nxoff))
+        {
+        INT bitoff = packedmembit(n->Nxoff);
+        int done = 0;
+        VREG *acc = NULL;
+        base = gaddress(n);
+        saveflags = base->Vrflags;
+        base->Vrflags |= VRF_LOCK;
+        while (done < bits)
+            {
+            INT apos = bitoff + done;
+            int boff = (int)(apos / TGSIZ_CHAR)
+                     - (int)(bitoff / TGSIZ_CHAR);
+            int skip = (int)(apos % TGSIZ_CHAR);
+            int take = TGSIZ_CHAR - skip;
+            int rshift;
+            if (take > bits - done) take = bits - done;
+            p = vrget();
+            if (boff == 0) codek0(P_MOVE, p, base);
+            else { code1(P_MOVE, p, boff); codek0(P_ADJBP, p, base); }
+            r = vrget(); r->Vrtype = uinttype; code0(P_LDB, r, p);
+            rshift = TGSIZ_CHAR - skip - take;
+            if (rshift) code8(P_LSH, r, -rshift);
+            if (take < TGSIZ_WORD)
+                code1(P_AND, r, (((INT)1 << take) - 1));
+            if (acc == NULL) acc = r;
+            else
+                {
+                code8(P_LSH, acc, take);
+                code0(P_IOR, acc, r);
+                }
+            done += take;
+            }
+        base->Vrflags = saveflags;
+        vrfree(base);
+        acc->Vrtype = uinttype;
+        return gcastr(CAST_IT_IT, acc, uinttype, n->Ntype, (NODE *)NULL);
+        }
+    units = (bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR;
+    tail = bits % TGSIZ_CHAR;
+    base = gaddress(n);
+    saveflags = base->Vrflags;
+    base->Vrflags |= VRF_LOCK;
+    q = NULL;
+
+    for (i = 0; i < units; ++i)
+        {
+        p = vrget();
+        if (i == 0)
+            codek0(P_MOVE, p, base);
+        else
+            {
+            code1(P_MOVE, p, i);
+            codek0(P_ADJBP, p, base);
+            }
+        r = vrget();
+        r->Vrtype = uinttype;
+        code0(P_LDB, r, p);
+        nbits = (i == units-1 && tail != 0) ? tail : TGSIZ_CHAR;
+        if (nbits != TGSIZ_CHAR)
+            code8(P_LSH, r, -(TGSIZ_CHAR - nbits));
+        if (q == NULL)
+            q = r;
+        else
+            {
+            code8(P_LSH, q, nbits);
+            code0(P_IOR, q, r);
+            }
+        }
+    base->Vrflags = saveflags;
+    vrfree(base);
+    q->Vrtype = uinttype;
+    return gcastr(CAST_IT_IT, q, uinttype, n->Ntype, (NODE *)NULL);
+}
+
+/* GPACKEDSTORE - Store a scalar packed member that crosses a word.
+** Split the value into 9-bit address-unit fragments.  A final partial
+** fragment is left-justified in its 9-bit storage unit, matching the packed
+** layout used by GCC and leaving the trailing padding bits zero.
+*/
+static VREG *
+gpackedstore(VREG *reg, NODE *n)
+{
+    VREG *base, *p, *q;
+    INT mask;
+    int bits, units, tail, i, nbits, below, savebase, savereg;
+
+    bits = tbitsize(n->Ntype);
+    if (bitptrderef(n) || bitptrmember(n))
+        {
+        int done, bflags, rflags, shift;
+
+        base = gaddress(n);
+        bflags = base->Vrflags;
+        rflags = reg->Vrflags;
+        base->Vrflags |= VRF_LOCK;
+        reg->Vrflags |= VRF_LOCK;
+        for (done = 0; done < bits; ++done)
+            {
+            p = vrget();
+            if (done == 0)
+                codek0(P_MOVE, p, base);
+            else
+                {
+                code1(P_MOVE, p, done);
+                codek0(P_ADJBP, p, base);
+                }
+            q = vrget();
+            q->Vrtype = uinttype;
+            codek0(P_MOVE, q, reg);
+            shift = bits - done - 1;
+            if (shift != 0)
+                code8(P_LSH, q, -shift);
+            code1(P_AND, q, 1);
+            code0(P_DPB, q, p);
+            vrfree(p);
+            vrfree(q);
+            }
+        reg->Vrflags = rflags;
+        base->Vrflags = bflags;
+        vrfree(base);
+        return reg;
+        }
+    if (packedbit(n->Nxoff) || packedbitscalar(n->Nxoff))
+        {
+        INT bitoff = packedmembit(n->Nxoff);
+        int storebits = packedbitscalar(n->Nxoff)
+                      ? ((bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR) * TGSIZ_CHAR
+                      : bits;
+        int done = 0;
+        base = gaddress(n);
+        savebase = base->Vrflags;
+        savereg = reg->Vrflags;
+        base->Vrflags |= VRF_LOCK;
+        reg->Vrflags |= VRF_LOCK;
+        while (done < storebits)
+            {
+            INT apos = bitoff + done;
+            int boff = (int)(apos / TGSIZ_CHAR)
+                     - (int)(bitoff / TGSIZ_CHAR);
+            int skip = (int)(apos % TGSIZ_CHAR);
+            int take = TGSIZ_CHAR - skip;
+            int bshift, srcshift;
+            INT bmask;
+            if (take > storebits - done) take = storebits - done;
+            bshift = TGSIZ_CHAR - skip - take;
+            bmask = (((INT)1 << take) - 1) << bshift;
+
+            p = vrget();
+            if (boff == 0) codek0(P_MOVE, p, base);
+            else { code1(P_MOVE, p, boff); codek0(P_ADJBP, p, base); }
+            q = vrget(); q->Vrtype = uinttype; code0(P_LDB, q, p);
+            vrfree(p);
+            code1(P_AND, q, 0777 ^ bmask);
+
+            if (done < bits)
+                {
+                int vtake = take;
+                VREG *v;
+                if (vtake > bits - done) vtake = bits - done;
+                v = vrget(); codek0(P_MOVE, v, reg);
+                srcshift = bits - done - vtake;
+                if (srcshift) code8(P_LSH, v, -srcshift);
+                if (vtake < TGSIZ_WORD)
+                    code1(P_AND, v, (((INT)1 << vtake) - 1));
+                if (bshift + (take - vtake))
+                    code8(P_LSH, v, bshift + (take - vtake));
+                code0(P_IOR, q, v); vrfree(v);
+                }
+            p = vrget();
+            if (boff == 0) codek0(P_MOVE, p, base);
+            else { code1(P_MOVE, p, boff); codek0(P_ADJBP, p, base); }
+            code0(P_DPB, q, p); vrfree(q);
+            done += take;
+            }
+        base->Vrflags = savebase;
+        reg->Vrflags = savereg;
+        vrfree(base);
+        return reg;
+        }
+    units = (bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR;
+    tail = bits % TGSIZ_CHAR;
+    base = gaddress(n);
+    savebase = base->Vrflags;
+    savereg = reg->Vrflags;
+    base->Vrflags |= VRF_LOCK;
+    reg->Vrflags |= VRF_LOCK;
+    below = bits;
+
+    for (i = 0; i < units; ++i)
+        {
+        nbits = (i == units-1 && tail != 0) ? tail : TGSIZ_CHAR;
+        below -= nbits;
+        q = vrget();
+        codek0(P_MOVE, q, reg);
+        if (below != 0)
+            code8(P_LSH, q, -below);
+        mask = ((INT)1 << nbits) - 1;
+        code1(P_AND, q, mask);
+        if (nbits != TGSIZ_CHAR)
+            code8(P_LSH, q, TGSIZ_CHAR - nbits);
+
+        p = vrget();
+        if (i == 0)
+            codek0(P_MOVE, p, base);
+        else
+            {
+            code1(P_MOVE, p, i);
+            codek0(P_ADJBP, p, base);
+            }
+        code0(P_DPB, q, p);
+        vrfree(q);
+        }
+    base->Vrflags = savebase;
+    reg->Vrflags = savereg;
+    vrfree(base);
+    return reg;
+}
+
+/* GPACKEDCOPY - Copy a packed aggregate by its exact C-byte extent.
+** Whole-word SMOVE is wrong for a packed object whose Tbytes is not a
+** multiple of four because it overwrites bytes belonging to the next array
+** element.  Keep this deliberately simple and PDP-6 friendly: copy native
+** 9-bit address units with LDB/DPB.
+*/
+/* GPACKEDBITBASE - Return a native 9-bit byte pointer to the object
+** containing N and the exact bit offset of N within that byte stream.
+** P=074,S=0 nested aggregates cannot themselves be represented as a PDP-10
+** byte pointer, but their containing packed object can.
+*/
+static VREG *
+gpackedbitbase(NODE *n, INT *bitp)
+{
+    if (n != NULL && (n->Nop == Q_MEMBER || n->Nop == Q_DOT)
+      && packedbitagg(n->Nxoff))
+        {
+        *bitp = (unsigned INT)(-n->Nxoff) >> 12;
+        return gaddress(n->Nleft);
+        }
+    *bitp = 0;
+    return gaddress(n);
+}
+
+/* GPACKEDBITVALUE - Materialize a bit-offset packed aggregate in the normal
+** one- or two-word aggregate value representation.  The packed object's
+** first C byte occupies the high nine bits of the first word, exactly as it
+** would in aligned memory.  This is sufficient for the normal KCC/GCC ABI
+** argument and return paths without inventing a software pointer value.
+*/
+static VREG *
+gpackedbitvalue(NODE *n, TYPE *t)
+{
+    VREG *sa, *sp, *q, *r, *dw;
+    INT sbit, bits, done, spos, sbyte, mask;
+    int siz, sflags, sskip, take, dword, dbit, sshift, dshift;
+
+    siz = sizetype(t);
+    if (siz < 1 || siz > 2)
+        {
+        error("bit-offset GNU packed aggregate value larger than two words is not yet supported");
+        return gaddress(n);
+        }
+
+    sa = gpackedbitbase(n, &sbit);
+    sflags = sa->Vrflags;
+    sa->Vrflags |= VRF_LOCK;
+    if (siz == 2)
+        {
+        r = vrdget();
+        code5(P_SETZ, r);
+        code5(P_SETZ, VR2(r));
+        }
+    else
+        {
+        r = vrget();
+        code5(P_SETZ, r);
+        }
+    r->Vrtype = t;
+    if (siz == 2)
+        VR2(r)->Vrtype = t;
+
+    bits = (INT)t->Tbytes * TGSIZ_CHAR;
+    done = 0;
+    while (done < bits)
+        {
+        spos = sbit + done;
+        sbyte = spos / TGSIZ_CHAR;
+        sskip = (int)(spos % TGSIZ_CHAR);
+        take = TGSIZ_CHAR - sskip;
+        dbit = (int)(done % TGSIZ_WORD);
+        if (take > TGSIZ_WORD - dbit)
+            take = TGSIZ_WORD - dbit;
+        if ((INT)take > bits - done)
+            take = (int)(bits - done);
+
+        sp = vrget();
+        if (sbyte == 0)
+            codek0(P_MOVE, sp, sa);
+        else
+            {
+            code1(P_MOVE, sp, sbyte);
+            codek0(P_ADJBP, sp, sa);
+            }
+        q = vrget();
+        q->Vrtype = uinttype;
+        code0(P_LDB, q, sp);
+        sshift = TGSIZ_CHAR - sskip - take;
+        if (sshift != 0)
+            code8(P_LSH, q, -sshift);
+        mask = ((INT)1 << take) - 1;
+        code1(P_AND, q, mask);
+
+        dword = (int)(done / TGSIZ_WORD);
+        dshift = TGSIZ_WORD - dbit - take;
+        if (dshift != 0)
+            code8(P_LSH, q, dshift);
+        dw = dword == 0 ? r : VR2(r);
+        code0(P_IOR, dw, q);
+        done += take;
+        }
+
+    sa->Vrflags = sflags;
+    vrfree(sa);
+    return r;
+}
+
+/* GPACKEDBITSTOREREG - Store a one- or two-word packed aggregate value into
+** a nested aggregate beginning at an exact bit offset.  Destination C bytes
+** may overlap unrelated outer fields, so every partial byte is updated with
+** read/modify/write.
+*/
+static VREG *
+gpackedbitstorereg(NODE *dst, VREG *src, TYPE *t)
+{
+    VREG *da, *dp, *dv, *q, *sw;
+    INT dbit0, bits, done, dpos, dbyte, mask, keepmask;
+    int siz, dflags, sflags, dskip, take, sword, sbit, sshift, dshift;
+
+    siz = sizetype(t);
+    if (siz < 1 || siz > 2)
+        {
+        error("bit-offset GNU packed aggregate value larger than two words is not yet supported");
+        vrfree(src);
+        return gaddress(dst);
+        }
+
+    da = gpackedbitbase(dst, &dbit0);
+    dflags = da->Vrflags;
+    sflags = src->Vrflags;
+    da->Vrflags |= VRF_LOCK;
+    src->Vrflags |= VRF_LOCK;
+
+    bits = (INT)t->Tbytes * TGSIZ_CHAR;
+    done = 0;
+    while (done < bits)
+        {
+        dpos = dbit0 + done;
+        dbyte = dpos / TGSIZ_CHAR;
+        dskip = (int)(dpos % TGSIZ_CHAR);
+        take = TGSIZ_CHAR - dskip;
+        sbit = (int)(done % TGSIZ_WORD);
+        if (take > TGSIZ_WORD - sbit)
+            take = TGSIZ_WORD - sbit;
+        if ((INT)take > bits - done)
+            take = (int)(bits - done);
+
+        sword = (int)(done / TGSIZ_WORD);
+        sw = sword == 0 ? src : VR2(src);
+        q = vrget();
+        q->Vrtype = uinttype;
+        codek0(P_MOVE, q, sw);
+        sshift = TGSIZ_WORD - sbit - take;
+        if (sshift != 0)
+            code8(P_LSH, q, -sshift);
+        mask = ((INT)1 << take) - 1;
+        code1(P_AND, q, mask);
+
+        dp = vrget();
+        if (dbyte == 0)
+            codek0(P_MOVE, dp, da);
+        else
+            {
+            code1(P_MOVE, dp, dbyte);
+            codek0(P_ADJBP, dp, da);
+            }
+        dv = vrget();
+        dv->Vrtype = uinttype;
+        code0(P_LDB, dv, dp);
+        dshift = TGSIZ_CHAR - dskip - take;
+        keepmask = 0777L ^ (mask << dshift);
+        code1(P_AND, dv, keepmask);
+        if (dshift != 0)
+            code8(P_LSH, q, dshift);
+        code0(P_IOR, dv, q);
+        code0(P_DPB, dv, dp);
+        vrfree(dv);
+        done += take;
+        }
+
+    src->Vrflags = sflags;
+    vrfree(src);
+    da->Vrflags = dflags;
+    da->Vrtype = t;
+    return da;
+}
+
+/* GPACKEDBITCOPY - Copy one packed aggregate whose source or destination
+** begins at an arbitrary bit offset.  Operate on the containing 9-bit byte
+** stream and preserve unrelated bits in every destination address unit.
+** This deliberately does not create a first-class software pointer value;
+** it is an internal lowering for whole aggregate assignment.
+*/
+static VREG *
+gpackedbitcopy(NODE *dst, NODE *src, TYPE *t)
+{
+    VREG *da, *sa, *dp, *sp, *sv, *dv;
+    INT dbit, sbit, bits, done;
+    int dflags, sflags;
+
+    if (src == NULL)
+        return gaddress(dst);
+    if (!(src->Nflag & NF_LVALUE))
+        {
+        VREG *rv;
+
+        rv = genexpr(src);
+        if (rv == NULL)
+            return gaddress(dst);
+        if (sizetype(t) <= 2)
+            return gpackedbitstorereg(dst, rv, t);
+        error("bit-offset GNU packed aggregate expression larger than two words is not yet supported");
+        vrfree(rv);
+        return gaddress(dst);
+        }
+
+    bits = (INT)t->Tbytes * TGSIZ_CHAR;
+    da = gpackedbitbase(dst, &dbit);
+    sa = gpackedbitbase(src, &sbit);
+    dflags = da->Vrflags;
+    sflags = sa->Vrflags;
+    da->Vrflags |= VRF_LOCK;
+    sa->Vrflags |= VRF_LOCK;
+
+    done = 0;
+    while (done < bits)
+        {
+        INT spos, dpos, sbyte, dbyte, mask, keepmask;
+        int sskip, dskip, take, sshift, dshift;
+
+        spos = sbit + done;
+        dpos = dbit + done;
+        sbyte = spos / TGSIZ_CHAR;
+        dbyte = dpos / TGSIZ_CHAR;
+        sskip = (int)(spos % TGSIZ_CHAR);
+        dskip = (int)(dpos % TGSIZ_CHAR);
+        take = TGSIZ_CHAR - sskip;
+        if (take > TGSIZ_CHAR - dskip)
+            take = TGSIZ_CHAR - dskip;
+        if ((INT)take > bits - done)
+            take = (int)(bits - done);
+
+        sp = vrget();
+        if (sbyte == 0)
+            codek0(P_MOVE, sp, sa);
+        else
+            {
+            code1(P_MOVE, sp, sbyte);
+            codek0(P_ADJBP, sp, sa);
+            }
+        sv = vrget();
+        sv->Vrtype = uinttype;
+        code0(P_LDB, sv, sp);
+        sshift = TGSIZ_CHAR - sskip - take;
+        if (sshift != 0)
+            code8(P_LSH, sv, -sshift);
+        mask = ((INT)1 << take) - 1;
+        code1(P_AND, sv, mask);
+
+        dp = vrget();
+        if (dbyte == 0)
+            codek0(P_MOVE, dp, da);
+        else
+            {
+            code1(P_MOVE, dp, dbyte);
+            codek0(P_ADJBP, dp, da);
+            }
+        dv = vrget();
+        dv->Vrtype = uinttype;
+        code0(P_LDB, dv, dp);
+        dshift = TGSIZ_CHAR - dskip - take;
+        keepmask = 0777L ^ (mask << dshift);
+        code1(P_AND, dv, keepmask);
+        if (dshift != 0)
+            code8(P_LSH, sv, dshift);
+        code0(P_IOR, dv, sv);
+        code0(P_DPB, dv, dp);
+        vrfree(dv);
+        done += take;
+        }
+
+    sa->Vrflags = sflags;
+    vrfree(sa);
+    da->Vrflags = dflags;
+    da->Vrtype = t;
+    return da;
+}
+
+static VREG *
+gpackedcopy(NODE *dst, NODE *src, TYPE *t)
+{
+    VREG *da, *sa, *dp, *sp, *q;
+    int i, bytes, dflags, sflags;
+
+    if (((dst->Nop == Q_MEMBER || dst->Nop == Q_DOT)
+         && packedbitagg(dst->Nxoff))
+      || ((src->Nop == Q_MEMBER || src->Nop == Q_DOT)
+         && packedbitagg(src->Nxoff)))
+        return gpackedbitcopy(dst, src, t);
+
+    if (!(src->Nflag & NF_LVALUE))
+        {
+        VREG *rv;
+        rv = genexpr(src);
+        if (rv == NULL)
+            return gaddress(dst);
+        if (sizetype(t) <= 2)
+            return gpackedcopyreg(dst, rv, t);
+        /* Larger aggregate expressions are represented by an address. */
+        bytes = t->Tbytes;
+        da = gaddress(dst);
+        sa = rv;
+        /* 3/4-word call results and hidden-result temporaries are returned
+        ** as ordinary word addresses.  Packed copying operates in C address
+        ** units, so convert that temporary address to a native 9-bit byte
+        ** pointer before walking its exact byte extent.
+        */
+        pitopc(sa, TGSIZ_CHAR, 0, 1);
+        dflags = da->Vrflags;
+        sflags = sa->Vrflags;
+        da->Vrflags |= VRF_LOCK;
+        sa->Vrflags |= VRF_LOCK;
+        for (i = 0; i < bytes; ++i)
+            {
+            sp = vrget();
+            if (i == 0) codek0(P_MOVE, sp, sa);
+            else { code1(P_MOVE, sp, i); codek0(P_ADJBP, sp, sa); }
+            q = vrget();
+            code0(P_LDB, q, sp);
+            dp = vrget();
+            if (i == 0) codek0(P_MOVE, dp, da);
+            else { code1(P_MOVE, dp, i); codek0(P_ADJBP, dp, da); }
+            code0(P_DPB, q, dp);
+            vrfree(q);
+            }
+        sa->Vrflags = sflags;
+        vrfree(sa);
+        da->Vrflags = dflags;
+        da->Vrtype = t;
+        return da;
+        }
+    bytes = t->Tbytes;
+    da = gaddress(dst);
+    sa = gaddress(src);
+    dflags = da->Vrflags;
+    sflags = sa->Vrflags;
+    da->Vrflags |= VRF_LOCK;
+    sa->Vrflags |= VRF_LOCK;
+
+    for (i = 0; i < bytes; ++i)
+        {
+        sp = vrget();
+        if (i == 0)
+            codek0(P_MOVE, sp, sa);
+        else
+            {
+            code1(P_MOVE, sp, i);
+            codek0(P_ADJBP, sp, sa);
+            }
+        q = vrget();
+        code0(P_LDB, q, sp);
+
+        dp = vrget();
+        if (i == 0)
+            codek0(P_MOVE, dp, da);
+        else
+            {
+            code1(P_MOVE, dp, i);
+            codek0(P_ADJBP, dp, da);
+            }
+        code0(P_DPB, q, dp);
+        vrfree(q);
+        }
+
+    sa->Vrflags = sflags;
+    vrfree(sa);
+    da->Vrflags = dflags;
+    da->Vrtype = t;
+    return da;
+}
+
+
+/* GPACKEDCOPYREG - Materialize a packed aggregate value held in one or two
+** return/value registers into an exact-byte destination.  Packed aggregate
+** words use the normal PDP-10 memory image: byte zero occupies the high
+** nine bits of the first word.
+*/
+static VREG *
+gpackedcopyreg(NODE *dst, VREG *src, TYPE *t)
+{
+    VREG *da, *dp, *q, *sw;
+    int i, bytes, word, pos, saveflags, savesrc;
+
+    bytes = t->Tbytes;
+    da = gaddress(dst);
+    saveflags = da->Vrflags;
+    savesrc = src->Vrflags;
+    da->Vrflags |= VRF_LOCK;
+    src->Vrflags |= VRF_LOCK;
+
+    for (i = 0; i < bytes; ++i)
+        {
+        word = i / 4;
+        pos = i % 4;
+        sw = (word == 0) ? src : VR2(src);
+        q = vrget();
+        codek0(P_MOVE, q, sw);
+        if (pos != 3)
+            code8(P_LSH, q, -((3 - pos) * TGSIZ_CHAR));
+        code1(P_AND, q, 0777);
+
+        dp = vrget();
+        if (i == 0)
+            codek0(P_MOVE, dp, da);
+        else
+            {
+            code1(P_MOVE, dp, i);
+            codek0(P_ADJBP, dp, da);
+            }
+        code0(P_DPB, q, dp);
+        vrfree(q);
+        }
+
+    src->Vrflags = savesrc;
+    vrfree(src);
+    da->Vrflags = saveflags;
+    da->Vrtype = t;
+    return da;
+}
+
 static VREG *
 gprimary(NODE *n)
 {
@@ -2016,6 +6374,15 @@ gprimary(NODE *n)
 
     switch (n->Nop)
 	{
+
+	case N_COMPLIT:	/* C99 compound literal */
+	    if (n->Nleft != NULL && n->Nleft->Nop == N_DATA)
+		genadata(n->Nleft);
+	    return gprimary(n->Nright);
+
+	case N_STMTEXPR:	/* GNU statement expression */
+	    genstmt(n->Nleft);
+	    return genexpr(n->Nright);
 
 	case Q_IDENT:		/* Variable name */
 	    if ((t = n->Nid->Stype->Tspec) == TS_FUNCT || t == TS_ARRAY )
@@ -2030,12 +6397,28 @@ gprimary(NODE *n)
 	    if ((volat = tisanyvolat(n->Ntype)) != 0)
 		flushcode();		/* If volatile, avoid optimization */
 
-	    if (Register_Id(n))	/* approximate getmem() for registers */
-#if 0
-		r = rgetmem(gaddress(n), n->Ntype, tisbyte(n->Ntype), 0);
-#else
-		r = rgetmem(gaddress(n), n->Ntype, 0);
-#endif
+	    if (Register_Id(n)) {
+        /* A register variable is a value, not a disposable temporary.
+        ** For a return expression, put the copy directly in AC1 so the
+        ** caller does not need a second MOVE in greturn().  Otherwise use
+        ** a normal temporary.
+        */
+        if (tisdimode(n->Ntype)) {
+            if ((n->Nid->Sflags & (SF_ABIREG|SF_ABICONSUME))
+              == (SF_ABIREG|SF_ABICONSUME))
+                r = vrdgetreg(n->Nid->Sreg);
+            else {
+                r = vrdget();
+                code00(P_DMOVE, r->Vrloc, n->Nid->Sreg);
+            }
+            r->Vrtype = n->Ntype;
+            VR2(r)->Vrtype = n->Ntype;
+        } else {
+            r = vrget();
+            r->Vrtype = n->Ntype;
+            code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
+        }
+        }
 	    else
 		r = getmem(gaddress(n), n->Ntype, tisbyte(n->Ntype), 0);
 
@@ -2053,10 +6436,30 @@ gprimary(NODE *n)
 	    code10(P_MOVE, r, n->Nsclab, elembsize(n->Ntype), 0);
 	    return r;
 
+	case N_ACONST:		/* GNU label address (&&label) */
+	    r = vrget();
+	    r->Vrtype = n->Ntype;
+	    code3(P_MOVE, r, n->Nxfsym);
+	    return r;
+
 	case N_VCONST:		/* Void "constant" */
 	    return NULL;		/* No register used! */
 	case N_ICONST:		/* Integer constant */
 	case N_PCONST:		/* Pointer constant uses same cell etc */
+	    if (tisdimode(n->Ntype))
+		{
+		INT hi, lo;
+
+		r = vrdget();
+		r->Vrtype = n->Ntype;
+		dimode_iconst_words(n, &hi, &lo);
+		lo = dimode_lo_abi(hi, lo);
+		flushcode();
+		code1(P_MOVE, r, hi);
+		code1(P_MOVE, VR2(r), lo);
+		flushcode();
+		return r;
+		}
 	    r = vrget();
 	    r->Vrtype = n->Ntype;	/* Set C type of object in reg */
 	    code1(P_MOVE, r, n->Niconst);
@@ -2083,12 +6486,17 @@ gprimary(NODE *n)
 	    gasm(n);
 	    return NULL;		/* Currently never returns anything */
 
+	case T_JFFO:
+	    gjffo(n);
+	    return NULL;
+
 	case N_FNCALL:		/* Function call */
 	    return gcall(n);
 
 	case Q_DOT:			/* (). direct component selection */
 	    if (!(n->Nleft->Nflag & NF_LVALUE))
 		break;		/* Ugh, do hairy stuff if not lvalue! */
+
 
 	    if ((debcsi == KCC_DBG_NULL) && (n->Nleft->Nop == Q_MEMBER))
 		{
@@ -2101,6 +6509,7 @@ gprimary(NODE *n)
 
 	/* OK, fall thru to handle like Q_MEMBER */
 
+	/* FALLTHROUGH */
 	case Q_MEMBER:		/* ()-> indirect component selection */
 	    if ((volat = tisanyvolat(n->Ntype)) != 0)
 		flushcode();		/* Ugh, avoid optimiz of volatile */
@@ -2112,6 +6521,23 @@ gprimary(NODE *n)
 		code4 (P_NULPTR, (VREG *) NULL, gaddress (n->Nleft));
 		}
 #endif
+
+            if ((n->Ntype->Tspec == TS_STRUCT || n->Ntype->Tspec == TS_UNION)
+              && packedbitagg(n->Nxoff))
+                {
+                r = gpackedbitvalue(n, n->Ntype);
+                if (volat)
+                    flushcode();
+                return r;
+                }
+
+            if (tisinteg(n->Ntype) && (packedcross(n->Nxoff) || packedbit(n->Nxoff) || packedbitscalar(n->Nxoff)))
+                {
+                r = gpackedload(n);
+                if (volat)
+                    flushcode();
+                return r;
+                }
 
 	    if (Register_Id(n))	/* approximate getmem() for registers */
 #if 0
@@ -2194,6 +6620,411 @@ gprimary(NODE *n)
 /* GCALL - Generate function call
 */
 
+/* GCCABI_COLLECT_ARGS - Collect call arguments in source order. */
+static void
+gccabi_collect_args(NODE *n, NODE **args, int *nargs)
+{
+    if (n == NULL)
+        return;
+    if (n->Nop == N_EXPRLIST) {
+        gccabi_collect_args(n->Nleft, args, nargs);
+        if (*nargs < 64)
+            args[(*nargs)++] = n->Nright;
+        return;
+    }
+    if (*nargs < 64)
+        args[(*nargs)++] = n;
+}
+
+/* GCCABI_LOAD_ARGS - Expose the GCC PDP-10 argument ABI at the call edge.
+**
+** KCC still evaluates arguments into a private temporary stack block.
+** Load GCC ABI register words from that block, then compact the stack-only
+** words downward so the register-word shadows can be removed before PUSHJ.
+** The callee therefore sees exactly the canonical GCC stack shape.
+**
+** SLOTBASE is 1 when AC1 carries the hidden return pointer for aggregates
+** larger than four words, otherwise 0.
+**
+** Return the number of register-word shadows to remove from the temporary
+** argument block before making the call.
+*/
+static int
+gccabi_load_args(NODE *list, int slotbase, TYPE *proto)
+{
+    NODE *args[64];
+    unsigned char regword[256];
+    int nargs, namedargs, total, cum, i, j, siz, slot, oldoff, oldidx;
+    int dst, nreg, target, tmpreg;
+    TYPE *t, *p;
+    VREG *tmpvr;
+
+    nargs = 0;
+    gccabi_collect_args(list, args, &nargs);
+
+    /* GCC passes only named arguments in AC1..AC4.  Arguments after an
+    ** ellipsis are stack-only even while register argument slots remain.
+    */
+    namedargs = nargs;
+    if (proto) {
+        int n;
+        n = 0;
+        p = proto;
+        while (p && p->Tspec == TS_PARAM) {
+            ++n;
+            p = p->Tproto;
+        }
+        if (p && p->Tspec == TS_PARINF)
+            namedargs = n;
+    }
+
+    total = sizeargs(list);
+    if (total > 256)
+        int_error("gccabi_load_args: too many argument words");
+    memset(regword, 0, sizeof(regword));
+    nreg = 0;
+
+    cum = 0;
+    for (i = 0; i < nargs; ++i) {
+        t = args[i]->Ntype;
+        siz = sizetype(t);
+        if (i < namedargs &&
+            !((t->Tspec == TS_STRUCT || t->Tspec == TS_UNION) && siz > 2)) {
+            if (siz == 2 && slotbase + cum == GCCABI_ARG_REGS - 1) {
+                /* Match GCC's partial two-word argument ordering: word 1
+                ** uses AC4 while word 0 remains in the outgoing stack area.
+                */
+                j = 1;
+                oldoff = -(cum + siz - 1 - j);
+                oldidx = -oldoff;
+                codemdx(P_MOVE, 4, (SYMBOL *)NULL, oldoff, R_SP);
+                if (oldidx >= 0 && oldidx < 256 && !regword[oldidx]) {
+                    regword[oldidx] = 1;
+                    ++nreg;
+                }
+            } else {
+                for (j = 0; j < siz; ++j) {
+                    slot = slotbase + cum + j;
+                    if (slot >= GCCABI_ARG_REGS)
+                        continue;
+                    oldoff = -(cum + siz - 1 - j);
+                    oldidx = -oldoff;
+                    codemdx(P_MOVE, slot + 1, (SYMBOL *)NULL, oldoff, R_SP);
+                    if (oldidx >= 0 && oldidx < 256 && !regword[oldidx]) {
+                        regword[oldidx] = 1;
+                        ++nreg;
+                    }
+                }
+            }
+        }
+        cum += siz;
+    }
+
+    /* The stack pointer will move down by NREG before PUSHJ.  Move each
+    ** stack-passed word NREG positions downward first.  Work bottom-up so
+    ** overlapping moves cannot overwrite a source that is still needed.
+    */
+    tmpvr = NULL;
+    tmpreg = 0;
+    dst = total - nreg - 1;
+    for (oldidx = total - 1; oldidx >= 0; --oldidx) {
+        if (regword[oldidx])
+            continue;
+        target = nreg + dst;
+        if (oldidx != target) {
+            if (tmpvr == NULL) {
+                tmpvr = vrget();
+                tmpreg = vrtoreal(tmpvr);
+            }
+            codemdx(P_MOVE, tmpreg, (SYMBOL *)NULL, -oldidx, R_SP);
+            flushcode();
+            codemdx(P_MOVEM, tmpreg, (SYMBOL *)NULL, -target, R_SP);
+            flushcode();
+        }
+        --dst;
+    }
+    if (tmpvr != NULL)
+        vrfree(tmpvr);
+    return nreg;
+}
+
+/* GCCABI_DIRECT_REG_ARGS - Generate simple C arguments without shadows.
+**
+** The compatibility call path first pushes every argument and then reloads
+** AC1..AC4.  When every argument is one word, evaluate only genuinely
+** stack-passed arguments onto the stack and retain register-passed values in
+** virtual registers for a parallel copy into the ABI ACs.
+**
+** Arguments are evaluated right-to-left, matching KCC's historical gfnarg()
+** traversal.  AC16 breaks register-copy cycles.  SLOTBASE reserves AC1 for a
+** hidden aggregate-result pointer when needed.  Return nonzero if the direct
+** path was used.
+*/
+static int
+gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem)
+{
+    NODE *args[64];
+    VREG *vals[GCCABI_ARG_REGS];
+    TYPE *p;
+    INT cval[GCCABI_ARG_REGS];
+    int src[GCCABI_ARG_REGS];
+    unsigned char isconst[GCCABI_ARG_REGS];
+    unsigned char ismem[GCCABI_ARG_REGS];
+    int dst[GCCABI_ARG_REGS];
+    int pending[GCCABI_ARG_REGS];
+    SYMBOL *memsym[GCCABI_ARG_REGS];
+    int nargs, namedargs, nreg, i, j, k, progress, pick;
+
+    nargs = 0;
+    gccabi_collect_args(list, args, &nargs);
+
+    namedargs = nargs;
+    if (proto) {
+        int n;
+        n = 0;
+        p = proto;
+        while (p && p->Tspec == TS_PARAM) {
+            ++n;
+            p = p->Tproto;
+        }
+        if (p && p->Tspec == TS_PARINF)
+            namedargs = n;
+    }
+
+    for (i = 0; i < nargs; ++i)
+        if (sizetype(args[i]->Ntype) != 1)
+            return 0;
+
+    nreg = namedargs;
+    if (nreg > GCCABI_ARG_REGS - slotbase)
+        nreg = GCCABI_ARG_REGS - slotbase;
+    if (nreg < 0)
+        nreg = 0;
+
+    /* ABI argument ACs are fixed physical registers.  Do not let CSE or
+    ** register-retargeting reach backward across an earlier call/branch and
+    ** decide that a required AC load is redundant.  This is a call-edge
+    ** barrier, not a general optimizer fence.
+    */
+    if (!defermem)
+        flushcode();
+
+    for (i = 0; i < GCCABI_ARG_REGS; ++i) {
+	isconst[i] = 0;
+	ismem[i] = 0;
+    }
+
+    k = nreg;
+    for (i = nargs - 1; i >= 0; --i) {
+        if (i < nreg) {
+            --k;
+            if (Register_Id(args[i])) {
+                vals[k] = NULL;
+                src[k] = args[i]->Nid->Sreg;
+            } else if (args[i]->Nop == N_ICONST || args[i]->Nop == N_PCONST) {
+                vals[k] = NULL;
+                isconst[k] = 1;
+                cval[k] = args[i]->Niconst;
+                src[k] = 0;
+            } else if (defermem && args[i]->Nop == Q_IDENT
+                       && !tisanyvolat(args[i]->Ntype)
+                       && args[i]->Nid->Stype->Tspec != TS_ARRAY
+                       && args[i]->Nid->Stype->Tspec != TS_FUNCT
+                       && (args[i]->Nid->Sclass == SC_ISTATIC
+                           || args[i]->Nid->Sclass == SC_XEXTREF
+                           || args[i]->Nid->Sclass == SC_EXLINK
+                           || args[i]->Nid->Sclass == SC_EXTDEF
+                           || args[i]->Nid->Sclass == SC_EXTREF
+                           || args[i]->Nid->Sclass == SC_INTDEF
+                           || args[i]->Nid->Sclass == SC_INTREF
+                           || args[i]->Nid->Sclass == SC_INLINK)) {
+                vals[k] = NULL;
+                ismem[k] = 1;
+                memsym[k] = args[i]->Nid;
+                if (memsym[k]->Sclass == SC_ISTATIC)
+                    memsym[k] = memsym[k]->Ssym;
+                src[k] = 0;
+            } else
+                vals[k] = genexpr(args[i]);
+        } else
+            gfnarg(args[i]);
+    }
+
+    /* A nested call while evaluating a later register argument may spill an
+    ** earlier argument value.  Reload only the argument values below.
+    ** Spills that were already live on entry belong to the surrounding
+    ** expression and must remain on the stack across this call.
+    */
+    for (i = 0; i < nreg; ++i) {
+        if (vals[i])
+            src[i] = vrtoreal(vals[i]);
+        dst[i] = slotbase + i + 1;
+        pending[i] = !isconst[i] && !ismem[i] && (src[i] != dst[i]);
+    }
+
+    for (;;) {
+        progress = 0;
+        for (i = 0; i < nreg; ++i) {
+            if (!pending[i])
+                continue;
+            for (j = 0; j < nreg; ++j)
+                if (pending[j] && src[j] == dst[i])
+                    break;
+            if (j != nreg)
+                continue;
+            code00(P_MOVE, dst[i], src[i]);
+            if (!defermem)
+                flushcode();
+            pending[i] = 0;
+            progress = 1;
+        }
+        if (progress)
+            continue;
+
+        pick = -1;
+        for (i = 0; i < nreg; ++i)
+            if (pending[i]) {
+                pick = i;
+                break;
+            }
+        if (pick < 0)
+            break;
+
+        /* No acyclic copy remains, so the pending graph consists only of
+        ** cycles among the fixed destination ACs.  AC6 is outside AC1..AC4
+        ** and all non-cycle sources have already been consumed; use it as a
+        ** fixed cycle breaker instead of allocating a VREG that could land
+        ** in one of the destinations and destroy a still-live argument.
+        */
+        code00(P_MOVE, R_ABITMP, src[pick]);
+        if (!defermem)
+            flushcode();
+        src[pick] = R_ABITMP;
+    }
+
+    for (i = 0; i < nreg; ++i) {
+	if (isconst[i])
+	    codr1(P_MOVE, dst[i], cval[i]);
+	else if (ismem[i])
+	    codemdx(P_MOVE, dst[i], memsym[i], 0, 0);
+        if (!defermem && (isconst[i] || ismem[i]))
+            flushcode();
+    }
+
+    for (i = 0; i < nreg; ++i)
+        if (vals[i])
+            vrfree(vals[i]);
+    return 1;
+}
+
+/* GCCABI_DIRECT_TAIL_OK - Check for a register-only direct tail call. */
+static int
+gccabi_direct_tail_ok(NODE *n)
+{
+    NODE *args[64];
+    TYPE *p;
+    SYMBOL *fn;
+    int nargs, i;
+
+    if (!(n->Nflag & NF_RETEXPR) || n->Nleft->Nop != Q_IDENT)
+        return 0;
+    fn = n->Nleft->Nid;
+    if (fn->Sflags & (TF_BLISS | TF_FORTRAN | TF_INTERRUPT))
+        return 0;
+    if (curfn->Sflags & TF_INTERRUPT)
+        return 0;
+    if (!cmptype(curfn->Stype->Tsubt, n->Ntype))
+        return 0;
+    if (sizetype(n->Ntype) > GCCABI_RET_REGS)
+        return 0;
+
+    p = n->Nleft->Ntype->Tproto;
+    while (p && p->Tspec == TS_PARAM)
+        p = p->Tproto;
+    if (p && p->Tspec == TS_PARINF)
+        return 0;
+
+    nargs = 0;
+    gccabi_collect_args(n->Nright, args, &nargs);
+    if (nargs > GCCABI_ARG_REGS)
+        return 0;
+    for (i = 0; i < nargs; ++i)
+        if (sizetype(args[i]->Ntype) != 1)
+            return 0;
+    return 1;
+}
+
+/* GCCABI_DIRECT_TAIL_REGS - Restore direct ABI parameters for a tail call.
+**
+** Tail-call eligibility has already proved that the arguments are this
+** function's parameters in their original order.  A direct-ABI non-leaf
+** keeps all of those one-word parameters in preserved registers, so copy
+** them back to AC1..AC4 before restoring the preserved registers.
+*/
+static void
+gccabi_direct_tail_regs(NODE *list)
+{
+    NODE *args[64];
+    int nargs, i;
+
+    nargs = 0;
+    gccabi_collect_args(list, args, &nargs);
+    for (i = 0; i < nargs && i < GCCABI_ARG_REGS; ++i) {
+        if (args[i]->Nop != Q_IDENT || args[i]->Nid->Sclass != SC_RARG) {
+            int_error("gccabi_direct_tail_regs: bad argument");
+            return;
+        }
+        code00(P_MOVE, i + 1, args[i]->Nid->Sreg);
+    }
+}
+
+/* GCCABI_TAIL_REGS - Reload private-image ABI argument registers.
+**
+** A compatibility-mode KCC callee keeps a private full-argument stack image.
+** Before a direct tail transfer to a function with the same C type, reload
+** AC1..AC4 from that image.  Stack-only arguments are already in the
+** caller-provided external ABI area below the private shim.
+*/
+static void
+gccabi_tail_regs(void)
+{
+    TYPE *p, *t;
+    int cum, siz, slot, oldidx, i;
+
+    cum = 0;
+    if (sizetype(curfn->Stype->Tsubt) > GCCABI_RET_REGS) {
+        codemdx(P_MOVE, 1, (SYMBOL *)NULL, -(stackoffset + 1), R_SP);
+        flushcode();
+        cum = 1;
+    }
+
+    p = curfn->Stype->Tproto ? curfn->Stype->Tproto : curfn->Shproto;
+    while (p && p->Tspec == TS_PARAM) {
+        t = p->Tsubt;
+        siz = sizetype(t);
+        if (!((t->Tspec == TS_STRUCT || t->Tspec == TS_UNION) && siz > 2)) {
+            if (siz == 2 && cum == GCCABI_ARG_REGS - 1) {
+                oldidx = cum;
+                codemdx(P_MOVE, 4, (SYMBOL *)NULL,
+                        -(stackoffset + 1 + oldidx), R_SP);
+                flushcode();
+            } else {
+                for (i = 0; i < siz; ++i) {
+                    slot = cum + i;
+                    if (slot >= GCCABI_ARG_REGS)
+                        break;
+                    oldidx = cum + siz - 1 - i;
+                    codemdx(P_MOVE, slot + 1, (SYMBOL *)NULL,
+                            -(stackoffset + 1 + oldidx), R_SP);
+                    flushcode();
+                }
+            }
+        }
+        cum += siz;
+        p = p->Tproto;
+    }
+}
+
 static
 VREG*
 gcall (NODE* n)
@@ -2202,8 +7033,13 @@ gcall (NODE* n)
     INT		narg,
 		siz;
     VREG*	r;
+    VREG*	calladdr;
     SYMBOL*	arg;
+    long	fnflags;
+    int	abiregwords;
+    int directtail;
 
+    calladdr = NULL;
 
     if (n->Nleft->Ntype->Tspec != TS_FUNCT)
 	int_error ("gcall: non-function %N", n);
@@ -2214,6 +7050,8 @@ gcall (NODE* n)
 	|| stkgoto			/* Function contains a setjmp call? */
 	|| stackrefs)			/* Fn makes addr refs to stack? */
 	n->Nflag &=~ NF_RETEXPR;	/* If any of the above, forget it. */
+
+    directtail = gccabi_direct_tail_ok(n);
 
     /* Check for args in same order - if ok, can tail recurse */
 
@@ -2226,9 +7064,9 @@ gcall (NODE* n)
 	siz = 0;
 	}
 
-    narg = -1;
+    narg = directtail ? 0 : -1;
 
-    while ((n->Nflag & NF_RETEXPR) && l != NULL)
+    while (!directtail && (n->Nflag & NF_RETEXPR) && l != NULL)
 	{
 	if (l->Nop == N_EXPRLIST)
 	    {
@@ -2257,11 +7095,25 @@ gcall (NODE* n)
 	    }
 	}
 
-    if (siz > 2)
+    if (siz > GCCABI_RET_REGS)
 	narg -= 1;		/* account for retval (struct *) */
 
     if (n->Nright == NULL)
 	narg = 0;	/* no args always matches */
+
+    fnflags = (n->Nleft->Nop == Q_IDENT) ? n->Nleft->Nid->Sflags : 0;
+
+    /* A tail transfer can reuse the caller's external argument area only
+    ** when source and destination have the same C ABI shape.  Restrict the
+    ** optimization to direct normal-C calls with a compatible function
+    ** type.  BLISS, FORTRAN, interrupt, and indirect linkages keep the
+    ** ordinary call path.
+    */
+    if (!directtail && (n->Nleft->Nop != Q_IDENT
+      || (fnflags & (TF_BLISS | TF_FORTRAN | TF_INTERRUPT))
+      || (curfn->Sflags & TF_INTERRUPT)
+      || !cmptype(curfn->Stype, n->Nleft->Ntype)))
+	n->Nflag &= ~NF_RETEXPR;
 
     /*
      * If we still think we can tail recurse, do it.
@@ -2271,21 +7123,91 @@ gcall (NODE* n)
 
     if (!profbliss)			/* for BLISS profiler */
 	{
-	if (narg == 0 && (n->Nflag & NF_RETEXPR))
+	if ((n->Nflag & NF_RETEXPR) && (directtail || narg == 0))
 	    {
-	    r = gaddress (n->Nleft);	/* get address of function first */
-	    code8(P_ADJSP, VR_SP, -stackoffset); /* before we lose marbles */
-	    code4(P_JRST, (VREG *)NULL, r); /* now we can jump to it */
+	    int j;
+
+            if (directtail) {
+                if (!gccabi_direct_reg_args(n->Nright, 0,
+                        n->Nleft->Ntype->Tproto, 1))
+                    int_error("gcall: direct tail argument generation failed");
+                flushcode();
+            }
+
+	    /* Restore the external GCC ABI state.  Reload register arguments
+	    ** from KCC's private parameter image, restore all call-preserved
+	    ** registers, discard locals and private argument copies, retain the
+	    ** original return PC, and jump directly to the destination.
+	    */
+	    if (!directtail) {
+	        if (fnabidirect)
+		    gccabi_direct_tail_regs(n->Nright);
+	        else
+		    gccabi_tail_regs();
+            }
+	    if (R_PRESERVE_COUNT >= _reg_count)
+		for (j = 0; j < _reg_count; ++j) {
+		    codemdx(P_MOVE, j + r_maxnopreserve + 1, (SYMBOL *)NULL,
+			    1 + fnsavescr + j - stackoffset, R_SP);
+		    flushcode();
+		    }
+	    if (fnsavescr)
+		{
+		codemdx(P_MOVE, R_SCRREG, (SYMBOL *)NULL,
+			1 - stackoffset, R_SP);
+		flushcode();
+		}
+	    code8(P_ADJSP, VR_SP, -stackoffset);
+	    flushcode();
+	    if (fnargregs) {
+		code00(P_POP, R_SP, R_ABITMP);
+		flushcode();
+		code8(P_ADJSP, VR_SP, -fnargregs);
+		flushcode();
+		code00(P_PUSH, R_SP, R_ABITMP);
+		flushcode();
+		}
+	    code6(P_JRST, (VREG *)NULL, n->Nleft->Nid);
 	    return NULL;		/* can't want a return value */
 	    }
 	}
 
-    if (n->Nleft->Nid->Sflags & TF_FORTRAN)	    /* FORTRAN fn */
+    /* Arguments proven dead before the first bare call no longer need their
+    ** incoming ABI ACs reserved while that call's arguments are generated.
+    */
+    if (fnargpredropmask) {
+        fnargkeepmask &= ~fnargpredropmask;
+        fnargpredropmask = 0;
+    }
+
+    if (fnflags & TF_FORTRAN)	    /* FORTRAN fn */
 	XF4_call_spill = (char) ~0;		/* spill preserved regs if XF4 call */ // FW KCC-NT
 
     vrallspill();			/* save active non-preserved regs */
 
     XF4_call_spill = 0;
+
+    /* Evaluate an ordinary indirect C call target before loading the fixed
+    ** argument ACs.  gaddress() may need a scratch register; evaluating it
+    ** after AC1..AC4 are populated can overwrite a live argument, especially
+    ** in non-optimized code.  The C language does not sequence evaluation of
+    ** the function designator relative to its arguments, so this order is
+    ** valid.  Keeping CALLADDR live also prevents the argument generator from
+    ** allocating its register.
+    */
+    if (!(fnflags & (TF_BLISS | TF_FORTRAN | TF_INTERRUPT))
+      && n->Nleft->Nop != Q_IDENT) {
+        calladdr = gaddress(n->Nleft);
+        /* AC1..AC4 are fixed argument destinations and may overwrite the
+        ** register chosen for the function designator.  Preserve the target
+        ** in KCC's reserved AC16 before argument setup.  fn_needs_scrreg()
+        ** makes the containing function save/restore AC16 for indirect calls.
+        */
+        code00(P_MOVE, R_SCRREG, vrtoreal(calladdr));
+        flushcode();
+        vrfree(calladdr);
+        calladdr = NULL;
+    }
 
     /*
      * Next push function arguments
@@ -2298,9 +7220,9 @@ gcall (NODE* n)
      * Choose bliss, fortran, interrupt, or normal C function argument linkage
      */
 
-    if (n->Nleft->Nid->Sflags & TF_BLISS)
+    if (fnflags & TF_BLISS)
 	emit_blissargs (l);		/* bliss linkage */
-    else if (n->Nleft->Nid->Sflags & TF_FORTRAN)
+    else if (fnflags & TF_FORTRAN)
 	{
 	/* fortran linkage */
 
@@ -2309,7 +7231,7 @@ gcall (NODE* n)
 	stackoffset++;
 	emit_blissargs(l);		/* now push args in BLISS order */
 	}
-    else if (n->Nleft->Nid->Sflags & TF_INTERRUPT)
+    else if (fnflags & TF_INTERRUPT)
 	{
 	/*
 	 * FW 2A(52)
@@ -2320,31 +7242,46 @@ gcall (NODE* n)
 
 	}
     else				/* ...No, it's a C fn */
-	while (l != NULL)
-	    {
-	    if (l->Nop == N_EXPRLIST)
+	{
+	NODE *arglist = l;
+	int directargs;
+	directargs = gccabi_direct_reg_args(arglist,
+		siz > GCCABI_RET_REGS ? 1 : 0, n->Nleft->Ntype->Tproto, 0);
+	if (!directargs) {
+	    while (l != NULL)
 		{
-		gfnarg(l->Nright);
-		l = l->Nleft;
+		if (l->Nop == N_EXPRLIST)
+		    {
+		    gfnarg(l->Nright);
+		    l = l->Nleft;
+		    }
+		else
+		    {
+		    gfnarg(l);
+		    break;
+		    }
 		}
-	    else
-		{
-		gfnarg(l);
-		break;
+
+	    if (siz > GCCABI_RET_REGS)
+		code13(P_MOVE, VR_RETVAL,
+		    (n->Nretstruct->Svalue + 1) + fnframesave - stackoffset);
+	    abiregwords = gccabi_load_args(arglist,
+		    siz > GCCABI_RET_REGS ? 1 : 0, n->Nleft->Ntype->Tproto);
+	    if (abiregwords) {
+		flushcode();
+		code8(P_ADJSP, VR_SP, -abiregwords);
+		flushcode();
+		stackoffset -= abiregwords;
 		}
 	    }
-
-    if (siz > 2)		/* Push struct addr on stack as 1st arg */
-	{
-	r = vrget();
-	code13(P_MOVE, r, (n->Nretstruct->Svalue + 1) - stackoffset);
-	code0(P_PUSH, VR_SP, r);
-	stackoffset++;
+	else if (siz > GCCABI_RET_REGS)
+	    code13(P_MOVE, VR_RETVAL,
+		(n->Nretstruct->Svalue + 1) + fnframesave - stackoffset);
 	}
 
     narg -= stackoffset;	/* calculate neg number of arg words */
 
-    if (n->Nleft->Nid->Sflags & TF_FORTRAN)	/* for a FORTRAN fn */
+    if (fnflags & TF_FORTRAN)	/* for a FORTRAN fn */
 	{
 	/*
 	 * Do FORTRAN call.  Must get function address first, in case it is
@@ -2359,7 +7296,15 @@ gcall (NODE* n)
     else if (n->Nleft->Nop == Q_IDENT)
 	code6(P_PUSHJ, VR_SP, n->Nleft->Nid);	/* optimization */
     else
-	code4(P_PUSHJ, VR_SP, gaddress(n->Nleft)); /* call function or expr */
+        codemdx(P_PUSHJ, R_SP, (SYMBOL *)NULL, 0, R_SCRREG);
+
+    /* Arguments proven dead at the first bare call no longer need their
+    ** incoming ABI ACs reserved after control returns from that call.
+    */
+    if (fnargdropmask) {
+        fnargkeepmask &= ~fnargdropmask;
+        fnargdropmask = 0;
+    }
 
     /*
      * flush args off stack
@@ -2371,25 +7316,32 @@ gcall (NODE* n)
 	stackoffset += narg;
 	}
 
-    if (siz == 1)
+    if ((n->Ntype->Tspec == TS_STRUCT || n->Ntype->Tspec == TS_UNION)
+      && siz > 2 && siz <= GCCABI_RET_REGS)
+	{
+	INT roff;
+	roff = (n->Nretstruct->Svalue + 1) + fnframesave - stackoffset;
+	for (narg = 0; narg < siz; ++narg)
+	    codemdx(P_MOVEM, narg + 1, (SYMBOL *)NULL, roff + narg, R_SP);
+	code13(P_MOVE, (r = vrretget()), roff);
+	}
+    else if (siz == 1)
 	r = vrretget ();		/* one return register */
     else if (siz == 2)
 	r = vrretdget ();		/* two */
-    else if (siz > 2)
+    else if (siz > GCCABI_RET_REGS)
 	{
-	/* Can optimize better if we re-generate the addr we gave as arg. */
-
 	code13 (P_MOVE, (r = vrretget ()),
-		(n->Nretstruct->Svalue + 1) - stackoffset);
+		(n->Nretstruct->Svalue + 1) + fnframesave - stackoffset);
 	}
     else
 	return NULL;			/* Returning void */
 
-    if (n->Nleft->Nid->Sflags & TF_FORTRAN)	/* for a FORTRAN fn */
+    if (fnflags & TF_FORTRAN)	/* for a FORTRAN fn */
 	{
 	/* FORTRAN functions return values in regs 0+1 instead of 1+2 */
 
-	code0((siz == 2) ? P_DMOVE : P_MOVE, r, VR_ZERO);
+	gretmove(n->Ntype, r, VR_ZERO);
 	code5(P_SETZ, VR_ZERO);	/* This may not be necessary */
 	}
 
@@ -2496,6 +7448,134 @@ gfnarg(NODE *n)
 	}
 }
 
+/* PACKEDMEMBYTE - Return a packed member's 9-bit byte offset.
+**
+** The normal negative Ssmoff encoding records word, P and S.  Packed
+** integer members that fit in one word are byte-aligned, so recover their
+** exact C-byte start independently of the member's value width.
+*/
+static int
+packedptrderef(NODE *n)
+{
+    return n != NULL && n->Nop == N_PTR && n->Nleft != NULL
+        && tispackedptr(n->Nleft->Ntype);
+}
+
+static int
+bitptrderef(NODE *n)
+{
+    return n != NULL && n->Nop == N_PTR && n->Nleft != NULL
+        && tisbitptr(n->Nleft->Ntype);
+}
+
+static int
+maybitptrderef(NODE *n)
+{
+    return n != NULL && n->Nop == N_PTR && n->Nleft != NULL
+        && tismaybitptr(n->Nleft->Ntype);
+}
+
+static int
+bitptrmember(NODE *n)
+{
+    if (n == NULL || n->Nleft == NULL) return 0;
+    if (n->Nop == Q_MEMBER)
+        return tisbitptr(n->Nleft->Ntype);
+    if (n->Nop == Q_DOT && n->Nleft->Nop == N_PTR
+      && n->Nleft->Nleft != NULL)
+        return tisbitptr(n->Nleft->Nleft->Ntype);
+    return 0;
+}
+
+/* Return a packed member encoding as an exact bit displacement. */
+static INT
+packedoffbit(INT off)
+{
+    unsigned INT code;
+    INT word, bit;
+    int pos, siz;
+
+    if (off >= 0) return off * TGSIZ_WORD;
+    code = (unsigned INT)(-off);
+    if ((code & 07777L) == 07400L
+      || (code & 07777L) == 07500L
+      || (code & 07777L) == 07600L)
+        return (INT)(code >> 12);
+    if ((code & 07777L) == 07700L)
+        return (INT)(code >> 12) * TGSIZ_CHAR;
+    word = (INT)(code >> 12);
+    pos = (int)((code >> 6) & 077);
+    siz = (int)(code & 077);
+    bit = word * TGSIZ_WORD + TGSIZ_WORD - pos - siz;
+    return bit;
+}
+
+static int
+packedcross(INT off)
+{
+    INT code;
+
+    if (off >= 0)
+        return 0;
+    code = -off;
+    return (code & 07777L) == 07700L;
+}
+
+static int
+packedbit(INT off)
+{
+    INT code;
+    if (off >= 0) return 0;
+    code = -off;
+    return (code & 07777L) == 07600L;
+}
+
+static int
+packedbitscalar(INT off)
+{
+    INT code;
+    if (off >= 0) return 0;
+    code = -off;
+    return (code & 07777L) == 07500L;
+}
+
+static int
+packedbitagg(INT off)
+{
+    INT code;
+    if (off >= 0) return 0;
+    code = -off;
+    return (code & 07777L) == 07400L;
+}
+
+static INT
+packedmembit(INT off)
+{
+    if (!packedbit(off) && !packedbitscalar(off)) return -1;
+    return (unsigned INT)(-off) >> 12;
+}
+
+static INT
+packedmembyte(INT off)
+{
+    INT code, word, pos, bsiz, bit;
+
+    if (off >= 0)
+        return -1;
+    code = -off;
+    if ((code & 07777L) == 07700L)
+        return (unsigned INT)code >> 12;
+    bsiz = code & 077;
+    pos = (code & 07700) >> 6;
+    word = (unsigned INT)code >> 12;
+    if (bsiz <= 0 || bsiz > TGSIZ_WORD)
+        return -1;
+    bit = word * TGSIZ_WORD + TGSIZ_WORD - pos - bsiz;
+    if (bit % TGSIZ_CHAR)
+        return -1;
+    return bit / TGSIZ_CHAR;
+}
+
 /* GADDRESS - Generate address of object or function.
 **	Will set up as byte pointer if necessary
 */
@@ -2503,12 +7583,17 @@ static VREG *
 gaddress(NODE *n)
 {
     int boff, bsiz;
-    INT offset;
+    INT offset, b;
     VREG *r, *p;
     SYMBOL *s;
 
     switch (n->Nop)
 	{
+	case N_COMPLIT:	/* C99 compound literal */
+	    if (n->Nleft != NULL && n->Nleft->Nop == N_DATA)
+		genadata(n->Nleft);
+	    return gaddress(n->Nright);
+
 	case Q_ASPLUS:	/* ptr += &a[] */
 	case Q_PLUS:
 	case Q_ASMINUS:	/* ptr -= &a[] */
@@ -2546,6 +7631,106 @@ gaddress(NODE *n)
 		r = gaddress (n->Nleft);
 
 	    offset = n->Nxoff;		/* calculate offset */
+
+        /* A member selected through an S=1 logical bit pointer is already
+        ** based at the exact first bit of the packed aggregate.  Advance
+        ** by the member's exact bit displacement and keep the S=1 form.
+        */
+        if (bitptrmember(n))
+            {
+            b = packedoffbit(offset);
+            if (b != 0)
+                {
+                p = vrget();
+                code1(P_MOVE, p, b);
+                code0(P_ADJBP, p, r);
+                vrfree(r);
+                r = p;
+                }
+            return r;
+            }
+
+        /* A packed-char aggregate is addressed by a 9-bit byte pointer.
+        ** Its character members are therefore reached by adjusting that
+        ** existing byte pointer, not by rebuilding one from a word address.
+        */
+        if (offset < 0
+          && (packedbitagg(offset) || packedbit(offset)
+              || packedbitscalar(offset) || packedcross(offset)
+              || ((n->Nop == Q_MEMBER && n->Nleft->Ntype->Tspec == TS_PTR
+                   && tispacked(n->Nleft->Ntype->Tsubt))
+                  || (n->Nop == Q_DOT && tispacked(n->Nleft->Ntype)))))
+            {
+            if (packedbitagg(offset))
+                {
+                INT bit = (unsigned INT)(-offset) >> 12;
+                INT byte = bit / TGSIZ_CHAR;
+                INT phase = bit % TGSIZ_CHAR;
+
+                if (phase == 0 && n->Ntype->Tspec == TS_ARRAY
+                  && n->Ntype->Tsubt != NULL && tispacked(n->Ntype->Tsubt))
+                    {
+                    if (byte != 0)
+                        {
+                        p = vrget();
+                        code1(P_MOVE, p, byte);
+                        code0(P_ADJBP, p, r);
+                        vrfree(r);
+                        r = p;
+                        }
+                    return r;
+                    }
+
+                /* First-class internal packed pointers use an ordinary
+                ** PDP-10 byte pointer with S=1.  A one-bit byte can advance
+                ** continuously across word boundaries, unlike a 9/16/18-bit
+                ** byte pointer, while still fitting in the normal one-word
+                ** pointer ABI.
+                */
+                if (byte != 0)
+                    {
+                    p = vrget();
+                    code1(P_MOVE, p, byte);
+                    code0(P_ADJBP, p, r);
+                    vrfree(r);
+                    r = p;
+                    }
+                code10(P_PTRCNV, r, (SYMBOL *)NULL, 1, -TGSIZ_CHAR);
+                if (phase != 0)
+                    code1(P_SUB, r, phase << 30);
+                return r;
+                }
+            if (packedbit(offset) || packedbitscalar(offset))
+                {
+                b = packedmembit(offset) / TGSIZ_CHAR;
+                if (b != 0)
+                    {
+                    p = vrget();
+                    code1(P_MOVE, p, b);
+                    code0(P_ADJBP, p, r);
+                    vrfree(r);
+                    r = p;
+                    }
+                return r;
+                }
+            b = packedmembyte(offset);
+            if (b >= 0)
+                {
+                int mbsiz = tbitsize(n->Ntype);
+
+                if (b != 0)
+                    {
+                    p = vrget();
+                    code1(P_MOVE, p, b);
+                    code0(P_ADJBP, p, r);
+                    vrfree(r);
+                    r = p;
+                    }
+                if (mbsiz != TGSIZ_CHAR && !packedcross(offset))
+                    code10(P_PTRCNV, r, (SYMBOL *)NULL, mbsiz, -TGSIZ_CHAR);
+                return r;
+                }
+            }
 
 	/* Check for attempt to get address of object within a word. */
 	    if (offset < 0)		/* bitfield or byte? */
@@ -2608,6 +7793,11 @@ gaddress(NODE *n)
 		bsiz = elembsize(s->Stype);		/* set byte params */
 		offset = 0;				/* with left-justified byte */
 		}
+            else if (tispacked(n->Ntype))
+                {
+                bsiz = TGSIZ_CHAR;
+                offset = 0;
+                }
 	    else if (tisbyte(n->Ntype))	/* If it's a single byte, */
 		{
 		bsiz = tbitsize(n->Ntype);		/* also set them */
@@ -2623,8 +7813,9 @@ gaddress(NODE *n)
 		    return r;
 
 		case SC_AUTO:		/* Local variables */
-		    code13(P_MOVE, r, (s->Svalue + 1) - stackoffset);
+		    code13(P_MOVE, r, (s->Svalue + 1) + fnframesave - stackoffset);
 		    break;
+
 
 		case SC_RARG:		/* Function parameters */
 		    code00(P_MOVE, r->Vrloc, s->Sreg);
@@ -2641,6 +7832,7 @@ gaddress(NODE *n)
 		case SC_ISTATIC:	/* Internal static */
 		    s = s->Ssym;	/* uses internal label instead */
 
+		/* FALLTHROUGH */
 		case SC_XEXTREF:
 		case SC_EXLINK:	/* Anything with linkage */
 		case SC_EXTDEF:
@@ -2692,7 +7884,10 @@ getmem(VREG *reg, TYPE *t, int byte, int keep)
 	case 2:
 	    q = vrdget();
 	    q->Vrtype = t;		/* Set C type of object in reg */
-	    (keep ? codek4(P_DMOVE, q, reg) : code4(P_DMOVE, q, reg));
+	    if (tisdimode(t))
+		gdimemload(q, reg, keep);
+	    else
+		(keep ? codek4(P_DMOVE, q, reg) : code4(P_DMOVE, q, reg));
 	    return q;
 
 	default:
@@ -2721,7 +7916,10 @@ stomem(VREG *reg, VREG *ra, INT siz, int byteptr)
 	    break;
 
 	case 2:			/* Store doubleword */
-	    code4(P_DMOVEM, reg, ra);
+	    if (reg && reg->Vrtype && tisdimode(reg->Vrtype))
+		gdimemstore(reg, ra);
+	    else
+		code4(P_DMOVEM, reg, ra);
 	    break;
 
 	default:			/* Store a stacked structure */
@@ -2875,6 +8073,23 @@ gasm(NODE *n)
     codestr(arg->Nsconst, arg->Nsclen-1);
 }
 
+/* GJFFO - Generate _KCC_jffo(value,label). */
+static void
+gjffo(NODE *n)
+{
+    VREG *r;
+
+    if (!n->Nleft || !n->Nxfsym)
+	{
+	int_error("gjffo: bad arg %N", n);
+	return;
+	}
+
+    r = genexpr(n->Nleft);
+    code6(P_JFFO, r, n->Nxfsym);
+    vrfree(r);
+}
+
 
 /* KAR-6/91, Changed sentinal value for _chnl to -1 from 0 */
 int		_chnl = -1;
@@ -2889,8 +8104,7 @@ int		_chnl = -1;
 /*		-by KAR 1/91   */
 /* --------------------------- */
 VREG *
-gmuuo(n)
-NODE *n;
+gmuuo(struct node * n)
 {
     VREG    *ac, *ret_ac;
     int	    p3_omitted = 0, p4_omitted = 0;
@@ -2908,6 +8122,31 @@ NODE *n;
          *      MOVEI  1,1
 	 *      MOVEM  ac,ret_val	; if a return address is specified
 	 */
+    if (!strcmp(mnem_param->Nright->Nsconst, "CIRC"))
+	{
+	/* CIRC operates on two raw adjacent AC words, not on KCC's
+	** canonical DImode integer representation.  Load exactly two
+	** consecutive words through the caller-supplied pointer, circulate
+	** that physical pair, and optionally store the raw pair back.
+	*/
+	VREG *count, *ra;
+
+	ra = genexpr(ac_param->Nright);
+	ac = vrdget();
+	code4(P_DMOVE, ac, ra);
+	count = genexpr(ea_param);
+	code4(P_CIRC, ac, count);
+	if (p3_omitted != 1)
+	    {
+	    ra = genexpr(ret_param);
+	    code4(P_DMOVEM, ac, ra);
+	    }
+	vrfree(ac);
+	ret_ac = vrget();
+	code5(P_SETZ, ret_ac);
+	return ret_ac;
+	}
+
     ac = vrget();
     if (ch_sig->Nright->Niconst == 0)
 	code0(P_MOVE, ac, genexpr(ac_param->Nright));

@@ -26,7 +26,7 @@ SYMBOL *symfnext(SYMBOL *),	/* CCSYM */
 extern
 void freesym(SYMBOL *);		/* CCSYM */
 extern
-long pconst(void);		/* CCSTMT to parse constant expr */
+INT pconst(void);		/* CCSTMT to parse constant expr */
 extern
 char *estrcpy(char *, char *),
 	*fstrcpy(char *, char *, char *);	/* CCASMB */
@@ -71,7 +71,8 @@ void directive(void);
 static
 int d_define(void), d_undef(void), d_asm(void), d_endasm(void),
 	d_ifdef(int), d_if(void), d_else(void), d_elif(void), d_endif(void),
-	d_include(void), d_line(void), d_error(void), d_pragma(void);
+	d_include(void), d_line(void), d_error(void), d_warning(void),
+	d_pragma(void);
 static
 int iftest(void);
 static
@@ -93,11 +94,15 @@ void sinbeg(char *), sinend(void);
 static
 int  mpeekpar(void);
 static
-int get_title (char *pragma_str, char *ext);
+int get_title(char *, int *);
 
 static
 void dmp_errmsg(void);
 void dmpmlbuf(void);
+static char *ppputc(char *, int), *ppputs(char *, char *),
+    *ppputul(char *, unsigned long, int, int), *ppputsl(char *, long),
+    *pppad(char *, int, int), *ppputspad(char *, char *, int);
+static void ppappendstr(char *), ppappendc(int);
 
  /* Flag for top-of-file, needed for mixed listing generation-KAR 8/3/90 */
  /* KAR-6/91, changed type to short */
@@ -148,6 +153,97 @@ char		*mlbuf = NULL;
 char		*mlbptr = NULL;
 static
 short	ch_ungot = 0;	/* KAR-5/91, changed type to short */
+
+static char *
+ppputc(char * cp, int c)
+{
+    *cp++ = (char)c;
+    *cp = '\0';
+    return cp;
+}
+
+static char *
+ppputs(char * cp, char * s)
+{
+    return estrcpy(cp, s ? s : "");
+}
+
+static char *
+pppad(char * cp, int c, int n)
+{
+    while (n-- > 0)
+        *cp++ = (char)c;
+    *cp = '\0';
+    return cp;
+}
+
+static char *
+ppputspad(char * cp, char * s, int width)
+{
+    int len;
+
+    if (s == NULL)
+        s = "";
+    len = strlen(s);
+    cp = estrcpy(cp, s);
+    if (width > len)
+        cp = pppad(cp, ' ', width - len);
+    return cp;
+}
+
+static char *
+ppputul(char * cp, unsigned long val, int base, int alt)
+{
+    char buf[32];
+    char *dig;
+    int i;
+
+    dig = "0123456789abcdef";
+    if (alt && base == 8 && val != 0)
+        *cp++ = '0';
+
+    i = 0;
+    do {
+        buf[i++] = dig[val % (unsigned long)base];
+        val /= (unsigned long)base;
+    } while (val != 0);
+
+    while (--i >= 0)
+        *cp++ = buf[i];
+    *cp = '\0';
+    return cp;
+}
+
+static char *
+ppputsl(char * cp, long val)
+{
+    unsigned long u;
+
+    if (val < 0)
+        {
+        *cp++ = '-';
+        u = (unsigned long)(-(val + 1)) + 1;
+        }
+    else
+        u = (unsigned long)val;
+    return ppputul(cp, u, 10, 0);
+}
+
+static void
+ppappendstr(char * s)
+{
+    (void) estrcpy(mlbptr + strlen(mlbptr), s);
+}
+
+static void
+ppappendc(int c)
+{
+    char *cp;
+
+    cp = mlbptr + strlen(mlbptr);
+    *cp++ = (char)c;
+    *cp = '\0';
+}
 
 /* Include file nesting stack - holds saved input file context.
  *	Indexed by inlevel.
@@ -206,14 +302,9 @@ static
 PPTOK *pptoks = NULL;		/* Tokens allocated from pptoks */
 static
 PPTOK *pptmax = NULL;		/* Highest valid ptr */
- #define tokpcre() (++pptptr <= pptmax ? pptptr : (pptresize (), pptptr))
+ #define tokpcre() ((pptptr != NULL && pptptr < pptmax) \
+	? ++pptptr : (pptresize (), pptptr))
  #define pptreset() (pptptr = pptmax = pptoks = NULL) /* Flush all tokens, start over*/
-
- #ifndef MAXPOOLSIZE
- #define MAXPOOLSIZE 4000
- #endif
-
-
 
 #define tokn2p(n) (n)		/* Return ptr, given next-ptr */
 #define tokp2n(p) (p)		/* Return next-ptr, given ptr */
@@ -286,68 +377,64 @@ char *sltostr(PPTOK *, char *, int);
 **	ppcsave(st) - Saves state in "st" (type "ppcstate_t")
 **	ppcrest(st) - Restores state from "st"
 */
-static
-char *ppcptr = NULL;	/* Ptr into ppcpool */
-static
-int ppcleft;		/* # chars left in ppcpool */
-static
-int ppcocnt;		/* Saved ppcleft for deriving string lens */
+static char *ppcptr = NULL;	/* Ptr into active ppcpool */
+static char *ppcpool = NULL;	/* Active dynamically growing pool */
+static size_t ppccap = 0;	/* Allocated bytes in active pool */
+static size_t ppcleft;		/* # chars left in active pool */
+static size_t ppcocnt;		/* Saved ppcleft for deriving string lens */
+
+/*
+ * PP tokens contain raw pointers into this pool.  When the active pool grows,
+ * keep the previous allocation alive so pointers in already completed tokens
+ * remain valid.  Growth is geometric, so all retired allocations together are
+ * smaller than the current allocation.
+ */
+struct ppcold_s
+    {
+    char *pool;
+    struct ppcold_s *next;
+    };
+static struct ppcold_s *ppcold = NULL;
+
 typedef struct		/* State struct for saving above vars */
     {
-#if 0	/* 5/91 Dynamic tables */
-    ptrdiff_t	    cptr;
-    unsigned char   ppcsize;
-#else
-    char *cptr;
-#endif
-    int cleft;
-    int cocnt;
+    size_t cptr;
+    size_t cleft;
+    size_t cocnt;
+    size_t cap;
+    int active;
     }
 ppcstate_t;
 
-#define ppcreset() (ppcptr = NULL)
+static int ppcresize(void);
+static void ppcresetpool(void);
+static char *ppcbegin(void);
+static size_t ppcbegoff(void);
+static char *ppcatoff(size_t);
+static void ppcreserve(size_t);
 
-#if 0	/* 5/91 Dynamic tables */
-static
-unsigned char ppcsize = 4;
-static
-char *ppcpool = NULL;
- #define ppcbeg() (!ppcptr? ((!ppcpool? ppcresize(): 0), ppcocnt=ppcleft=  \
-     (ppcsize*DYN_SIZE - 1),(ppcptr=ppcpool)+1) : (ppcocnt=ppcleft, ppcptr+1))
- #define ppcput(c) ((--ppcleft > 0 ? 0 : ppcresize()), *++ppcptr = (c))
- #define ppcend() ((--ppcleft > 0 ? 0:ppcresize()), *++ppcptr = 0, ppclen()-1)
- #define ppcsave(st) \
-	 (void)(st.cptr = ppcptr-ppcpool, st.cleft = ppcleft, \
-	 st.cocnt = ppcocnt, st.ppcsize = ppcsize)
- #define ppcrest(st) \
-	 (void)(ppcptr = (char *) ((ptrdiff_t) ppcpool + st.cptr), ppcleft = \
-	 st.cleft + DYN_SIZE*(ppcsize-st.ppcsize), ppcocnt = st.cocnt)
-#else
-static
-char ppcpool[MAXPOOLSIZE];
- #define ppcbeg() (!ppcptr?(ppcocnt=ppcleft=MAXPOOLSIZE-1,(ppcptr=ppcpool)+1)\
-			: (ppcocnt=ppcleft, ppcptr+1))
- #define ppcput(c) (--ppcleft > 0 ? *++ppcptr = (c) : (c))
- #define ppcend() (--ppcleft > 0 ? (*++ppcptr = 0, ppclen()-1) : ppcresize())
- #define ppcsave(st)	\
-	 (void)(st.cptr = ppcptr, st.cleft = ppcleft, st.cocnt = ppcocnt)
- #define ppcrest(st)	\
-	 (void)(ppcptr = st.cptr, ppcleft = st.cleft, ppcocnt = st.cocnt)
-#endif
+#define ppcreset() ppcresetpool()
+#define ppcbeg() ppcbegin()
+#define ppcput(c) \
+    ((ppcleft <= 1 ? ppcresize() : 0), --ppcleft, *++ppcptr = (c))
+#define ppcend() \
+    ((ppcleft <= 1 ? ppcresize() : 0), --ppcleft, *++ppcptr = 0, ppclen()-1)
+#define ppcsave(st) \
+    (void)((st).active = (ppcptr != NULL), \
+      (st).cptr = ppcptr ? (size_t)(ppcptr - ppcpool) : 0, \
+      (st).cleft = ppcleft, (st).cocnt = ppcocnt, (st).cap = ppccap)
+#define ppcrest(st) \
+    (void)(ppcptr = (st).active ? ppcpool + (st).cptr : NULL, \
+      ppcleft = (st).cleft + (ppccap - (st).cap), \
+      ppcocnt = (st).cocnt + (ppccap - (st).cap))
 
 #define ppclast() (*ppcptr)
 #define ppclen() (ppcocnt - ppcleft)
 #define ppcbackup() (++ppcleft, *--ppcptr)
 
-static
-tlist_t tlmake(/* int typ, union pptokval val */);
-static
-int ppcresize(void);
-#if 0
-static
-int ppcresize();		/* Just invokes efatal(CPOOL) */
-#endif
-
+static tlist_t tlmake(int, union pptokval);
+static tlist_t tlmakecp(int, char *);
+static tlist_t tlmakei(int, INT);
 /* Raw Tokenizer variables - nextrawpp() */
 static
 int rawpp;		/* Current raw token type from nextrawpp() */
@@ -414,9 +501,10 @@ char *bkstrs[MAXBKSTRS];
 #define MACF_KCC  (-8)	/* "__COMPILER_KCC__" macro.  No body. */
 #define MACF_SYMF (-9)	/* "_KCCsymfnd("file","sym")" macro. No body. */
 #define MACF_SYMV (-10)	/* "_KCCsymval("file","sym")" macro. No body. */
+#define MACF_COUNTER (-11)	/* "__COUNTER__" macro. No body. */
 
 #if __MSDOS__ /* KAR-8/92, Add predefined macro __KCCDOS__ if KCCDOS */
-#define MACF_DOS  (-11) /* "__KCCDOS__ macro. No body. evals to 1;only if KCCDOS */
+#define MACF_DOS  (-12) /* "__KCCDOS__ macro. No body. evals to 1;only if KCCDOS */
 #endif
 /* All special macros other than MACF_ATOM cannot be redefined or
 ** undefined except by the command-line -U or -D switches.
@@ -487,6 +575,9 @@ static
 char *defcsname = &defcdmy;	/* Ptr to "defined" macro sym name */
 
 static
+int pp_counter;		/* Value for __COUNTER__ */
+
+static
 int tadset;		/* True if date/time strings are set */
 static
 char datestr[14] = "\"Jun 07 1989\"";	/* __DATE__ string */
@@ -499,7 +590,7 @@ SYMBOL *mdefstr(char *, int, char *),
 	     *mdefsym(char *, struct macframe
 *);
 static
-int     mexptop(SYMBOL *, int), margs(tlist_t *, int, int);
+int     mexptop(SYMBOL *, int), margs(tlist_t *, int, int, int);
 static
 tlist_t mexpand(tlist_t, int), mexplim(tlist_t, int),
 	      mexpsym(SYMBOL *, int), msubst(struct macframe
@@ -554,6 +645,7 @@ ppinit(void)
     /* Set variables local to preprocessor */
     ppcreset();
     pptreset();
+    pp_counter = 0;
     inlevel = iflevel = flushing = inasm = indirp = maclevel = 0;
     iftype[0] = 0;		/* Just in case */
     tadset = 0;			/* Date/time strings not set */
@@ -564,8 +656,27 @@ ppinit(void)
 
     /* Enter special macro pre-definitions into symbol table. */
     mdefstr("__COMPILER_KCC__", MACF_KCC, NULL);
+    mdefstr("__LONG_LONG_71BIT__", MACF_ATOM, "1");
     mdefstr("__LINE__",		MACF_LINE, NULL);
     mdefstr("__FILE__",		MACF_FILE, NULL);
+    mdefstr("__COUNTER__",	MACF_COUNTER, NULL);
+    mdefstr("CPU_PDP6",	MACF_ATOM, (tgcpu == TGCPU_PDP6) ? "1" : "0");
+    mdefstr("TARGET_BASE",	MACF_ATOM, (tgarch == TGARCH_BASE) ? "1" : "0");
+    mdefstr("TARGET_PDP6",	MACF_ATOM, (tgarch == TGARCH_PDP6) ? "1" : "0");
+    mdefstr("CPU_KA",		MACF_ATOM, (tgcpu == TGCPU_KA) ? "1" : "0");
+    mdefstr("CPU_KI",		MACF_ATOM, (tgcpu == TGCPU_KI) ? "1" : "0");
+    mdefstr("CPU_KS",		MACF_ATOM, (tgcpu == TGCPU_KS) ? "1" : "0");
+    mdefstr("CPU_KL0",		MACF_ATOM, (tgcpu == TGCPU_KL0) ? "1" : "0");
+    mdefstr("CPU_KLX",		MACF_ATOM, (tgcpu == TGCPU_KLX) ? "1" : "0");
+    mdefstr("TARGET_ITS",	MACF_ATOM, tgits ? "1" : "0");
+    mdefstr("CENV_DMOVX",	MACF_ATOM, tgmachuse.dmovx ? "1" : "0");
+    mdefstr("CENV_ADJSP",	MACF_ATOM, tgmachuse.adjsp ? "1" : "0");
+    mdefstr("CENV_ADJBP",	MACF_ATOM, tgmachuse.adjbp ? "1" : "0");
+    mdefstr("CENV_FPIMM",	MACF_ATOM, tgmachuse.fpimm ? "1" : "0");
+    mdefstr("CENV_DFL_PDP6",	MACF_ATOM, (tgcpu == TGCPU_PDP6) ? "1" : "0");
+    mdefstr("CENV_DFL_S",	MACF_ATOM, (tgcpu == TGCPU_KA) ? "1" : "0");
+    mdefstr("CENV_DFL_H",	MACF_ATOM,
+	    (tgcpu != TGCPU_PDP6 && tgcpu != TGCPU_KA) ? "1" : "0");
 
 #if __MSDOS__ /* KAR-8/92, predefine __KCCDOS__ if KCCDOS */
     mdefstr("__KCCDOS__", MACF_DOS, "1");
@@ -598,7 +709,7 @@ ppinit(void)
 */
 static
 void
-dotad()
+dotad(void)
 {
     register char *cp;
     time_t utad;
@@ -623,9 +734,7 @@ dotad()
 **	We assume the syntax has already been checked by chkmacname() in CC.
 */
 void
-ppdefine(unum, utab, dnum, dtab)
-int unum, dnum;		/* # of strings in table */
-char **utab, **dtab;	/* Address of char-pointer array */
+ppdefine(int unum, char ** utab, int dnum, char ** dtab)
 {
     int savch;
     char *cp;
@@ -790,11 +899,13 @@ passthru (FILE* fp)
 	    case '.':			/* '.' may start a pp-number */
 		putc ('.', fp);
 
+
 		if (!isdigit (nextch ()))
 		    continue;		/* Nope, handle whatever it is */
 
 	    /* Is pp-number, drop thru to handle it */
 
+	    /* FALLTHROUGH */
 	    case '0':
 	    case '1':
 	    case '2':
@@ -853,19 +964,22 @@ pass_ident (FILE* fp)
     PPTOK*	p;
     register
     char*	cp;
+    size_t	off;
 
 
-    cp = ppcbeg ();
+    off = ppcbegoff ();
 
     do
 	ppcput (ch);		/* Gobble up ident starting with current ch */
     while (iscsym (nextch ()));
 
     (void) ppcend ();		/* Tie off so can look it up */
+    cp = ppcatoff (off);
 
     if (((sym = findmacsym (cp)) == NULL)	/* If not a macro, */
 	    || !mexptop (sym, 0))	/* or can't expand it, */
 	{
+	cp = ppcatoff (off);
 	fputs (cp, fp);		/* just output the identifier. */
 	ppcreset ();		/* Clean up token char pool */
 	return;
@@ -904,7 +1018,7 @@ pass_ident (FILE* fp)
 static
 void
 pass_num (void)
-    {
+{
     register
     int		i;
 
@@ -923,6 +1037,7 @@ pass_num (void)
 		    return;		/* Oops, gotta stop */
 
 	    case '.' :
+	    case '\'' :
 
 		break;
 
@@ -987,7 +1102,7 @@ pass_str (int cnt)
 static
 void
 pass_hwsp (void)
-    {
+{
     for ( ; ; )
 	{
 	while (ischwsp (nextch ()))
@@ -1070,6 +1185,7 @@ pass_line (int suppress)
 
 		/* Drop thru to output single space */
 
+		/* FALLTHROUGH */
 		case ' ':
 		case '\t':
 		case '\r':
@@ -1144,8 +1260,8 @@ pass_line (int suppress)
 
 static
 void
-pass_comm ()
-    {
+pass_comm (void)
+{
     if (!keepcmts)
 	scancomm ();			/* Flush the comment! */
     else if (comment_type != CPP)	/* KAR-2/93, PPS 4574; C++ comments */
@@ -1261,23 +1377,34 @@ nextch (void)
     if (module_pragma)
 	ch = EOF;
     else
+	{
 	ch = getc(in);
+	if (ch == '\r')
+	    {
+	    int next = getc(in);
+	    if (next != '\n' && next != EOF)
+		ungetc(next, in);
+	    ch = '\n';
+	    }
+	}
 
     _ch_cpy = ch;		/* 12/90 ccstmt.c needs _ch_cpy */
 
     if (mlist && fstart && (inlevel <= 0) && (fline == 1))
 	{
-	sprintf (tmp, "\n; %d\t", fline);	/* KAR 8/3/90 */
+	tmp = tmpbuf;
+	tmp = ppputs(tmp, "\n; ");
+	tmp = ppputsl(tmp, (long)fline);
+	tmp = ppputc(tmp, '\t');
 	oline++;
-	strcat (mlbptr, tmp);
+	ppappendstr(tmpbuf);
 	fstart = 0;
 	} /* if */
 
     if (mlist && (!ch_ungot) && (inlevel <= 0) && (ch != '\n') &&
 	    (ch != '\r') && (ch != '\v') && (ch != '\f')) /* KAR 5/91 '\f' */
 	{
-	sprintf (tmp, "%c", ch);
-	strcat (mlbptr, tmp);			/* KAR 8/3/90 */
+	ppappendc(ch);			/* KAR 8/3/90 */
 	} /* if */
     else if (ch_ungot)
 	{
@@ -1325,7 +1452,7 @@ nextch (void)
 		line = inc[inlevel].cline;
 		fline = inc[inlevel].cfline;
 		ch_ungot = 1;
-		strcpy(inpfname, inc[inlevel].cname);
+		estrcpy(inpfname, inc[inlevel].cname);
 
 #if DEBUG_PP
 		if (debpp)
@@ -1474,23 +1601,35 @@ nextch (void)
 	    if (oline > MAX_OLINE)
 		{
 		opage++;
-		sprintf(tmp,
-		   "\n\f; %-26s\t\tCompuServe Incorporated\t\t%s\t  Page %d\n",
-			dspfname, creatime, opage);
-		strcat (mlbptr, tmp);
-		sprintf(tmp, "; KCC: %-20s\t\t\t\t\t\t\t%s\n",
-			ver_str, comptime);
-		strcat (mlbptr, tmp);
+		tmp = tmpbuf;
+		tmp = ppputs(tmp, "\n\f; ");
+		tmp = ppputspad(tmp, dspfname, 26);
+		tmp = ppputs(tmp, "\t\tCompuServe Incorporated\t\t");
+		tmp = ppputs(tmp, creatime);
+		tmp = ppputs(tmp, "\t  Page ");
+		tmp = ppputsl(tmp, (long)opage);
+		tmp = ppputc(tmp, '\n');
+		ppappendstr(tmpbuf);
+		tmp = tmpbuf;
+		tmp = ppputs(tmp, "; KCC: ");
+		tmp = ppputspad(tmp, ver_str, 20);
+		tmp = ppputs(tmp, "\t\t\t\t\t\t\t");
+		tmp = ppputs(tmp, comptime);
+		tmp = ppputc(tmp, '\n');
+		ppappendstr(tmpbuf);
 		oline = HDR_LINES;
 		} /* if MAX_OLINE */
 	    if (!skp_nl)
-		strcat(mlbptr, "\n");
+		ppappendstr("\n");
 	    if (!skp_nl)
 		{
 		dmpmlbuf();
 		dmp_errmsg();
-		sprintf (tmp, "; %d\t", fline); /* KAR 8/3/90 */
-		strcat (mlbptr, tmp);
+		tmp = tmpbuf;
+		tmp = ppputs(tmp, "; ");
+		tmp = ppputsl(tmp, (long)fline);
+		tmp = ppputc(tmp, '\t');
+		ppappendstr(tmpbuf);
 		} /* if  */
     else
 	skp_nl = 0;
@@ -1541,7 +1680,7 @@ dmp_errmsg (void)
 */
 static
 int
-tchesc()
+tchesc(void)
 {
     int i;
     switch (i = *backstr++)	/* Handle it */
@@ -1549,6 +1688,7 @@ tchesc()
 	default:
 	    int_error("tchesc: token escape char %d='%c'", i, i);
 
+	/* FALLTHROUGH */
 	case TCH_ESC:		/* Quoting escape char */
 	    return i;
 
@@ -1576,8 +1716,7 @@ char eofstr[] =
 
 static
 void
-sinbeg(cp)
-char *cp;
+sinbeg(char * cp)
 {
     pushch(ch);		/* Save current char (since not tokenized yet) */
     bstrpush(eofstr);	/* Put EOF on end of input string */
@@ -1585,7 +1724,7 @@ char *cp;
 }
 static
 void
-sinend()
+sinend(void)
 {
     while (backstr != eofstr)		/* We should have hit string EOF... */
 	{
@@ -1602,8 +1741,7 @@ sinend()
 ** BSTRPOP - Pop pushback string, restore previous string
 */
 void
-pushch(c)
-int c;
+pushch(int c)
 {
     if (backstr)
 	{
@@ -1636,8 +1774,7 @@ int c;
 
 static
 int
-pushstr(cp)
-char *cp;
+pushstr(char * cp)
 {
     bstrpush(cp);
     return nextch();
@@ -1645,8 +1782,7 @@ char *cp;
 
 static
 void
-bstrpush(cp)
-char *cp;
+bstrpush(char * cp)
 {
     if (bkstrlev >= MAXBKSTRS-1)
 	{
@@ -1706,6 +1842,7 @@ int
 nextrawpp (void)
 {
     int	    retflag = 0;
+    size_t  rawoff = 0;
 
 
     rawval.i = 0;
@@ -1729,6 +1866,7 @@ nextrawpp (void)
 
 	/* Check for "good" horiz whitespace */
 
+	/* FALLTHROUGH */
 	case '\t':			/* Horiz tab */
 	case ' ':			/* Space */
 	    scanhwsp ();
@@ -2061,7 +2199,7 @@ nextrawpp (void)
 
 	    /* Handle identifier! */
 
-	    rawval.cp = ppcbeg();	/* Assume ident, harmless if not */
+	    rawoff = ppcbegoff();	/* Assume ident, harmless if not */
 
 	    if (ch == 'L')	/* Possible "wide char" indicator? (BARF!!) */
 		{
@@ -2088,6 +2226,7 @@ nextrawpp (void)
 		if (!iscsym(ch))	/* Was it just "L"?  Barf, barf */
 		    {
 		    rawpplen = ppcend();
+		    rawval.cp = ppcatoff(rawoff);
 		    rawpp = T_IDENT;
 		    retflag = 1;
 		    break;
@@ -2101,6 +2240,7 @@ nextrawpp (void)
 	    while (iscsym(nextch()));
 
 	    rawpplen = ppcend();
+	    rawval.cp = ppcatoff(rawoff);
 	    rawpp = T_IDENT;
 	    retflag = 1;
 	    break;
@@ -2142,6 +2282,7 @@ scanhwsp (void)
 		    ch = '\r';	/* put back and drop through */
 		    }
 
+	    /* FALLTHROUGH */
 	    case '\v':
 	    case '\f':
 		if (indirp)	/* Processing directive between # and EOL? */
@@ -2241,13 +2382,14 @@ scancomm (void)
 */
 static
 int
-ppnconst(ch1)
+ppnconst(int ch1)
 {
     static int hexconst;
+    size_t off;
 
 
     hexconst = 0;		/* Set kludge flag */
-    rawval.cp = ppcbeg();	/* Get ptr into char pool */
+    off = ppcbegoff();		/* Get offset into char pool */
 
     if (ch1)
 	{
@@ -2274,6 +2416,8 @@ ppnconst(ch1)
 	    case '.':
 		rawpp = T_FCONST;	/* Remember float const */
 	    continue;
+	    case '\'':
+		continue;
 	    case '-':
 	    case '+':		/* If prev char not 'E' or 'e', stop now */
 		if (toupper(ppclast()) != 'E')
@@ -2287,6 +2431,7 @@ ppnconst(ch1)
 	break;			/* Break from switch is break from loop */
 	}
 rawpplen = ppcend();	/* Done with string */
+rawval.cp = ppcatoff(off);
 return rawpp;		/* Return either T_ICONST or T_FCONST */
 }
 
@@ -2298,11 +2443,12 @@ return rawpp;		/* Return either T_ICONST or T_FCONST */
 */
 static
 void
-ppsconst(ch1)
+ppsconst(int ch1)
 {
     int delim = ch;		/* Remember delimiter we're using */
+    size_t off;
 
-    rawval.cp = ppcbeg();	/* Get ptr into char pool */
+    off = ppcbegoff();		/* Get offset into char pool */
     if (ch1) ppcput(ch1);
     ppcput(ch);
     for (;; ppcput(ch))
@@ -2328,6 +2474,7 @@ ppsconst(ch1)
 		    continue;
 		ppcput(delim);		/* Succeeded! */
 		rawpplen = ppcend();	/* Done with string */
+		rawval.cp = ppcatoff(off);
 		nextch();			/* Advance past delimiter */
 		return;			/* Done, return */
 	    }
@@ -2337,6 +2484,7 @@ ppsconst(ch1)
     /* Stopped because hit erroneous char.  Fix up and barf about it. */
     ppcput(delim);		/* Ensure token is well-formed */
     rawpplen = ppcend();	/* Finish off string */
+    rawval.cp = ppcatoff(off);
 
     error("%s in %s",
 	(ch=='\n' ? "EOL" : (ch==EOF ? "EOF" : "Illegal char")),
@@ -2350,18 +2498,19 @@ ppsconst(ch1)
 */
 static
 int
-ppunknwn()
+ppunknwn(void)
 {
-    rawval.cp = ppcbeg();	/* Get ptr into char pool */
+    size_t off = ppcbegoff();	/* Get offset into char pool */
     ppcput(ch);
     nextch();			/* Consume it, get next */
     rawpplen = ppcend();	/* Done with string */
+    rawval.cp = ppcatoff(off);
     return rawpp = T_UNKNWN;
 }
 
 static
 void									// FW KCC-NT
-pptresize()
+pptresize(void)
 {
     static struct pptlist_s
 	{
@@ -2401,21 +2550,125 @@ pptmax = &pptoks[DYN_SIZE - 1];
 
 static
 int
-ppcresize()
+ppcresize(void)
 {
-#if 0	/* 5/91 Dynamic tables,  ppcresize() was ppcerror() */
-    ptrdiff_t offset = ppcptr - ppcpool;
+    size_t oldcap = ppccap;
+    size_t newcap;
+    size_t offset = 0;
+    size_t used = 0;
+    char *newpool;
+    struct ppcold_s *old;
 
-    ppcpool = (char *) realloc (ppcpool, ppcsize * DYN_SIZE * sizeof(char));
-    ppcleft += DYN_SIZE * sizeof(char);
-    ppcptr = (char *) ((ptrdiff_t) ppcpool + offset);
-    ++ppcsize;
-    if (ppcpool == NULL)
-#endif
+    if (ppcptr)
 	{
-	efatal("Preprocessor token char pool overflow");
-	return -1;	/* simulate error (number of remaining chars) */
+	offset = (size_t)(ppcptr - ppcpool);
+	used = offset + 1;
 	}
+
+    if (oldcap == 0)
+	newcap = 4 * DYN_SIZE;
+    else
+	{
+	if (oldcap > ((size_t)-1) / 2)
+	    {
+	    efatal("Out of memory for preprocessor token char pool");
+	    return -1;
+	    }
+	newcap = oldcap * 2;
+	}
+
+    old = NULL;
+    if (ppcpool)
+	{
+	old = (struct ppcold_s *) malloc(sizeof(*old));
+	if (!old)
+	    {
+	    efatal("Out of memory for preprocessor token char pool");
+	    return -1;
+	    }
+	}
+
+    newpool = (char *) malloc(newcap);
+    if (!newpool)
+	{
+	if (old) free(old);
+	efatal("Out of memory for preprocessor token char pool");
+	return -1;
+	}
+
+    if (used)
+	memcpy(newpool, ppcpool, used);
+
+    if (old)
+	{
+	old->pool = ppcpool;
+	old->next = ppcold;
+	ppcold = old;
+	}
+
+    ppcpool = newpool;
+    ppccap = newcap;
+    if (ppcptr)
+	{
+	ppcptr = ppcpool + offset;
+	ppcleft += newcap - oldcap;
+	ppcocnt += newcap - oldcap;
+	}
+    return 0;
+}
+
+static
+void
+ppcresetpool(void)
+{
+    struct ppcold_s *old;
+
+    ppcptr = NULL;
+    while ((old = ppcold) != NULL)
+	{
+	ppcold = old->next;
+	free(old->pool);
+	free(old);
+	}
+}
+
+static
+char *
+ppcbegin(void)
+{
+    if (!ppcpool)
+	(void) ppcresize();
+
+    if (!ppcptr)
+	{
+	ppcocnt = ppcleft = ppccap - 1;
+	ppcptr = ppcpool;
+	}
+    else
+	ppcocnt = ppcleft;
+    return ppcptr + 1;
+}
+
+static
+size_t
+ppcbegoff(void)
+{
+    return (size_t)(ppcbegin() - ppcpool);
+}
+
+static
+char *
+ppcatoff(size_t off)
+{
+    return ppcpool + off;
+}
+
+static
+void
+ppcreserve(size_t need)
+{
+    while (ppcleft <= need)
+	(void) ppcresize();
 }
 
 /* Translation Phase 4 - directive & macro expansion handling
@@ -2460,7 +2713,7 @@ nextpp (void)
 **	So far, only needed by one call in CCLEX.
 */
 void
-pushpp()
+pushpp(void)
 {
     if (curptr)			/* If current token is from list, */
 	tlpins(curtl, curptr);	/* backup is trivial! */
@@ -2473,7 +2726,7 @@ else    /* If current token not from a list, must fake one up -- barf. */
 */
 static
 int
-findident()
+findident(void)
 {
     register char *cp = curval.cp;
 
@@ -2513,8 +2766,7 @@ findident()
 */
 static
 SYMBOL *
-findmacsym(id)
-char *id;
+findmacsym(char * id)
 {
     SYMBOL *macsym;
 
@@ -2539,7 +2791,7 @@ return NULL;
 */
 static
 int
-nextmacpp()
+nextmacpp(void)
 {
     if ((rawptr = mactl.tl_head) != NULL)	/* If using token list, */
 	{
@@ -2572,7 +2824,7 @@ nextmacpp()
 */
 static
 void
-pushmp()
+pushmp(void)
 {
     if (rawptr)	tlpins(mactl, rawptr);
 else
@@ -2583,8 +2835,7 @@ else
 */
 static
 void
-mtlpush(tl)
-tlist_t tl;
+mtlpush(tlist_t tl)
 {
     if (mactlev >= MAXMACNEST-1)
 	{
@@ -2601,7 +2852,7 @@ else
 */
 static
 void
-mtlpop()
+mtlpop(void)
 {
     if (--mactlev < 0)
 	{
@@ -2619,9 +2870,7 @@ else
 */
 static
 char *
-tltomac(tl,cp)
-tlist_t tl;
-char *cp;
+tltomac(tlist_t tl, char * cp)
 {
     register int i;
     register PPTOK *p;
@@ -2742,8 +2991,7 @@ return cp;
 */
 static
 tlist_t
-tlfrstr(cp)
-char *cp;
+tlfrstr(char * cp)
 {
     tlist_t tl;
 
@@ -2761,34 +3009,25 @@ char *cp;
 */
 static
 tlist_t
-tlimake(val, baseflg)
-INT val;
+tlimake(INT val, int baseflg)
 {
     tlist_t tl;
-    static PPTOK itok =
-	{
-	T_ICONST
-	};
-	char *cp;
+    static PPTOK itok = { T_ICONST, 0, NULL, { 0 } };
+    char *cp;
+    size_t off;
 
-	if (ppcleft < (TGSIZ_WORD/3)+2)	/* If might overflow buffer, */
-	{
-#if 0	/* 5/91 Dynamic tables */
-	ppcresize();
-#else
-	ppcleft = -1, (void)ppcend();	/* trigger fatal error msg now */
-#endif
-	}
     *(tl.tl_head = tl.tl_tail = tokpcre()) = itok;
-    cp = ppcbeg();
+    off = ppcbegoff();
+    ppcreserve((TGSIZ_WORD/3)+2);
+    cp = ppcatoff(off);
     if (baseflg && val >= 0)		/* Deposit num string in char pool */
-	sprintf(cp, "%ld",  val);		/* Decimal */
-else
-    sprintf(cp, "%#lo",  val);	/* Octal */
-tl.tl_head->pt_val.cp = cp;
-ppcleft -= (val = strlen(cp)+1);	/* Update char pool vars */
-ppcptr += val;
-return tl;
+	(void) ppputsl(cp, (long)val);		/* Decimal */
+    else
+	(void) ppputul(cp, (unsigned long)val, 8, 1);	/* Octal */
+    tl.tl_head->pt_val.cp = cp;
+    ppcleft -= (val = strlen(cp)+1);	/* Update char pool vars */
+    ppcptr += val;
+    return tl;
 }
 
 
@@ -2796,7 +3035,7 @@ return tl;
 */
 static
 PPTOK
-tokize()
+tokize(void)
 {
     static PPTOK ztok;	/* Zero pptok, for initialization */
     PPTOK tok;
@@ -2810,8 +3049,7 @@ tokize()
 */
 static
 void
-tlrawadd(atl)
-tlist_t *atl;
+tlrawadd(tlist_t * atl)
 {
     static PPTOK ztok;	/* Zero pptok, for initialization */
     PPTOK tok;
@@ -2825,8 +3063,7 @@ tlist_t *atl;
 */
 static
 tlist_t
-tlcopy(il)
-tlist_t il;
+tlcopy(tlist_t il)
 {
     tlist_t ol;
     PPTOK *p;
@@ -2846,10 +3083,9 @@ tlist_t il;
 */
 static
 tlist_t
-tlstrize(tl)
-tlist_t tl;
+tlstrize(tlist_t tl)
 {
-    char *cp = ppcbeg();	/* Start deposit into token char pool */
+    size_t off = ppcbegoff();	/* Start deposit into token char pool */
 
     ppcput('"');
     for (; tlpcur(tl); tlpskip(tl))
@@ -2864,16 +3100,14 @@ tlist_t tl;
 	}
     ppcput('"');
     (void) ppcend();
-    return tlmake(T_SCONST, cp);
+    return tlmakecp(T_SCONST, ppcatoff(off));
 }
 
 /* PPTFPUT(p, fp) - Output token's string.
 */
 static
 int
-pptfput(p, fp)
-register PPTOK *p;
-FILE *fp;
+pptfput(struct pptok * p, FILE * fp)
 {
     register char *cp;
     if (p->pt_typ < NTOKDEFS
@@ -2890,9 +3124,7 @@ FILE *fp;
 */
 static
 char *
-sltostr(p, cp, max)
-PPTOK *p;
-char *cp;
+sltostr(struct pptok * p, char * cp, int max)
 {
     register char *frm = p->pt_val.cp;
     register int c;
@@ -2926,8 +3158,7 @@ char *cp;
 */
 static
 void
-ppcqstr(cp)
-register char *cp;
+ppcqstr(char * cp)
 {
     --cp;
     for (;;)
@@ -2951,10 +3182,12 @@ register char *cp;
 */
 static
 void
-ppctstr(p)
-register PPTOK *p;
+ppctstr(struct pptok * p)
 {
     register char *cp;
+
+    if (p->pt_typ == T_MACEMP)
+	return;			/* Placemarker contributes no spelling */
     if (p->pt_typ < NTOKDEFS)
 	{
 	if ((cp = tokstr[p->pt_typ]) == NULL)
@@ -2970,8 +3203,7 @@ else
 
 static
 void
-tkerr(rtn, i)
-char *rtn;
+tkerr(char * rtn, int i)
 {
     int_error("%s: bad token %Q", rtn, i);
 }
@@ -2982,8 +3214,7 @@ char *rtn;
 */
 static
 int
-mexptop(sym, hs)
-SYMBOL *sym;
+mexptop(struct symbol * sym, int hs)
 {
     tlist_t tl;
 
@@ -3015,7 +3246,7 @@ SYMBOL *sym;
 */
 static
 int
-mpeekpar()
+mpeekpar(void)
 {
     PPTOK *p;
     if ((p = mactl.tl_head) != NULL)
@@ -3037,12 +3268,11 @@ mpeekpar()
 */
 static
 tlist_t
-mexpsym(sym, hs)
-SYMBOL *sym;
+mexpsym(struct symbol * sym, int hs)
 {
     tlist_t tl, tl2;
     struct macframe mf;		/* Current macro frame */
-    int i, parens, symv;
+    int i, parens, symv, fixed;
     char *cp1, *cp2;
 
 #if DEBUG_PP
@@ -3064,7 +3294,8 @@ SYMBOL *sym;
     if (maclevel >= MAXMACNEST-1)
 	{
 	error("Macro nesting depth exceeded: %s", sym->Sname);
-	(void) margs((tlist_t *)NULL, -1, sym->Smacnpar); /* Flush args */
+	(void) margs((tlist_t *)NULL, -1, sym->Smacnpar,
+		(sym->Sflags & SF_MACVAR) != 0); /* Flush args */
 	return tl;			/* Empty list */
 	}
 
@@ -3084,25 +3315,28 @@ SYMBOL *sym;
 
 	    case MACF_KCC:	/* __COMPILER_KCC__ */
 		    {
-		    return tlmake(T_SCONST, ver_str);
+		    return tlmakecp(T_SCONST, ver_str);
 		    }
 	    case MACF_LINE:	/* __LINE__ */
 		return tlimake(fline, 10);	/* Return a T_ICONST list */
 
 	    case MACF_FILE:	/* __FILE__ */
 		    {
-		    char *cp = ppcbeg();
+		    size_t off = ppcbegoff();
 		    ppcput('"'); ppcqstr(inpfname); ppcput('"');
 		    (void) ppcend();
-		    return tlmake(T_SCONST, cp);
+		    return tlmakecp(T_SCONST, ppcatoff(off));
 		    }
+	    case MACF_COUNTER:	/* __COUNTER__ */
+		return tlimake(pp_counter++, 10);
+
 	    case MACF_DATE:	/* __DATE__ */
 		if (!tadset) dotad();
-		return tlmake(T_SCONST, datestr);
+		return tlmakecp(T_SCONST, datestr);
 
 	    case MACF_TIME:	/* __TIME__ */
 		if (!tadset) dotad();
-		return tlmake(T_SCONST, timestr);
+		return tlmakecp(T_SCONST, timestr);
 
 	    case MACF_DEFD:	/* "defined" operator */
 		/* We allow either "defined NAME" or "defined(NAME)" as per
@@ -3121,7 +3355,7 @@ SYMBOL *sym;
 		    pushmp();			/* Re-read bad token */
 		    return tl;			/* Empty list */
 		    }
-		tl = tlmake(T_ICONST,		/* Expand into true or false */
+		tl = tlmakecp(T_ICONST,		/* Expand into true or false */
 			(findmacsym(rawval.cp) ? "1" : "0"));
 		if (parens)
 		    {
@@ -3137,10 +3371,11 @@ SYMBOL *sym;
 	    case MACF_SYMF:
 		if (1) symv = 0;	/* Set flag 0 for existence, */
 else
+    /* FALLTHROUGH */
     case MACF_SYMV:
 	symv = 1;		/* 1 for value */
 		/* Do common code for _KCCsymfnd and _KCCsymval */
-	    i = margs(&mf.mf_argtl[0], 2, 2);	/* Parse args */
+	    i = margs(&mf.mf_argtl[0], 2, 2, 0);	/* Parse args */
 	    if (i == 2)
 	    {
 	    tl = tlwspdel(mexplim(mf.mf_argtl[0], hs), 1);
@@ -3154,7 +3389,7 @@ else
 	    {
 	    error("Args to \"_KCCsym%s\" must be two string literals",
 		symv? "val" : "fnd");
-	    return tlmake(T_ICONST, "0");	/* Return 0 if err */
+	    return tlmakecp(T_ICONST, "0");	/* Return 0 if err */
 	    }
     else
 	{
@@ -3174,10 +3409,26 @@ else
 	/* Get ptr to macro body, skipping over idiotic params at front */
 	{
 	mf.mf_body = sym->Smacptr + sym->Smacparlen;
-	i = margs(&mf.mf_argtl[0], mf.mf_nargs, mf.mf_nargs); /* Parse args */
+	i = margs(&mf.mf_argtl[0], mf.mf_nargs, mf.mf_nargs,
+		(sym->Sflags & SF_MACVAR) != 0); /* Parse args */
 
-	/* Complain if not exactly the right number of args.  Sigh. */
-	if (mf.mf_nargs != i)
+	/* Complain if the fixed argument count is wrong.  A variadic macro
+	** may have an empty variadic argument; the final argument slot is
+	** synthesized below when it was omitted entirely.
+	*/
+	if (sym->Sflags & SF_MACVAR)
+	    {
+	    fixed = mf.mf_nargs - 1;
+	    if (i < fixed || i > mf.mf_nargs)
+		{
+		error("Wrong number of macro args - at least %d expected, %d seen",
+			fixed, i);
+		if (i < 0) i = 0;
+		}
+	    while (i < mf.mf_nargs)
+		mf.mf_argtl[i++] = tl;
+	    }
+	else if (mf.mf_nargs != i)
 	    {
 	    error("Wrong number of macro args - %d expected, %d seen",
 			mf.mf_nargs, i);
@@ -3209,10 +3460,7 @@ else
 */
 static
 int
-margs(tabptr, maxsto, nexpected)
-tlist_t *tabptr;		/* Pointer to array of tlists */
-int maxsto;			/* Max # of args to store in array */
-int nexpected;			/* # of args we expect to parse */
+margs(tlist_t * tabptr, int maxsto, int nexpected, int variadic)
 {
     int nargs;			/* # args parsed */
     int plev;
@@ -3246,13 +3494,14 @@ int nexpected;			/* # of args we expect to parse */
 		** gobble all the rest of the file, we check to see whether
 		** we have already found all of our args.
 		*/
-		if (nargs >= nexpected) /* If see \n when too many args */
+		if (!variadic && nargs >= nexpected) /* If too many args */
 		    {
 		    error("Missing ')' in macro arg list");
 		    return nargs;	/* Stop now with what we got */
 		    }
 		/* Drop thru to handle like normal whitespace */
 
+	    /* FALLTHROUGH */
 	    case T_WSP:
 		if (tl.tl_head == NULL		/* Ignore wsp if at start */
 		  || (tl.tl_tail->pt_typ == T_WSP))	/* or last was wsp */
@@ -3262,11 +3511,12 @@ int nexpected;			/* # of args we expect to parse */
 	    case T_EOF:		/* Uh-oh... stopped unexpectedly */
 		if (eof)	/* Check for running off end of world */
 		    error("Unexpected EOF during macro arg scan");
-else
-    error("Macro arg scan truncated");
-    plev = 0;	/* Must stop loop! */
+		else
+		    error("Macro arg scan truncated");
+		plev = 0;	/* Must stop loop! */
 		/* Drop thru to store arg before quitting */
 
+    /* FALLTHROUGH */
     case T_RPAREN:	/* Close paren counted for balancing */
 	if (--plev > 0)
 	    break;	/* Just add to arg */
@@ -3274,9 +3524,11 @@ else
 	    return 0;	/* None read... */
 		/* Arg (and all args) done, drop thru to store current arg */
 
+    /* FALLTHROUGH */
     case T_COMMA:	/* Comma stops arg unless paren-protected */
-	if (plev > 1)	/* If still within an arg, */
-	    break;	/* just gobble the comma too */
+	if (plev > 1	/* If still within an arg, */
+	  || (rawpp == T_COMMA && variadic && nargs >= nexpected - 1))
+	    break;	/* or part of the variadic argument */
 
 		/* Store argument thus far! */
 		/* Only set arg if we know there's room in table. */
@@ -3314,13 +3566,9 @@ else
 */
 static
 tlist_t
-mexplim(il, hs)
-tlist_t il;		/* Input list */
+mexplim(tlist_t il, int hs)
 {
-    static PPTOK eoftok =
-	{
-	T_EOF
-	};
+    static PPTOK eoftok = { T_EOF, 0, NULL, { 0 } };
 	tlist_t ml;
 
 	tltadd(il, eoftok);		/* Add EOF to end of input list */
@@ -3344,8 +3592,7 @@ tlist_t il;		/* Input list */
 */
 static
 tlist_t
-mexpand(il, hs)
-tlist_t il;
+mexpand(tlist_t il, int hs)
 {
     SYMBOL *sym;
     int ourlev;
@@ -3418,6 +3665,7 @@ tlist_t il;
 #if 0	/* This is wrong.  Perhaps save sym by making T_MACRO?? */
 		rawptr->pt_is = IS_MHID;	/* Hide it forever */
 #endif
+	    /* FALLTHROUGH */
 	    default:
 		tlpadd(ol, rawptr);
 		continue;		/* Just leave on token list */
@@ -3506,13 +3754,14 @@ msubst(struct macframe
     register char *cp;
     static PPTOK zpptok;
     PPTOK pptok;
+    PPTOK *p, *prev, *next;
     int ncats = 0;		/* # of concat ops seen */
 
 #if DEBUG_PP
     if (debpp) pmacframe("msubst", mf);
 #endif
     tlzinit(tl);		/* Init list to zero */
-    if ((cp = mf->mf_body) != '\0') while ((typ = *cp++) != 0)
+    if ((cp = mf->mf_body) != NULL) while ((typ = *cp++) != 0)
 	{
 	if (typ < 0 || typ >= NTOKDEFS)
 	    int_error("msubst: illegal token %d in body of macro %S",
@@ -3526,6 +3775,17 @@ msubst(struct macframe
 		    int_error("msubst: illegal param %d in body of macro %S",
 				    i, mf->mf_sym);
 		argl = mf->mf_argtl[i];
+		if (typ == T_MACINS && !argl.tl_head)
+		    {
+		    /* C99 ## uses a placemarker when an argument is empty.
+		    ** Keeping that marker until paste time prevents an empty
+		    ** operand from making the concatenation operator lose a side.
+		    */
+		    pptok = zpptok;
+		    pptok.pt_typ = T_MACEMP;
+		    tltadd(tl, pptok);
+		    continue;
+		    }
 		switch (typ)	/* Handle arg as directed */
 		    {
 		    case T_MACSTR:
@@ -3570,18 +3830,39 @@ continue;
 
     /* All tokens present in list, now do concatenation if needed */
     if (ncats)
+	{
 	mpaste(tl, hs, ncats);
+
+	/* Placemarker preprocessing tokens disappear after ## processing. */
+	prev = NULL;
+	for (p = tl.tl_head; p; p = next)
+	    {
+	    next = tokn2p(p->pt_nxt);
+	    if (p->pt_typ == T_MACEMP)
+		{
+		if (prev)
+		    prev->pt_nxt = tokp2n(next);
+		else
+		    tl.tl_head = next;
+		continue;
+		}
+	    prev = p;
+	    }
+	tl.tl_tail = prev;
+	if (prev)
+	    prev->pt_nxt = NULL;
+	}
     return tl;
 }
 
 static
 void
-mpaste(tl, hs, ncats)
-tlist_t tl;
+mpaste(tlist_t tl, int hs, int ncats)
 {
     register PPTOK *p, *lastp = NULL;
     tlist_t nl;
     char *cp;
+    size_t off;
 
 #if DEBUG_PP
     if (debpp) fprintf(fpp, "%smpaste: %d cats in:", plevindent(), ncats),
@@ -3592,7 +3873,7 @@ tlist_t tl;
 	if (p->pt_typ != T_MACCAT)
 	    continue;
 	/* Start concatenation!  Concatenate previous token with next one */
-	cp = ppcbeg();
+	off = ppcbegoff();
 	ppctstr(lastp);			/* Dump prev token */
 	do
 	    {
@@ -3604,6 +3885,18 @@ tlist_t tl;
 	    }
 	while(--ncats > 0 && p && p->pt_typ == T_MACCAT);
 	(void) ppcend();		/* Token done... */
+	cp = ppcatoff(off);
+
+	/* Two placemarkers concatenate to another placemarker. */
+	if (*cp == '\0')
+	    {
+	    lastp->pt_typ = T_MACEMP;
+	    lastp->pt_val.cp = NULL;
+	    lastp->pt_nxt = tokp2n(p);
+	    if (ncats <= 0)
+		break;
+	    continue;
+	    }
 
 	/* Everything concatenated for this stretch, now retokenize it.
 	** If it cannot be parsed, it is left as T_UNKWN for possible later
@@ -3639,8 +3932,7 @@ tlist_t tl;
 */
 static
 int
-hspush(sym, hs)
-SYMBOL *sym;
+hspush(struct symbol * sym, int hs)
 {
     if (hs >= MAXMACNEST)
 	{
@@ -3656,8 +3948,7 @@ return hs+1;
 */
 static
 int
-tkhide(p, hs)
-PPTOK *p;
+tkhide(struct pptok * p, int hs)
 {
     SYMBOL *sym;
 
@@ -3677,8 +3968,7 @@ return IS_UNK;
 */
 static
 int
-mishid(sym, hs)
-SYMBOL *sym;
+mishid(struct symbol * sym, int hs)
 {
     if (hs < 0 || hs > MAXMACNEST)
 	return int_error("mishid: bad arg"), 1;
@@ -3782,7 +4072,11 @@ PPTOK *p;
 	case IS_MEXP:
 	    return "IS_MEXP";
 	}
-    sprintf(buf, "T_IDENT+%#o", p->pt_is);
+    {
+    char *cp;
+    cp = estrcpy(buf, "T_IDENT+");
+    (void) ppputul(cp, (unsigned long)p->pt_is, 8, 1);
+    }
     return buf;
 }
 
@@ -3891,6 +4185,8 @@ break;
     case 7:
 	if (!strcmp(rawval.cp,"include"))
 	    res = flushing ? PPR_FLUSH : d_include();
+	else if (!strcmp(rawval.cp,"warning"))
+	    res = flushing ? PPR_FLUSH : d_warning();
 	break;
     default:
 	int_error ("directive: invalid preprocessor length %d", len);
@@ -3908,6 +4204,7 @@ break;
 		warn("Unsupported preprocessor command: \"%s\"", rawval.cp);
     else
 	error("Unsupported preprocessor command: \"%s\"", rawval.cp);
+    /* FALLTHROUGH */
     case PPR_FLUSH:
 	indirp = 0;		/* Avoid whitespace err msgs */
 	flushtoeol();
@@ -3926,11 +4223,11 @@ break;
 static
 int
 d_define (void)
-    {
-    char *name;		/* Name of new macro (in ppcpool) */
+{
+    char *name;		/* Saved name of new macro */
     SYMBOL *sym;
     struct macframe m;
-    int i;
+    int i, variadic;
 
 
     if (tskipwsp() != T_IDENT)	/* Get first non-whitespace token */
@@ -3939,11 +4236,20 @@ d_define (void)
 	return PPR_FLUSH;
 	}
 
-    name = rawval.cp;		/* Remember ptr to ident */
+    /* Save before ppcpool is reused.  Macro names can exceed IDENTSIZE;
+     * symfind() performs the required significant-character truncation.
+     */
+    if ((name = calloc(1, strlen(rawval.cp) + 1)) == NULL)
+	{
+	error("Out of memory for macro name");
+	return PPR_FLUSH;
+	}
+    estrcpy(name, rawval.cp);
 
     if (*name == '`')
 	{
 	error("Macro name cannot be quoted identifier");
+	free(name);
 	return PPR_FLUSH;
 	}
 
@@ -3951,6 +4257,7 @@ d_define (void)
 
     m.mf_nargs = -1;		/* Initially assume no formals */
     m.mf_parlen = 0;		/* Keep track of # chars that formals need */
+    variadic = 0;
 
     /*
      * Here's a tricky situation.  If the source line is
@@ -3976,6 +4283,26 @@ d_define (void)
 	    if (tskipwsp () == T_RPAREN)/* Skip over whitespace */
 		break;			/* Macro params done! */
 
+	    if (rawpp == T_ELPSIS)
+		{
+		/* Represent __VA_ARGS__ as the final ordinary macro parameter.
+		** This lets the existing substitution, #, and ## machinery work
+		** without a second token representation.
+		*/
+		variadic = 1;
+		if (m.mf_nargs >= MAXMARG - 1)
+		    error("More than %d args in macro definition of \"%s\"",
+			MAXMARG, name);
+		else
+		    {
+		    m.mf_parcp[m.mf_nargs++] = "__VA_ARGS__";
+		    m.mf_parlen += sizeof("__VA_ARGS__");
+		    }
+		if (tskipwsp() != T_RPAREN)
+		    error("Ellipsis must end macro formal parameter list");
+		break;
+		}
+
 	    if (rawpp != T_IDENT)	/* Better be a param ident */
 		{
 		error("Macro formal parameter must be identifier");
@@ -3984,6 +4311,9 @@ d_define (void)
 					/* expansion, but remember that */
 		break;			/* this is a fncall macro. */
 		}
+
+	    if (!strcmp(rawval.cp, "__VA_ARGS__"))
+		error("__VA_ARGS__ is reserved for variadic macro arguments");
 
 	    if (m.mf_nargs >= MAXMARG - 1)
 		error("More than %d args in macro definition of \"%s\"",
@@ -4028,7 +4358,10 @@ d_define (void)
     /* Arguments read, now read rest of line into a tokenlist. */
 
     if (!mdefinp(&m))			/* If failed somehow, */
+	{
+	free(name);
 	return PPR_FLUSH;		/* just flush rest of line */
+	}
 
     /* OK, now can check for macro already being defined */
 *defcsname = 'd';			/* Allow "defined" to be found */
@@ -4037,11 +4370,13 @@ sym = findmacsym(name);
 if (sym != NULL)			/* If already defined, compare it */
     {
     if (m.mf_nargs == sym->Smacnpar	/* Args and body must match */
+      && variadic == ((sym->Sflags & SF_MACVAR) != 0)
       && m.mf_len == (int) (sym->Smaclen) // FW KCC-NT
       && (m.mf_len == 0		/* OK if both bodies null */
 	|| memcmp(m.mf_body, sym->Smacptr, m.mf_len) == 0))
 	{
 	if (m.mf_body) free(m.mf_body);	/* Identical, we win! */
+	free(name);
 	return PPR_CHECKEOL;
 	}
 
@@ -4049,6 +4384,7 @@ if (sym != NULL)			/* If already defined, compare it */
 	{
 	error("Illegal to redefine \"%s\"", name);
 	if (m.mf_body) free(m.mf_body);
+	free(name);
 	return PPR_FLUSH;
 	}
 	/* Later just output "note" if macro is functionally identical,
@@ -4059,7 +4395,10 @@ if (sym != NULL)			/* If already defined, compare it */
     }
 
     /* Now define the new macro! */
-mdefsym(name, &m);
+sym = mdefsym(name, &m);
+if (variadic)
+    sym->Sflags |= SF_MACVAR;
+free(name);
 return PPR_CHECKEOL;
 }
 
@@ -4073,10 +4412,7 @@ mdefinp(struct macframe
 {
     register int i;
     register char *cp;
-    static PPTOK sptok =
-	{
-	T_WSP
-	};
+    static PPTOK sptok = { T_WSP, 0, NULL, { 0 } };
 	tlist_t tl;
 	int wspf;
 
@@ -4112,6 +4448,8 @@ mdefinp(struct macframe
 		for (i = 0; i < mf->mf_nargs; i++)	/* Scan to see if a param */
 		    if (!strcmp(mf->mf_parcp[i], rawval.cp))
 			break;
+		if (i >= mf->mf_nargs && !strcmp(rawval.cp, "__VA_ARGS__"))
+		    error("__VA_ARGS__ may only appear in a variadic macro");
 		if (i < mf->mf_nargs)	/* If found param, fix token */
 		    {
 		    if (tl.tl_tail && tl.tl_tail->pt_typ == T_MACCAT)
@@ -4127,6 +4465,7 @@ break;
     }
 	    /* Drop thru to add normal ident token to list */
 
+    /* FALLTHROUGH */
     default:
 	if (wspf) tltadd(tl, sptok), mf->mf_len++;
 	mf->mf_len++;	/* Bump for token type */
@@ -4220,10 +4559,7 @@ break;
 */
 static
 SYMBOL *
-mdefstr(name, mactyp, body)
-char *name;			/* Macro symbol name */
-int mactyp;			/* Special MACF_ type */
-char *body;			/* Text of macro definition */
+mdefstr(char * name, int mactyp, char * body)
 {
     struct macframe m;
 
@@ -4242,11 +4578,11 @@ char *body;			/* Text of macro definition */
 	ppcrest(savppc);	/* Flush all strings & pptoks used */
 	if (savppt == NULL)
 	    pptptr = pptoks;
-else
-    pptptr = savppt;
+	else
+	    pptptr = savppt;
     }
-else
-    m.mf_body = NULL, m.mf_len = 0;
+    else
+	m.mf_body = NULL, m.mf_len = 0;
     return mdefsym(name, &m);	/* Always define macro, and return! */
 }
 
@@ -4256,10 +4592,7 @@ else
 */
 static
 SYMBOL *
-mdefsym(name, mf)
-char *name;			/* Macro symbol name */
-register struct macframe
-*mf;
+mdefsym(char * name, struct macframe * mf)
 {
     register SYMBOL *s;
 
@@ -4282,7 +4615,7 @@ register struct macframe
 */
 static
 int
-d_undef()
+d_undef(void)
 {
     SYMBOL *sym;
 
@@ -4303,12 +4636,12 @@ else
     error("Illegal to undefine \"%s\"", rawval.cp);
     }
 checkeol();
+return PPR_ATEOL;
 }
 
 static
 void
-freemacsym(sym)
-SYMBOL *sym;
+freemacsym(struct symbol * sym)
 {
     if (sym->Smacptr)		/* If it has a macro body, */
 	free(sym->Smacptr);	/* free it up. */
@@ -4335,7 +4668,7 @@ unsigned int asmfline;
 
 static
 int
-d_asm()
+d_asm(void)
 {
     flushtoeol();			/* ignore rest of line */
     if (inasm)			/* bump level.  if nested, complain */
@@ -4347,7 +4680,7 @@ d_asm()
     asmfline = fline;
     if (curtl.tl_head)
 	int_error("d_asm: cooked top-level input");
-    curtl = tlmake(T_EOL, (INT) 0);		/* Set up curtl with dummy */
+    curtl = tlmakei(T_EOL, (INT)0);		/* Set up curtl with dummy */
     return PPR_CHECKEOL;
 }
 
@@ -4356,33 +4689,15 @@ d_asm()
 */
 static
 tlist_t
-asmrefill()
+asmrefill(void)
 {
     tlist_t tl;
-    static PPTOK lptok =
-	{
-	T_LPAREN
-	}
-    ,
-		stok =
-	{
-	T_SCONST
-	}
-    ,
-    rptok =
-	{
-	T_RPAREN
-	}
-    ,
-    sctok =
-	{
-	T_SCOLON
-	}
-    ,
-    eoltok =
-	{
-	T_EOL
-	};
+    size_t stokoff;
+    static PPTOK lptok = { T_LPAREN, 0, NULL, { 0 } },
+        stok = { T_SCONST, 0, NULL, { 0 } },
+        rptok = { T_RPAREN, 0, NULL, { 0 } },
+        sctok = { T_SCOLON, 0, NULL, { 0 } },
+        eoltok = { T_EOL, 0, NULL, { 0 } };
 tlzinit(tl);
 ppcreset();		/* Clear token char pool and token stg */
 pptreset();
@@ -4408,9 +4723,9 @@ for (;;)
 	    }
 	break;
 	}
-    tl = tlmake(T_IDENT, "asm");	/* Make start of returned tokenlist */
+    tl = tlmakecp(T_IDENT, "asm");	/* Make start of returned tokenlist */
     tltadd(tl, lptok);		/* Add left-paren */
-    stok.pt_val.cp = ppcbeg();	/* Got something real, start a literal! */
+    stokoff = ppcbegoff();	/* Got something real, start a literal! */
     ppcput('"');
 
     for (;;)
@@ -4460,12 +4775,14 @@ for (;;)
 		    SYMBOL *sym;
 		    register char *cp;
 		    tlist_t strtl;
+		    size_t idoff;
 
 		    ppcput(ch);			/* Store first char of ident */
-		    cp = ppcptr;		/* Remember pointer to it */
+		    idoff = (size_t)(ppcptr - ppcpool);
 		    while (iscsym(nextch()))	/* Gobble all of identifier */
 			ppcput(ch);
 		    (void)ppcend();
+		    cp = ppcatoff(idoff);
 
 		    if ((sym = findmacsym(cp)) == NULL	/* If not a macro, */
 			|| !mexptop(sym, 0))		/* or can't expand it, */
@@ -4481,8 +4798,10 @@ for (;;)
 		     ** enough room for this because the identifier had at least one
 		     ** char and was null-terminated.
 		     */
+		    cp = ppcatoff(idoff);
 		    *cp = '"';			/* Set end quote of string literal */
 		    *++cp = 0;			/* Tie off string */
+		    stok.pt_val.cp = ppcatoff(stokoff);
 		    tltadd(tl, stok);		/* And add literal to token list */
 
 		    /* Now get the expanded macro tokens, which mexptop() left
@@ -4493,7 +4812,7 @@ for (;;)
 		    tlzinit(curtl);		/* Done with that list */
 		    tllapp(tl, strtl);		/* Append lit to our list */
 
-		    stok.pt_val.cp = ppcbeg();	/* Now start a new string literal */
+		    stokoff = ppcbegoff();	/* Now start a new string literal */
 		    ppcput('"');
 		    continue;
 	            }
@@ -4506,6 +4825,7 @@ for (;;)
     ppcput('n');
     ppcput('"');		/* Done, stop literal */
     (void)ppcend();
+    stok.pt_val.cp = ppcatoff(stokoff);
     tltadd(tl, stok);		/* And add to list */
     tltadd(tl, rptok);		/* Add right paren */
     tltadd(tl, sctok);		/* And semicolon */
@@ -4518,12 +4838,12 @@ for (;;)
 */
 static
 int
-d_endasm()
+d_endasm(void)
 {
     if (inasm == 0)			/* If not inside #asm, complain */
 	error("Not in #asm, ignoring #endasm");
-else
-    inasm = 0;			/* Tell d_asm() to stop */
+    else
+	inasm = 0;			/* Tell d_asm() to stop */
     return PPR_FLUSH;
 }
 
@@ -4588,8 +4908,7 @@ else
 /* D_IFDEF() - Process #if and #ifndef directives
 */
     static int
-    d_ifdef(cond)
-    int cond;		/* 1 == ifdef, 0 == ifndef */
+    d_ifdef(int cond)
 {
 
     if (++iflevel >= MAXIFLEVEL-1)	/* this is a new if level */
@@ -4640,7 +4959,7 @@ d_if (void)
 */
 static
 int
-d_elif()
+d_elif(void)
 {
     /* Make sure an #if or #elif preceeded this #elif */
     if (iftype[iflevel] == IN_ELSE)	/* If not IN_IF or IN_ELIF */
@@ -4688,7 +5007,7 @@ d_elif()
 */
 static
 int
-d_else()
+d_else(void)
 {
     int prev = iftype[iflevel];	/* Remember current level type */
 
@@ -4736,7 +5055,7 @@ return PPR_CHECKEOL;
 */
 static
 int
-d_endif()
+d_endif(void)
 {
     if (iflevel)		/* Are we in a conditional? */
 	{
@@ -4761,7 +5080,7 @@ return PPR_CHECKEOL;
 */
 static
 void
-flushcond()
+flushcond(void)
 {
     flushing = iflevel;		/* not ok, set flushing */
     indirp = 0;			/* No longer hacking directive */
@@ -4787,19 +5106,13 @@ while (flushing && !eof);		/* If still flushing, keep going. */
 */
 static
 int
-iftest()
+iftest(void)
 {
     PPTOK *p;
-    static PPTOK scoltok =
-	{
-	T_SCOLON
-	};	/* Token for ";" */
-	static PPTOK eoltok =
-	{
-	T_EOL
-	};
+    static PPTOK scoltok = { T_SCOLON, 0, NULL, { 0 } };	/* Token for ";" */
+	static PPTOK eoltok = { T_EOL, 0, NULL, { 0 } };
 	int won = 0;		/* Set non-zero if expr parse wins. */
-	long val;
+	INT val;
 
     /* Set up to parse a one-line constant expression */
 	if (tlpcur(curtl))		/* Make sure we can hack curtl */
@@ -4854,8 +5167,7 @@ iftest()
 */
 static
 void
-iffwarn(typ)
-char *typ;
+iffwarn(char * typ)
 {
     warn("#%s matches #%s from different file (\"%s\", line %d)",
 	typ,
@@ -4869,7 +5181,7 @@ char *typ;
 */
 static
 void
-ifpush(inlev)
+ifpush(int inlev)
 {
     register int i;
     ++inlev;				/* Bump up so never zero */
@@ -4955,7 +5267,8 @@ d_include (void)
     */
     if (*f == '/')
 	{
-	fp = fopen(strcpy(f2, f), "r");	/* Try to open just this one */
+	estrcpy(f2, f);
+	fp = fopen(f2, "r");	/* Try to open just this one */
 	++done;				/* Always done now */
 	}
 else if (ftype != '>')
@@ -4973,8 +5286,12 @@ else if (ftype != '>')
 	if ((fp = fopen(f2, "r")) != NULL)
 	    ++done;
 else			/* V 2A(37): try the user's filespec
-					    exactly as given (SPR 9577) */ if ((fp = fopen (strcpy (f2, f), "r")) != NULL)
-    ++done;
+						    exactly as given (SPR 9577) */
+	    {
+	    estrcpy(f2, f);
+	    if ((fp = fopen (f2, "r")) != NULL)
+		++done;
+	    }
     }
     }
     /* Now drop thru, so if nothing worked for a ""-type include, we
@@ -5003,7 +5320,7 @@ if (!fp)				/* If nothing worked, complain */
     error("Can't open include file, last tried \"%s\"", f2);
 else
     filepush(fp, f2, 1, 1, 1);	/* Won, push to new input file! */
-    return PPR_ATEOL;
+return PPR_ATEOL;
 }
 
 /* CINCTRY - Attempt to open an include file using the specified array
@@ -5012,11 +5329,7 @@ else
 */
 static
 int
-cinctry(n, ptab, f2, f, fp)
-register int n;			/* # paths in table */
-char **ptab;			/* Addr of table */
-char *f2, *f;			/* Places to deposit built and orig names */
-FILE **fp;
+cinctry(int n, char ** ptab, char * f2, char * f, FILE ** fp)
 {
     for(; --n >= 0; ++ptab)
 	{
@@ -5037,10 +5350,7 @@ FILE **fp;
 */
 static
 void
-filepush(fp, fname, lin, pag, flin)
-FILE *fp;
-char *fname;
-int lin, pag, flin;
+filepush(FILE * fp, char * fname, int lin, int pag, int flin)
 {
     if (inlevel >= MAXINCLNEST-1)	/* Make sure we have room */
 	{
@@ -5051,7 +5361,7 @@ int lin, pag, flin;
     pushch(ch);				/* Remember current file input char */
     if (eof)				/* If read-ahead has left us at */
 	eof = 0;			/* top-level EOF, undo it. */
-    strcpy(inc[inlevel].cname, inpfname);	/* Save old context */
+    estrcpy(inc[inlevel].cname, inpfname);	/* Save old context */
     inc[inlevel].cptr = in;
     inc[inlevel].cpage = page;
     inc[inlevel].cline = line;
@@ -5059,7 +5369,7 @@ int lin, pag, flin;
     ifpush(inlevel);			/* Fix up conditional info */
 
     inlevel++;				/* Create new context */
-    strcpy(inpfname, fname);		/* Set new current file name */
+    estrcpy(inpfname, fname);		/* Set new current file name */
     in = fp;				/* Set new current input stream */
     fline = flin;
     line = lin;
@@ -5131,6 +5441,17 @@ d_error(void)
     return PPR_CHECKEOL;
 }
 
+static
+int
+d_warning (void)
+{
+    char warnstr[120];
+
+    tltostr(getlinetl(), warnstr, (int)sizeof(warnstr)-1);
+    warn("#warning: %s", warnstr);
+    return PPR_CHECKEOL;
+}
+
 /* D_PRAGMA() - Process #pragma directive (barf choke vomit puke bletch)
  *
  * MVS 9/8/90:  added recognition of two pragmas: "debug" and "nodebug"
@@ -5146,7 +5467,7 @@ d_pragma (void)
 {
     #define MAX_PRAGMA_SIZE	128
     char pragma_str[MAX_PRAGMA_SIZE];		/* Max size of pragma msg */
-    char ext;
+    int ext;
 
     /* Gobble in pp-tokens and turn carefully into a string */
     tltostr(getlinetl(), pragma_str, (int)sizeof(pragma_str)-1);
@@ -5170,9 +5491,19 @@ else if (strncmp(pragma_str, " request_library", 16) == 0 &&
 	outstr (".REL");
     outnl();
     }
-else if (strncmp(pragma_str, " include_once", 13) == 0)
+else if (strncmp(pragma_str, " include_once", 13) == 0
+      || strncmp(pragma_str, "include_once", 12) == 0
+      || strncmp(pragma_str, " once", 5) == 0
+      || strncmp(pragma_str, "once", 4) == 0)
+    {
+    char *bp;
+
 	/* 11/91 causes d_include() to avoid fopen() for later inclusions */
     nsert_file(inpfname, 1);
+    bp = strrchr(inpfname, '/');
+    if (bp)
+	nsert_file(bp + 1, 1);
+    }
 
     /* 1/92 #pragma module(title) PPS 4329 */
 else if (strncmp(pragma_str, " module", 7) == 0 &&
@@ -5192,9 +5523,9 @@ return PPR_CHECKEOL;
 
 static
 int
-get_title (char *pragma_str, char *ext)
+get_title(char *pragma_str, int *ext)
 {
-    char i, j;
+    int i, j;
 
     /* 8 is 1 + min length of "request_library" and "module" */
     for (i = 8; i < MAX_PRAGMA_SIZE; i++)
@@ -5357,6 +5688,7 @@ flushtoeol(void)
 		return nextch (), rawpp = T_EOL; /* FW 2A(47) August 1993 */
 		}
 
+	/* FALLTHROUGH */
 	default:
 	    nextch();
 	}
@@ -5376,7 +5708,7 @@ flushtoeol(void)
 static
 int
 cskiplwsp (void)
-    {
+{
     int		eolseen = 0;
 
 
@@ -5414,6 +5746,7 @@ cskiplwsp (void)
 	    case '\n':
 		++eolseen;
 
+	    /* FALLTHROUGH */
 	    default:
 
 		if (!iscwsp (ch))	/* See if any kind of C whitespace */
@@ -5516,11 +5849,12 @@ tlwspdel(tlist_t tl, int allf)		/* TRUE to flush all whitespace */
 	if (p->pt_typ == T_WSP
 	  && (allf || p == tl.tl_head || p == tl.tl_tail))
 	{
-	if (lastp) lastp->pt_nxt = p->pt_nxt;	/* Fix up prev */
-else
-    tl.tl_head = tokn2p(p->pt_nxt);
-    if ((p = tokn2p(p->pt_nxt)) == NULL)		/* Fix up tail */
-	tl.tl_tail = (lastp ? lastp : tl.tl_head);
+	if (lastp)
+	    lastp->pt_nxt = p->pt_nxt;	/* Fix up prev */
+	else
+	    tl.tl_head = tokn2p(p->pt_nxt);
+	if ((p = tokn2p(p->pt_nxt)) == NULL)		/* Fix up tail */
+	    tl.tl_tail = (lastp ? lastp : tl.tl_head);
     }
 else
     lastp = p, p = tokn2p(p->pt_nxt);	/* Just pass non-wsp */
@@ -5532,8 +5866,23 @@ return tl;
 **	This routine is at the end of CCPP for now to avoid lots of warning
 **	messages about mismatched argument types.
 */
-static
-tlist_t
+static tlist_t
+tlmakecp(int typ, char *cp)
+{
+    union pptokval val;
+    val.cp = cp;
+    return tlmake(typ, val);
+}
+
+static tlist_t
+tlmakei(int typ, INT i)
+{
+    union pptokval val;
+    val.i = i;
+    return tlmake(typ, val);
+}
+
+static tlist_t
 tlmake(int typ, union pptokval val)
 {
     tlist_t tl;
@@ -5585,3 +5934,4 @@ if ((insert_flag || insert_all_files) && i < FILE_MAX - 1)
     }
 return 0;			/* not found, possibly inserted */
 }
+

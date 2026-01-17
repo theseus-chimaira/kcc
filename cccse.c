@@ -31,6 +31,7 @@ static int chgpush(PCODE *), stktop(PCODE *),
 	   safematch(PCODE *, int), match(PCODE *, int);
 static int flushalias(PCODE *);
 static int cseinit(int, PCODE *, int);
+static int noteindex(int, int);
 #if 0
 static int findcse();
 static void flushreg(), flushtarget();
@@ -72,7 +73,8 @@ static int
     ** P_IBP + P_LDB into P_ILDB.
     */
 #if 0
-	/* Overview of how findcse works (from David Eppstein) */
+/*
+	Overview of how findcse works (from David Eppstein)
       - In the first loop it goes back through the peephole buffer and
 	builds up a list of instructions that taken together calculate
 	the value in the target register (the one given it as an
@@ -120,14 +122,9 @@ and the target calculation's use.  This information is kept in isindex[].
 Isindex[reg] is the pointer to the earliest use of that register in
 the target calculation; if any machines are not yet that far back when
 we see an instruction changing that reg then all those machines are aborted.
-There is a possible bug here if the same register is used twice as an
-index in the target calculation, with a change to it in between the
-two uses; if this situation happens the first loop that builds the
-target calculation instruction list should abort because the second
-loop can't handle this, but I don't know whether it currently does.
-Something that probably hasn't come up but might be made to with
-sufficiently tricky code.  You should check this anyway (not that it
-is related to your current bug).
+If the same register is used twice as an index in the target calculation,
+the first loop aborts.  The second loop only tracks one target-use point
+per index register, so accepting two uses could miss a change between them.
 
 Another complication is that, because of IDIVI, the register that a
 machine wakes up on is not always the same as the one it uses as the
@@ -149,6 +146,7 @@ we move back across a jump out of the peephole buffer, this is not a
 problem for common subexpressions but you don't want to pull the IBP
 across the jump because then it won't happen if the jump gets taken.
 
+*/
 #endif
 
 /*
@@ -157,10 +155,44 @@ across the jump because then it won't happen if the jump gets taken.
 */
 
 void
-foldmove(p)
-PCODE *p;
+foldmove(struct pcode * p)
 {
+    PCODE *q;
     int r = p->Preg, s, op = p->Pop;
+
+    /*
+    ** Forward an immediately preceding double-word store into a reload of
+    ** the same location:
+    **
+    **     DMOVEM R,M
+    **     DMOVE  S,M
+    **
+    ** becomes
+    **
+    **     DMOVEM R,M
+    **     DMOVE  S,R
+    **
+    ** This is deliberately adjacency-only.  No register or memory state can
+    ** change between the two instructions, and volatile accesses flush the
+    ** peephole buffer before/after generation.  Leave the store itself in
+    ** place; only avoid the redundant memory read.
+    */
+    if (op == P_DMOVE && (q = before(p)) != NULL
+      && q->Pop == P_DMOVEM
+      && !prevskips(q) && !prevskips(p)
+      && sameaddr(p, q, 0)) {
+	if (r == q->Preg) {
+	    p->Pop = P_NOP;
+	    fixprev();
+	    return;
+	}
+	p->Ptype = PTA_REGIS;
+	p->Pr2 = q->Preg;
+	p->Pptr = NULL;
+	p->Poffset = 0;
+	return;
+    }
+
     if (p->Pop == P_IDIV || p->Pop == P_UIDIV) return;
     if ((s = findcse(r, p, 0)) != 0)
     {   if (op == P_HRRZ  ||  op == P_HLRZ)
@@ -177,8 +209,7 @@ PCODE *p;
 */
 
 void
-folddiv(vr)
-VREG *vr;
+folddiv(struct vreg * vr)
 {
     int r = vrreal(vr), s;
     if ((s = findcse(r, previous, 0)) != 0)
@@ -212,8 +243,7 @@ PCODE *p;
 **	virtual regs (assumes that index reg, once used, isn't needed again).
 */
 void
-foldidx(p)
-PCODE *p;
+foldidx(struct pcode * p)
 {
     int s;
 
@@ -229,8 +259,7 @@ PCODE *p;
 **	Returns phys register # containing value, or 0 if no folding done.
 */
 int
-foldrcse(r, p)
-PCODE *p;
+foldrcse(int r, struct pcode * p)
 {
     return findcse(r, p, 1);
 }
@@ -238,8 +267,7 @@ PCODE *p;
 /* CSEINIT - auxiliary for FINDCSE to set things up
 */
 static int
-cseinit(r, p, safedouble)
-PCODE *p;
+cseinit(int r, struct pcode * p, int safedouble)
 {
     PCODE *q;
     int i;
@@ -340,13 +368,15 @@ PCODE *p;
 
 	switch (q->Ptype) {
 	case PTA_REGIS:
-	    isindex[q->Pr2] = maxcse + 1; /* treat mem reg as index */
+	    if (!noteindex(q->Pr2, maxcse + 1))
+		return 0;		/* can't track two uses */
 	    break;
 
 	case PTA_BYTEPOINT:
 	case PTV_IINDEXED:
 	case PTA_MINDEXED:
-	    isindex[q->Pindex] = maxcse + 1;	/* extract index register */
+	    if (!noteindex(q->Pindex, maxcse + 1))
+		return 0;		/* can't track two uses */
 	    break;				/* accept */
 
 	case PTV_IMMED:
@@ -400,13 +430,25 @@ PCODE *p;
     stkoffset = 0;			/* no stack hackery yet */
     return 1;				/* OK, say target is ready! */
 }
+
+static int
+noteindex(int r, int i)
+{
+    if (r == 0 || r == R_SP) {
+	isindex[r] = i;
+	return 1;
+    }
+    if (isindex[r] >= 0)
+	return 0;
+    isindex[r] = i;
+    return 1;
+}
 
 /* FINDCSE() - Fold common subexpressions
 */
 
 static int
-findcse(r, p, safedouble)
-PCODE *p;
+findcse(int r, struct pcode * p, int safedouble)
 {
     PCODE *q;
     int i, flushfound;
@@ -450,6 +492,7 @@ PCODE *p;
 		q = before (q);		/* yes, just skip over the P_DPB */
 		continue;		/* and look for a real match */
 	    }
+	/* FALLTHROUGH */
 	case P_IDPB:
 	    /* This used to drop through to the ILDB case.  However, this
 	    ** caused lossage because it's unsafe to assume that the DPB
@@ -470,24 +513,20 @@ PCODE *p;
 
 	case P_IBP:
 
-/* Bug here, the sequence
-**		IBP x ? MOVEM x,addr ? LDB r,x
-** becomes zapped into
-**		MOVEM x,addr ? ILDB r,x
-** which is real wrong.
-** Until this is figured out and protected against, we enforce a
-** restriction that the IBP must immediately precede the DPB/LDB.
-*/
+	    /* P_ILDB/P_IDPB folding is only valid when the P_IBP is exactly
+	    ** adjacent to the byte operation.  Otherwise a use of the updated
+	    ** byte pointer between the two instructions could be skipped over.
+	    */
 	    if (match (q, P_IBP)) switch(target[0]->Pop) {
 	    case P_LDB:			/* turn P_IBP x + P_LDB R,x */
-/* Temp fix */	if (q != before(target[0]))
-/* Temp fix */	    break;
+		if (q != before(target[0]))
+		    break;
 		target[0]->Pop = P_ILDB;	/* into P_ILDB R,x */
 		q->Pop = P_NOP;
 		return 0;
 	    case P_DPB:			/* same with P_DPB */
-/* Temp fix */	if (q != before(target[0]))
-/* Temp fix */	    break;
+		if (q != before(target[0]))
+		    break;
 		target[0]->Pop = P_IDPB;
 		q->Pop = P_NOP;
 		return 0;
@@ -518,6 +557,7 @@ PCODE *p;
 	case P_DFMP:	case P_DFDV:	case P_DFSB:	case P_DFAD:
 	case P_DMOVE:	case P_DMOVN:
 	    flushreg(q->Preg + 1);
+	/* FALLTHROUGH */
 	case P_FADR:	case P_FSBR:	case P_FMPR:	case P_FDVR:
 	case P_ADD:	case P_IMUL:	case P_SUB:
 	case P_AND:	case P_IOR:	case P_XOR:
@@ -529,8 +569,10 @@ PCODE *p;
 	    q = before (q);		/* whether or no success, back one */
 	    continue;			/* and try again */
 
+
 	case P_SETO+POF_BOTH:	case P_SETZ+POF_BOTH:
 	    if ((r = match (q, q->Pop &~ POF_BOTH)) != 0) break;
+	/* FALLTHROUGH */
 	case P_MOVEM:	case P_DMOVEM:
 	case P_AOS:   	case P_SOS:
 	case P_MOVN+POF_BOTH:	case P_MOVM+POF_BOTH:
@@ -591,6 +633,7 @@ PCODE *p;
 		&& dropsout (after (q)) 
 		&& (r = match (q, P_SETZ)) != 0) 
 		    break; /* P_SKIPE+P_JRST leaves 0 in reg */
+	/* FALLTHROUGH */
 	case P_MOVE:
 	    if (!dropsout (q) && (r = safematch (q, P_MOVE)) != 0) break;
 	    q = before (q);		/* not, move back */
@@ -650,6 +693,7 @@ PCODE *p;
 		r = q->Preg;		/* (except that reg not munged) */
 		break;
 	    }
+	/* FALLTHROUGH */
 	case P_TRN: case P_TDN:
 	    q = before (q);		/* innocuous op, move back */
 	    continue;			/* and look for more */
@@ -675,9 +719,7 @@ PCODE *p;
 ** Test two instructions to see if they refer to the same place
 */
 int
-sameaddr(p, q, stkoffset)
-INT stkoffset;
-PCODE *p, *q;
+sameaddr(struct pcode * p, struct pcode * q, INT stkoffset)
 {
     if ( (p->Ptype &~ (PTF_IMM + PTF_SKIPPED))
       != (q->Ptype &~ (PTF_IMM + PTF_SKIPPED)))
@@ -688,6 +730,7 @@ PCODE *p, *q;
 
     case PTA_BYTEPOINT:
 	if (p->Pbsize != q->Pbsize) return 0;
+    /* FALLTHROUGH */
     case PTA_MINDEXED:
 	if ((p->Ptype & PTF_IMM) != (q->Ptype & PTF_IMM)) return 0;
 	if (p->Pindex != q->Pindex || p->Pptr != q->Pptr) return 0;
@@ -727,9 +770,7 @@ PCODE *p, *q;
 ** be careful around ops that change memory.
 */
 int
-alias (p, q, soff)
-PCODE *p, *q;
-INT soff;		/* Stack offset */
+alias (struct pcode * p, struct pcode * q, INT soff)
 {
     int pt, qt;
 
@@ -801,8 +842,7 @@ INT soff;		/* Stack offset */
 /* --------------------------- */
 
 static int
-match (q, op)
-PCODE *q;
+match (struct pcode * q, int op)
 {
     int i;
 
@@ -856,8 +896,7 @@ PCODE *q;
 /* ------------------------------------ */
 
 static int
-safematch (q, op)
-PCODE *q;
+safematch (struct pcode * q, int op)
 {
     int r;
     if ((r = match (q, op)) == 0) flushreg (q->Preg); /* fail, give up reg */
@@ -870,8 +909,7 @@ PCODE *q;
 */
 
 static int
-stktop (p)
-PCODE *p;
+stktop (struct pcode * p)
 {
     return p->Ptype == PTA_MINDEXED && p->Pptr == NULL &&
 	   p->Poffset == - stkoffset && p->Pindex == R_SP;
@@ -883,8 +921,7 @@ PCODE *p;
 */
 
 static int
-chgpush (p)
-PCODE *p;
+chgpush (struct pcode * p)
 {
     PCODE *q;
     int found, i, sop, sreg;
@@ -910,6 +947,7 @@ PCODE *p;
 		break;			/* Check that index reg OK */
 					/* Else drop thru to fail */
 
+	/* FALLTHROUGH */
 	case PTA_BYTEPOINT:	/* Shouldn't be pushing this anyway */
 	default:
 	    return 0;
@@ -937,6 +975,7 @@ PCODE *p;
 		if (q->Preg == R_SP)
 		    so--;	/* Adjust, then drop through */
 
+	    /* FALLTHROUGH */
 	    default:			/* non-stack-change op */
 		if ( ((q->Pop & POF_BOTH)		/* If op changes mem */
 		      || (popflg[q->Pop&POF_OPCODE]&PF_MEMCHG))
@@ -971,7 +1010,7 @@ PCODE *p;
 /* -------------------------------- */
 
 static void
-flushreg(r)
+flushreg(int r)
 {
     flushtarget(isindex[r]);
     matchedto[r] = -1;
@@ -982,7 +1021,7 @@ flushreg(r)
 /* ----------------------------------------------- */
 
 static void
-flushtarget(i)
+flushtarget(int i)
 {
     int r;
     for (r = 0; r < NREGS; r++) if (matchedto[r] < i) matchedto[r] = -1;
@@ -994,8 +1033,7 @@ flushtarget(i)
 */
 
 static int
-flushalias (q)
-PCODE *q;
+flushalias (struct pcode * q)
 {
     int i, pregmatch, flushtop;
 

@@ -22,9 +22,9 @@
 */
 
 #include "cc.h"
+#include "ccgen.h"
 
 extern void  outstr(char *);			/* CCOUT */
-extern void  flushcode(void);			/* CCCODE */
 extern void  codgolab(SYMBOL *);		/* CCCODE */
 extern SYMBOL *creatsym(char *);		/* CCSYM */
 
@@ -44,6 +44,7 @@ NODE *debug_node(NODE *s, int lineno, int stmt_number, int type);
 void  code_debugcall(NODE *n);
 void  dbginit(void);
 static char *otoa(int i);
+static char *dbg_append_dec(char *, int);
 
 /*
 ** How it works:
@@ -72,6 +73,34 @@ static char *otoa(int i);
 ** can later make debcsi positive.  Neither #pragma should change debcsi
 ** if its value is zero (default).
 */
+
+
+static char *
+dbg_append_dec(char * cp, int val)
+{
+    char buf[16];
+    int i;
+    unsigned int u;
+
+    if (val < 0)
+	{
+	*cp++ = '-';
+	u = (unsigned int)(-(val + 1)) + 1;
+	}
+    else
+	u = (unsigned int)val;
+
+    i = 0;
+    do {
+	buf[i++] = (char)('0' + (u % 10));
+	u /= 10;
+    } while (u != 0);
+
+    while (--i >= 0)
+	*cp++ = buf[i];
+    *cp = '\0';
+    return cp;
+}
 
 NODE *
 debug_node(NODE *n, int this_line, int stmt_number, int calltype)
@@ -134,13 +163,14 @@ debug_node(NODE *n, int this_line, int stmt_number, int calltype)
 		 */
 
 		last_line = this_line;
-		sprintf (label_str, "%%%d", this_line);
+		label_str[0] = '%';
+		dbg_append_dec(label_str + 1, this_line);
 		n = ndefl (N_LABEL, n);
 		n->Nxfsym = creatsym (label_str);
 		n->Nxfsym->Sflags |= SF_LABEL;
 		n->Nxfsym->Sclass = SC_LABEL;
 		n->Nxfsym->Skey = calltype;
-		sprintf (n->Nxfsym->Sname + 7, "%d", stmt_number);
+		dbg_append_dec(n->Nxfsym->Sname + 7, stmt_number);
 		}
 	    break;
 
@@ -245,19 +275,6 @@ code_debugcall(NODE *n)
 }
 
 void dbginit(void)
-
-/*
- * Functional Description: Initialize debug output and label buffer for new 
- *	source module.
- *
- * Formal Parameters:	none.
- *
- * Implicit Parameters:	none.
- *
- * Return Value:	none.
- *
- * Side Effects:	Zeroes a static variable.
- */
 {
     stmt_index = 0;
     buff[BUFFSIZE-1] = '\0';
@@ -275,3 +292,4 @@ static char *otoa(int i)
 	}
     return &buff[j+1];
 }
+

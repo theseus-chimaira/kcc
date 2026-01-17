@@ -44,21 +44,21 @@
 /* 6/91, Made the following macros safe: isascii(), toint(), toupper(),
  * tosixbit(), fromrad50(), and torad50().
  */
-#define isalnum(c)	((ctftab+1)[c]&(CTF_UA|CTF_LA|CTF_N))
-#define isalpha(c)	((ctftab+1)[c]&(CTF_UA|CTF_LA))
+#define isalnum(c)	((ctftab+1)[(int)(c)]&(CTF_UA|CTF_LA|CTF_N))
+#define isalpha(c)	((ctftab+1)[(int)(c)]&(CTF_UA|CTF_LA))
 #define isascii(i)	(!((unsigned)(i)&(~0177)))
-#define iscntrl(c)	((ctftab+1)[c]&(CTF_CTL))
-#define iscsym(c)	((ctftab+1)[c]&(CTF_UA|CTF_LA|CTF_N|CTF_US))
-#define iscsymf(c)	((ctftab+1)[c]&(CTF_UA|CTF_LA|CTF_US))
-#define isdigit(c)	((ctftab+1)[c]&(CTF_N))
-#define isgraph(c)	((ctftab+1)[c]&(CTF_PUN|CTF_N|CTF_UA|CTF_LA))
-#define islower(c)	((ctftab+1)[c]&(CTF_LA))
-#define isodigit(c)	((ctftab+1)[c]&(CTF_NO))
-#define isprint(c)	((ctftab+1)[c]&(CTF_PUN|CTF_N|CTF_UA|CTF_LA|CTF_SP))
-#define ispunct(c)	((ctftab+1)[c]&(CTF_PUN|CTF_SP))
-#define isspace(c)	((ctftab+1)[c]&(CTF_WSP))
-#define isupper(c)	((ctftab+1)[c]&(CTF_UA))
-#define isxdigit(c)	((ctftab+1)[c]&(CTF_N|CTF_X))
+#define iscntrl(c)	((ctftab+1)[(int)(c)]&(CTF_CTL))
+#define iscsym(c)	((ctftab+1)[(int)(c)]&(CTF_UA|CTF_LA|CTF_N|CTF_US))
+#define iscsymf(c)	((ctftab+1)[(int)(c)]&(CTF_UA|CTF_LA|CTF_US))
+#define isdigit(c)	((ctftab+1)[(int)(c)]&(CTF_N))
+#define isgraph(c)	((ctftab+1)[(int)(c)]&(CTF_PUN|CTF_N|CTF_UA|CTF_LA))
+#define islower(c)	((ctftab+1)[(int)(c)]&(CTF_LA))
+#define isodigit(c)	((ctftab+1)[(int)(c)]&(CTF_NO))
+#define isprint(c)	((ctftab+1)[(int)(c)]&(CTF_PUN|CTF_N|CTF_UA|CTF_LA|CTF_SP))
+#define ispunct(c)	((ctftab+1)[(int)(c)]&(CTF_PUN|CTF_SP))
+#define isspace(c)	((ctftab+1)[(int)(c)]&(CTF_WSP))
+#define isupper(c)	((ctftab+1)[(int)(c)]&(CTF_UA))
+#define isxdigit(c)	((ctftab+1)[(int)(c)]&(CTF_N|CTF_X))
 #define toascii(i)	((c)&0177)
 #define _tolower(c)	((c)+('a'-'A'))
 #define _toupper(c)	((c)+('A'-'a'))
@@ -74,13 +74,13 @@
  *		trying to parse "entry" statements.
  *	tosixbit - Convert an ASCII char to its SIXBIT equivalent (if any)
  */
-#define iscwsp(c)	((ctftab+1)[c]&(CTF_WSP))
-#define ischwsp(c)	((ctftab+1)[c]&(CTF_HSP))
-#define iscppwsp(c)	((ctftab+1)[c]&(CTF_SP|CTF_TAB))
-#define isceol(c)	((ctftab+1)[c]&(CTF_EOL))
-#define isvowel(c)	((ctftab+1)[c]&(CTF_VWL))
-#define setcsym(c)	((ctftab+1)[c] |= (CTF_US))	/* Special hack */
-#define clrcsym(c)	((ctftab+1)[c] &= ~(CTF_US))	/* Special hack */
+#define iscwsp(c)	((ctftab+1)[(int)(c)]&(CTF_WSP))
+#define ischwsp(c)	((ctftab+1)[(int)(c)]&(CTF_HSP))
+#define iscppwsp(c)	((ctftab+1)[(int)(c)]&(CTF_SP|CTF_TAB))
+#define isceol(c)	((ctftab+1)[(int)(c)]&(CTF_EOL))
+#define isvowel(c)	((ctftab+1)[(int)(c)]&(CTF_VWL))
+#define setcsym(c)	((ctftab+1)[(int)(c)] |= (CTF_US))	/* Special hack */
+#define clrcsym(c)	((ctftab+1)[(int)(c)] &= ~(CTF_US))	/* Special hack */
 #define toint(c)	(chr2in(c))
 #define toupper(c)	(chr2up(c))
 extern int chr2in(char c), chr2lo(char c), chr2up(char c);

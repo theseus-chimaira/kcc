@@ -18,13 +18,22 @@
 #define NULL 0
 #endif
 
-extern SYMBOL *newlabel();	/* get new internal label */
+extern char fnargregs;	/* GCC-ABI arg words shimmed for current fn */
+
+extern SYMBOL *newlabel(void);	/* get new internal label */
 
 GEXT INT stackoffset;		/* adjustments made to stack */
 
 GEXT SYMBOL
     *brklabel,			/* the break label */
     *looplabel;			/* label to go to on continue */
+
+/* Canonical loop induction-address context.  A matched for-loop may keep
+** &array[i] in one live VREG so expression generation can reuse it instead
+** of rebuilding base + index for every reference.
+*/
+GEXT SYMBOL *indvarsym, *indbasesym;
+GEXT VREG *indptrreg;
 
 GEXT NODE *litstrings;	/* String constant list (CCGEN, CCGEN1, CCGEN2) */
 GEXT NODE *litnodes;	/* Arbitrary N_DATA literals generated within funct */
@@ -48,9 +57,9 @@ GEXT NODE *litnodes;	/* Arbitrary N_DATA literals generated within funct */
 
 #define PCODE struct pcode
 PCODE {			/* pseudo op in peephole buffer */
-    char Ptype;			/* Addressing mode and flags */
+    unsigned char Ptype;		/* Addressing mode and flags */
     short Pop;			/* Opcode */
-    char Preg;			/* AC field of instruction */
+    unsigned char Preg;		/* AC field of instruction */
     short p_reg2;		/* index register or 2nd reg */
     SYMBOL *Pptr;		/* ident for memory address */
     INT p_off;			/* Usually offset to add to ident */
@@ -171,6 +180,7 @@ GEXT int maxcode, mincode;	/* top and bottom indices into codes */
 #define clrskip(p)   (void) ((p)->Ptype &=~ PTF_SKIPPED) /* say it doesn't */
 
 #if 0	/* Addressing mode documentation */
+/*
 
 	All PDP-10 instructions consist of an opcode, an AC, and an
 effective address E which is made of an indirect bit, an index register,
@@ -243,6 +253,7 @@ value; Pdouble1 and Pdouble2 are used to access the two words
 (as integer bit patterns) which constitute this value.  The full
 value is always available as Pdouble.
 
+*/
 #endif
 
 /* Structure of Pop field in a pseudo code instruction
@@ -347,6 +358,32 @@ enum rmod {
 **    but it strips them off so the caller does not need to do so.
 */
 #define rchange(op) (popprc[(op)&POF_OPCODE])	/* Get PRC_ value for op */
+
+/* Pseudo-code emission interface, implemented by CCCODE.  Keep this in the
+** subsystem header so code-generator modules do not maintain private copies.
+*/
+extern PCODE *before(PCODE *), *after(PCODE *);
+extern void fixprev(void), flushcode(void), codefnreset(void),
+    dropinstr(PCODE *), swappseudo(PCODE *, PCODE *);
+extern int codcreg(VREG *, VREG *), immedop(int);
+extern void code0(int, VREG *, VREG *), coderetmove(VREG *);
+extern void codek0(int, VREG *, VREG *), code00(int, int, int);
+extern void code1(int, VREG *, INT), code3(int, VREG *, SYMBOL *);
+extern void code4(int, VREG *, VREG *), code40(int, int, int, INT);
+extern void code4s(int, VREG *, VREG *, int, INT);
+extern void code5(int, VREG *), code6(int, VREG *, SYMBOL *);
+extern void code8(int, VREG *, INT), code9(int, VREG *, double, int);
+extern void code10(int, VREG *, SYMBOL *, INT, INT);
+extern void code12(int, VREG *, INT), code13(int, VREG *, INT);
+extern void code14(int, VREG *, int), code15(int, SYMBOL *, INT, VREG *);
+extern void code16(int, VREG *, SYMBOL *, VREG *), code17(INT);
+extern void codebp(int, int, INT, int, SYMBOL *, INT);
+extern void codek4(int, VREG *, VREG *);
+extern void codemdx(int, int, SYMBOL *, INT, int);
+extern void codestr(char *, int), codgolab(SYMBOL *), codlabel(SYMBOL *);
+extern void codr1(int, int, INT), codr10(int, int, SYMBOL *, INT, INT);
+extern void code4m(int, VREG *, VREG *, char *), code5m(int, VREG *, char *);
+extern PCODE *chkmref(PCODE *, PCODE *, INT *);
 
 #define outc(c)	 putc((c), out)
 #define outtab() putc('\t', out)

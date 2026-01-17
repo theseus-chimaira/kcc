@@ -26,7 +26,7 @@ union n_v {		/* Variable can be one of: */
 NODE {
     TYPE *Ntype;		/* C type of node */
     int Nflag;			/* Flags - NF_ bits, goto breaks if short */
-    char Nop;			/* Node opcode - a N_ or Q_ value */
+    unsigned char Nop;		/* Node opcode - a N_ or Q_ value */
 #if SYS_CSI
     char Nreg;			/* Count of regs 0 to R_PRESERVE_COUNT */
     short sfline;		/* KAR-1/92, storage for fline for NPD */
@@ -39,7 +39,7 @@ NODE {
 	union n_v n_v0;		/* Ordinary var 0 */
 	union n_v n_v1;		/* Ordinary var 1 */
       } n_v01;
-      long n_long;		/* or integer/pointer constant value */
+      INT n_long;		/* or integer/pointer constant value */
       double n_double;		/* or double (float) constant value (2 wds) */
       struct {			/* or string constant (2 wds) */
 	char *n_sptr;		/*	(pointer to string in char pool) */
@@ -60,6 +60,7 @@ NODE {
 #define Nleft   n_var1.n_node	/* Left subtree */
 #define Nright  n_var2.n_node	/* Right subtree */
 #define Nendlab n_var3.n_sym	/* Label to be generated after node */
+#define Nizmem  n_var0.n_sym	/* Selected union member for N_IZLIST */
 	/* Note: Nendlab is never set in a parse-tree node returned
 	** from the parser.  It is only used during the code generation
 	** phase (CCGEN etc).
@@ -120,7 +121,7 @@ NODE {
 #define Nid n_var0.n_sym	/* Symbol for identifier node */
 
 /* N_ICONST - Niconst
-**	Niconst contains the (long) value for an integer constant node.
+**	Niconst contains the target-word value for an integer constant node.
 */
 #define Niconst n_vu.n_long	/* Integer constant value */
 
@@ -154,6 +155,8 @@ NODE {
 /* #define NF_SIDEFF	0100 */	/* This expr has some side effect(s) */
 #define NF_DISCARD	0200	/* This expr's value will be discarded */
 #define NF_USERCAST	0400	/* This N_CAST was explicitly given by user */
+#define NF_WIDE		01000	/* N_ICONST uses n_var1.n_int as high word */
+#define NF_QUERYNORMAL	02000	/* Q_QUERY may merge outside ABI return ACs */
 #if SYS_CSI /* KAR-1/91, Added NF_ flag for NPD;only used in */
 	    /*		 N_PTR & Q_MEMBER nodes */
 #define NF_USENPD  020000000000 /* Null pointer detection flag */

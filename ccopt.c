@@ -25,22 +25,13 @@
 
 /* Imported functions */
 extern int adjboffset(INT, INT *, int);			/* from CCOUT */
-extern PCODE *before(PCODE *), *after(PCODE *);		/* CCCODE */
-extern void fixprev(void);				/* CCCODE */
-extern void dropinstr(PCODE *);
-extern void code00(int, int, int), codr1(int, int, INT),
-	codebp(int, int, INT, int, SYMBOL *, INT),
-	codr10(int, int, SYMBOL *, INT, INT);
-extern PCODE *chkmref(PCODE *, PCODE *, INT *);		/* CCCODE */
-extern int rincode(PCODE *, int), rinreg(PCODE *, int),
-	rinaddr(PCODE *, int),	rrchg(PCODE *, int);	/* CCCREG */
+extern int changereg(int, int, PCODE *);                 /* CCCREG */
 extern int sameaddr(PCODE *, PCODE *, INT), alias(PCODE *, PCODE *, INT);
 extern void foldidx(PCODE *), swappseudo(PCODE *, PCODE *);
 extern int  foldrcse(int, PCODE *);
 extern void foldmove(PCODE *), inskip(PCODE *);
 extern int dropsout(PCODE *), immedop(int), pushneg(int, PCODE *);
-extern int rruse(PCODE *, int), rfree (int);
-extern int rbinreg (PCODE *), rbinaddr (PCODE *), rbincode (PCODE *); /* CCCREG */
+extern int rfree (int);
 
 /* Exported functions */
 PCODE *findrset(PCODE *, int);	/* CCCODE (4 usage), CCOPT (5) */
@@ -84,8 +75,7 @@ static void foldinc();
 */
 
 int
-localbyte(p, np)
-PCODE *p, *np;
+localbyte(struct pcode * p, struct pcode * np)
 {
     int op = np->Pop;
     int r = np->Preg;
@@ -173,8 +163,7 @@ PCODE *p, *np;
 ** using indirection.
 */
 void
-foldbp(p)
-PCODE *p;
+foldbp(struct pcode * p)
 {
     PCODE *q;
     INT soff;
@@ -239,8 +228,7 @@ PCODE *p;
 **	just invokes cse to combine with a previous IBP if any.
 */
 void
-foldbyte(p)
-PCODE *p;
+foldbyte(struct pcode * p)
 {
     int op;
 
@@ -259,6 +247,7 @@ PCODE *p;
 		**	LDB R,[222200,,x] =>	HLRZ R,x
 		**	DPB R,[222200,,x] =>	HLRM R,x
 		*/
+			/* FALLTHROUGH */
 			case 02200:	/* Right half? */
 			    op = (op == P_LDB) ? P_HRRZ : P_HRRM;
 			    break;
@@ -266,6 +255,7 @@ PCODE *p;
 			    op = (op == P_LDB) ? P_HLRZ : P_HRLM;
 			    break;
 			}
+		/* FALLTHROUGH */
 		case PTA_PCONST:
 		    if (p->Pbsize == TGSIZ_HALFWD)
 			{
@@ -301,8 +291,7 @@ PCODE *p;
 */
 
 void
-foldadjbp(p)
-PCODE *p;
+foldadjbp(struct pcode * p)
 {
     PCODE *q, *n;
     int a, r, s;
@@ -338,6 +327,7 @@ PCODE *p;
 	{
 	case P_SETZ:
 	    n->Pop = P_NOP;
+	/* FALLTHROUGH */
 	case P_SETZ+POF_BOTH:
 	    n->Preg = R_SCRREG;		/* take out reg if not whole op */
 	    p->Pop = P_MOVE;		/* change null ADJBP into MOVE */
@@ -351,6 +341,7 @@ PCODE *p;
 	case P_ADD:
 	    if (unsetz (n) && n->Ptype == PTV_IMMED)
 		break;
+	/* FALLTHROUGH */
 	default:
 	    foldmove(p);
 	    return;
@@ -445,9 +436,9 @@ PCODE *p;
 	return;
 	}
 
-#if 0
-    /* That lost.  Last possibility to check for is simply adding 1 to the
-    ** pointer, which can be done with a simple IBP.
+    /* A one-byte positive adjustment is exactly MOVE + IBP.  Keep this
+    ** out of the general ADJBP path, which is especially expensive on
+    ** PDP-6/KA10 targets where ADJBP must be simulated.
     */
     if (n->Pop == P_MOVE && n->Pvalue == 1)
 	{
@@ -455,13 +446,21 @@ PCODE *p;
 	p->Pop = P_MOVE;		/* into P_MOVE R,x + P_IBP R */
 	r = p->Preg;
 	foldmove(p);			/* optimize the P_MOVE */
+	/* If the MOVE survived CSE folding, try the opposite safe rewrite:
+	** retarget the instructions which produced S so they produce R directly.
+	** changereg() proves that the rewrite can be made through the peephole
+	** window without clobbering another live value.  Only after that proof do
+	** we remove MOVE R,S; the destructive IBP still updates its result AC R.
+	*/
+	if (p->Pop == P_MOVE && p->Ptype == PTA_REGIS
+	  && p->Preg == r && !prevskips(p)
+	  && changereg(r, p->Pr2, before(p)))
+	    dropinstr(p);
 
-	/* make P_IBP without optimization */
-	p = newcode(PTA_REGIS, P_IBP, 0);
-	p->Pr2 = r;
+	/* Increment the byte pointer held in the result AC. */
+	code00(P_IBP, 0, r);
 	return;
 	}
-#endif
 
     foldplus(n);	/* all optimization failed, fix up the # */
     foldmove(p);	/* and try to improve the ADJBP memory reference */
@@ -473,11 +472,23 @@ PCODE *p;
 **	do LDBs or DPBs.
 */
 void
-optlsh(p)
-PCODE *p;
+optlsh(struct pcode * p)
 {
     PCODE *q;
     unsigned long mask;
+
+    /* A logical right shift by one halfword after a MOVE is exactly HLRZ.
+    ** Keep this local: the MOVE must be the immediately preceding setter,
+    ** so no register or memory lifetime reasoning is required.
+    */
+    if (p->Pop == P_LSH && p->Ptype == PTA_RCONST && p->Pvalue == -022
+      && (q = before(p)) != NULL && !prevskips(q)
+      && q->Pop == P_MOVE && q->Preg == p->Preg) {
+        q->Pop = P_HLRZ;
+        dropinstr(p);
+        fixprev();
+        return;
+    }
 
     if (p->Pop == P_LSH		/* Must be a LSH */
       /* && !prevskips(p) */	/* that isn't skipped */
@@ -522,8 +533,7 @@ PCODE *p;
 */
 
 static void
-foldinc(p)
-PCODE *p;
+foldinc(struct pcode * p)
 {
     INT i;
     int usedreg;
@@ -656,6 +666,7 @@ PCODE *p;
 		    return;
 		--stkoff;
 	    /* Fall thru since op changes mem */
+	    /* FALLTHROUGH */
 	    case P_MOVEM:
 	    case P_DPB:
 	    case P_ILDB:
@@ -707,15 +718,25 @@ PCODE *p;
 */
 
 void
-foldplus(p)
-PCODE *p;
+foldplus(struct pcode * p)
 {
     PCODE *q, *b;
     int r;
 
+    /* Preserved registers hold C variables, not disposable temporaries.
+    ** Never propagate an arithmetic operation backward into one.
+    */
+    if (p->Ptype == PTA_REGIS && Register_Preserve(p->Pr2))
+	return;
+    if ((p->Pop == P_ADD || p->Pop == P_SUB) && p->Ptype == PTV_IMMED) {
+	q = before(p);
+	if (q != NULL && q->Pop == P_MOVE && q->Ptype == PTA_REGIS
+	  && q->Preg == p->Preg
+	  && (Register_Preserve(q->Pr2)
+	      || (fnargkeepmask & (1 << q->Pr2))))
+	    return;
+    }
 #if SYS_CSI		/*  Reg linkage */
-    if (Register_Preserve (p->Pr2))
-	return;			/* avoid faulty optimizations */
     if (p->Pop == P_SUB)	/* Reg linkage optimization */
 	if (p->Ptype == PTV_IMMED)
 	    {
@@ -734,6 +755,7 @@ PCODE *p;
 		    q->Pop = P_ADD;		/* make P_SUBI R,i into P_ADDI R,-i */
 		    q->Pvalue = - q->Pvalue;	/* so it can be folded later */
 		    }				/* in any case treat like P_ADD here */
+	    /* FALLTHROUGH */
 	    case P_ADD:
 	/*
 	** fold:  P_ADD S,x
@@ -761,6 +783,8 @@ PCODE *p;
 	    ** into:  P_ADD  S,x
 	    **        P_MOVE R,S
 	    */
+		    if (Register_Preserve(q->Pr2))
+			return;
 		    p->Preg = (char) (q->Pr2);		/* fix up register again */	// FW KCC-NT
 		    swappseudo(p,q);		/* switch them around again */
 		    p = q;			/* forget the move, hack the add */
@@ -811,6 +835,7 @@ PCODE *p;
 		    if (!unsetz (q))
 			break;	/* turn into P_MOVE or P_ADD */
 
+		/* FALLTHROUGH */
 		case P_MOVE:
 		case P_ADD:
 		    switch (p->Ptype)
@@ -851,10 +876,15 @@ PCODE *p;
 					  && q->Preg == q->Pindex)
 					    return;
 
+
+					if (Register_Preserve(q->Pr2)
+					  || (fnargkeepmask & (1 << q->Pr2)))
+					    return;
 					swappseudo(p, q); /* swap the ops */
 					r = q->Preg = (char) (p->Pr2); /* fix reg in P_ADDI */ // FW KCC-NT
 					p = q;	/* move back over it */
 					}
+				/* FALLTHROUGH */
 				default:
 				    if (q->Pop == P_ADD)
 					continue;
@@ -868,6 +898,7 @@ PCODE *p;
 				    if ((q->Pptr != NULL && p->Pptr != NULL) ||
 					(q->Pindex != 0 && p->Pindex != 0))
 					continue;
+				/* FALLTHROUGH */
 				case PTV_IMMED:
 
 		    /*
@@ -903,6 +934,9 @@ PCODE *p;
 			** into:  P_ADDI  S,x
 			**        P_MOVE  R,S
 			*/
+					if (Register_Preserve(q->Pr2)
+					  || (fnargkeepmask & (1 << q->Pr2)))
+					    return;
 					swappseudo(p, q); /* swap the ops */
 					r = q->Preg = (char) (p->Pr2); /* fix reg in P_ADDI */ // FW KCC-NT
 					p = q;	/* move back over it */
@@ -962,7 +996,7 @@ PCODE *p;
 		    ** into:  P_ADD   S,T
 		    **	      P_MOVE  R,S
 		    */
-				if (q->Pr2 == R_SP)
+			    if (q->Pr2 == R_SP || Register_Preserve(q->Pr2))
 				    return; /* don't break stack */
 				p->Preg = (char) (q->Pr2);	/* set register */ // FW KCC-NT
 				}
@@ -989,12 +1023,14 @@ PCODE *p;
 			    q = p;			/* start after the swap */
 			    continue;		/* try loop again */
 
+
 			default:
 			    switch (q->Ptype)
 				{
 				case PTV_IINDEXED:
 				    if (q->Pindex != 0)
 					continue; /* bad swap */
+				/* FALLTHROUGH */
 				case PTV_IMMED:		/* swap order of immed and */
 				    p->Pop = q->Pop;	/* memory P_MOVE/P_ADD so that */
 				    q->Pop = P_ADD;	/* P_ADDI can be optimized */
@@ -1011,11 +1047,15 @@ PCODE *p;
 			** into:  P_ADDI  S,x
 			**        P_MOVE  R,S
 			*/
+					if (Register_Preserve(q->Pr2)
+					  || (fnargkeepmask & (1 << q->Pr2)))
+					    return;
 					swappseudo(p, q); /* swap the ops */
 					r = q->Preg = (char) (p->Pr2); /* fix reg in P_ADDI */ // FW KCC-NT
 					p = q;	/* move back over it */
 					}			/* end PTA_REGIS: if (q->Pop==P_MOVE) */
 
+				/* FALLTHROUGH */
 				default:
 				    if (q->Pop == P_ADD)
 					continue;
@@ -1166,9 +1206,7 @@ PCODE *p;
 ** checked for this, however.
 */
 PCODE *
-findrset(p, reg)
-PCODE *p;		/* Start looking here */
-int reg;		/* Register to look for */
+findrset(struct pcode * p, int reg)
 {
 #if SYS_CSI			/* Reg linkage */
     if (Register_Preserve(reg))
@@ -1210,8 +1248,7 @@ int reg;		/* Register to look for */
 ** flush a preceding instruction.
 */
 int
-findconst(p)
-PCODE *p;
+findconst(struct pcode * p)
 {
     PCODE *q;
     int op, rused;
@@ -1228,6 +1265,7 @@ PCODE *p;
 		if ((q->Ptype & PTF_ADRMODE) != PTA_RCONST)
 		    break;			/* must be immediate */
 
+	    /* FALLTHROUGH */
 	    case P_SETZ:			/* Zero makers */
 	    case P_JUMP+POS_SKPN:
 	    case P_AOJ+POS_SKPN:
@@ -1251,6 +1289,7 @@ PCODE *p;
 		if (q->Pop == P_MOVE && rused == 0)	/* If simple set, and safe, */
 		    q->Pop = P_NOP;		/* Simply flush the setting instr. */
 
+
 		return 1;			/* made const, win! */
 	    }
 
@@ -1273,6 +1312,7 @@ PCODE *p;
 	    case PTA_REGIS:
 		if (p->Pr2 == q->Pr2)
 		    rused++;	/* Drop thru */
+	    /* FALLTHROUGH */
 	    default:
 		if (p->Pr2 == q->Preg)
 		    rused++;
@@ -1291,7 +1331,7 @@ PCODE *p;
 */
 
 void
-foldboth()
+foldboth(void)
 {
     PCODE *p, *b, *q;
     int badidx;
@@ -1366,6 +1406,7 @@ foldboth()
 			    case P_MOVN:
 				if (!unsetz (q))
 				    break;	/* turn P_SETZ into P_MOVE */
+			    /* FALLTHROUGH */
 			    case P_MOVE:
 
 	    /*
@@ -1425,12 +1466,9 @@ foldboth()
 					/* refers to common register ('R'). */
 #endif
 	&& rfree(b->Pr2)		/* Ensure OK to clobber S */
-	&& snglop(previous->Pop))	/* Single-word op */
-/*
-	&& p->Pop != P_IDIV && p->Pop != P_UIDIV) {
-*/
-/* BUG!  This call is known to swap an IDIVI and zap its reg!
-*/
+	&& snglop(previous->Pop)	/* Single-word op */
+	&& ((previous->Pop & POF_OPCODE) != P_IDIV)
+	&& ((previous->Pop & POF_OPCODE) != P_UIDIV))
 	/*
 	** fold:  MOVE  R,S
 	**        OP    R,x
@@ -1537,6 +1575,7 @@ foldboth()
 		break;
 		}
 
+	/* FALLTHROUGH */
 	case P_FADR:
 	case P_FSBR:
 	case P_ADD:
@@ -1581,6 +1620,7 @@ foldboth()
 		}
 	/* If didn't have preceding MOVE, check following optimization */
 
+	/* FALLTHROUGH */
 	case P_MOVE:
 	case P_MOVN:
 	case P_MOVM:
@@ -1685,9 +1725,8 @@ break;
 #endif
 
 static PCODE *
-findmove(b, p)
-PCODE *b, *p;
-    {
+findmove(struct pcode * b, struct pcode * p)
+{
     PCODE *q = b;
 
     /* Scan back from potentially foldable op (B) to set Q for some
@@ -1732,9 +1771,8 @@ return NULL;
 
 
 static int
-snglop(op)
-int op;
-    {
+snglop(int op)
+{
     switch (rchange(op))
 {
     case PRC_RSAME:
@@ -1781,9 +1819,8 @@ int op;
 */
 
 INT
-foldstack(n)
-INT n;
-    {
+foldstack(INT n)
+{
     PCODE *p = previous;		/* Start from end of buffer */
     INT maxfold = (stackrefs ? 0 : 1000000L);	/* limit on pos ADJSP fold */
 
@@ -1904,6 +1941,7 @@ INT n;
 	    break;
 	    }
 	/* Can't fold, drop thru to normal check for stack ref */
+    /* FALLTHROUGH */
     case P_MOVEM:
 
     case P_ADD:
@@ -1988,13 +2026,17 @@ return n;
 */
 
 static INT
-makepop(p)
-PCODE *p;
-    {
+makepop(struct pcode * p)
+{
     PCODE *q, *b;
 
 
-    /* First make the pop */
+    /* First make the pop.  Never make POP P,P: PDP-6 leaves P as the
+    ** decremented stack pointer, while KA10 loads P from memory.
+    */
+    if (p->Preg == R_SP)
+	return 0;
+
     p->Pop = P_POP;
     p->Ptype = PTA_REGIS;
     p->Pr2 = p->Preg;	/* Copy R into 2nd reg */
@@ -2051,10 +2093,8 @@ return adjstack(1, p) + 1;
 */
 
 static INT
-adjstack(n, p)
-INT n;
-PCODE *p;
-    {
+adjstack(INT n, struct pcode * p)
+{
     PCODE *q;
     INT c = 0;				/* how much we changed it */
 
@@ -2096,6 +2136,7 @@ PCODE *p;
 				break;
 			    }			/* end case PTA_REGIS: switch(q->Pop) */
 
+		/* FALLTHROUGH */
 		case PTA_RCONST:	/* PUSH P,[0/-1] becomes SETZB/OB 16,-n(P) */
 		    if (q->Pop == P_PUSH)
 			{
@@ -2129,6 +2170,7 @@ return c;
 ** after the label is (or is not) emitted.
 */
 #if 0	/* COMMENT */
+/*
 	The algorithm used here is a little non-obvious and needs some
 words of explanation.
 	Basically, we are looking backwards from our current location
@@ -2182,12 +2224,12 @@ between the ADJSP and the label.  For the time being, we try to do
     hairy checking, assuming that only three kinds of instructions can possibly
     generate such addresses: MOVEI, MOVE [bp], and ADJBP [bp].
 
+*/
 #endif
 
     INT
-    hackstack (lab)
-    SYMBOL *lab;
-    {
+    hackstack (struct symbol * lab)
+{
     INT spos;			/* Current stack offset */
     INT ceiling = (-1);		/* Largest "affected" stack offset ref */
     INT nrefs;			/* # of such stack references seen */
@@ -2198,7 +2240,7 @@ between the ADJSP and the label.  For the time being, we try to do
     if (stackrefs)
 	return 0;		/* Too risky */
 #endif
-    if (isskip(previous->Pop))
+    if (previous == NULL || isskip(previous->Pop))
 	return 0;
 
     spos = stackoffset;			/* Set current stack offset */
@@ -2229,6 +2271,7 @@ between the ADJSP and the label.  For the time being, we try to do
 	** through.
 	*/
 
+    /* FALLTHROUGH */
     case P_POPJ:		/* Handle POPJ (also fall thru from above) */
 	spos = 0;		/* stack can't exist here */
 	lastadj = NULL;		/* so don't remember ADJSP after */
@@ -2271,6 +2314,7 @@ between the ADJSP and the label.  For the time being, we try to do
 	** the normal address ref checking.
 	*/
 
+    /* FALLTHROUGH */
     case P_LDB:
     case P_ADJBP:
     case P_PUSHJ:
@@ -2463,8 +2507,8 @@ return 0;			/* broke out means no P_ADJSP in block */
 #define MAXSTACK 100			/* largest expected stack var */
 
 void
-killstack()
-    {
+killstack(void)
+{
     PCODE *p, *q;
     int stkused[MAXSTACK + 1], i, i2, op, r, s;
 
@@ -2539,6 +2583,7 @@ killstack()
 	    case PTA_MINDEXED:
 		if (p->Pindex == R_SP)
 		    break;
+	    /* FALLTHROUGH */
 	    default:
 		p = before(p);		/* not stack ref, ignore */
 		continue;
@@ -2593,6 +2638,7 @@ killstack()
 		case P_SETO:
 		case P_SETZ:
 		    p->Ptype = PTA_ONEREG;		/* ignore all memory in op */
+		/* FALLTHROUGH */
 		default:
 		    if ((op = (p->Pop &~ POF_BOTH)) == p->Pop)
 			break;			/* nothing to do */
@@ -2662,9 +2708,8 @@ killstack()
 */
 
 int
-unsetz(p)
-PCODE *p;
-    {
+unsetz(struct pcode * p)
+{
     switch (p->Pop)
 {
     case P_MOVN:
@@ -2673,6 +2718,7 @@ PCODE *p;
 	    return 0;
 	p->Pvalue = - p->Pvalue;
 	p->Pop = (p->Pop == P_MOVN? P_MOVE : P_ADD);
+    /* FALLTHROUGH */
     case P_MOVE:
     case P_ADD:
 	return 1;

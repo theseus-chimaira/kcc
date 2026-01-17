@@ -36,7 +36,9 @@
 ** as the Assembler Header file.
 */
 #ifndef SWI_HFPATH		/* Define path for standard header dir */
-#if SYS_T20
+#if HOST_UNIX
+#define SWI_HFPATH "./include/", "/usr/local/lib/kcc/include/"
+#elif SYS_T20
 #define SWI_HFPATH "C:"
 #elif __MSDOS__
 #define SWI_HFPATH "\\kcc\\include\\", "\\tc\\include\\"
@@ -56,7 +58,9 @@
 #endif   /*   defined   */
 
 #ifndef SWI_HFSYPATH		/* Default path for <sys/ > files */
-#if SYS_10X
+#if HOST_UNIX
+#define SWI_HFSYPATH "./include/sys/", "/usr/local/lib/kcc/include/sys/"
+#elif SYS_10X
 #define SWI_HFSYPATH "<CSYS>"
 #elif __MSDOS__
 #define SWI_HFSYPATH "\\kcc\\include\\sys\\", "\\tc\\include\\sys\\"
@@ -75,7 +79,9 @@
 **	Same principle as for the header file location.
 */
 #ifndef SWI_LIBPATH		/* Define library file prefix */
-#if SYS_T20
+#if HOST_UNIX
+#define SWI_LIBPATH "lib+.REL"
+#elif SYS_T20
 #define SWI_LIBPATH "C:LIB+.REL"
 #elif SYS_10X
 #define SWI_LIBPATH "<C>LIB+.REL"

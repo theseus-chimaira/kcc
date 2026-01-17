@@ -163,10 +163,7 @@ SYMBOL **deflab;
 */
 
 static INT
-countcases (n, caselab, deflab, ncase, ismain)
-NODE *n;
-struct lablist caselab[];
-SYMBOL **deflab;
+countcases (struct node * n, struct lablist * caselab, struct symbol ** deflab, int ncase, int ismain)
 {
     INT val;
     SYMBOL **thelab;
@@ -183,6 +180,7 @@ SYMBOL **deflab;
 	case Q_IF:			/* yes, people really put cases */
 	    n = n->Nright;		/* inside these things... */
 	    ncase = countcases(n->Nright, caselab, deflab, ncase, ismain);
+	/* FALLTHROUGH */
 	case N_LABEL:
 	    if ((n = n->Nleft) == NULL) return ncase; /* get body */
 	    continue;
@@ -503,8 +501,7 @@ casejump(VREG *r, struct lablist *caselab, INT ncase,
 */
 
 static int
-labcomp(l1, l2)
-const void *l1, *l2;
+labcomp(const void * l1, const void * l2)
 {
     return ((struct lablist *) l1)->caseval - ((struct lablist *) l2)->caseval;
 }

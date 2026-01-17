@@ -11,7 +11,9 @@
 #define _DEF_CHAR8      0       /* define this to default char to char8 */
 
 #include <limits.h>             /* for INT_MAX */
+#include <stdlib.h>             /* for realloc, free */
 #include "cc.h"
+#include "cclex.h"
 int strcmp (const char *, const char *);
 
 extern SYMBOL *lsymhead;        /* CCSYM - var indicating loc sym blk */
@@ -40,10 +42,12 @@ extern void freesym(SYMBOL *);  /* CCSYM */
 extern NODE *evalexpr(NODE *);          /* CCEVAL */
 extern NODE *funstmt(void), *asgnexpr(void);    /* CCSTMT */
 extern NODE *exprconst(void);           /* CCSTMT */
-extern long pconst(void);                       /* CCSTMT */
+extern INT pconst(void);                       /* CCSTMT */
 extern NODE *convasgn(TYPE *, NODE *);          /* CCTYPE */
+extern NODE *convarrfn(NODE *);                    /* CCTYPE */
 extern TYPE *convfparam(TYPE *);                /* CCTYPE */
 extern int nextoken(void);                      /* CCLEX */
+extern long lex_take_gnuattrs(void);              /* CCLEX */
 extern int expect (int);                        /* CCERR */
 
 /* Exported functions */
@@ -65,12 +69,14 @@ struct protostate               /* State block for prototype parse */
 /* Internal functions */
 static NODE *funcdef(SYMBOL *, SYMBOL *, SYMBOL *),
             *datadef(SYMBOL *, SYMBOL *, SYMBOL *);
-static void pdecllist(void), sdeclenum(SYMBOL *),
+static void pdecllist(void), sdeclenum(SYMBOL *), packstruct(TYPE *),
             decllist(SYMBOL *,SYMBOL *,SYMBOL *,SYMBOL *,NODE **,NODE **);
 static INT  sdeclstruct(SYMBOL *, int), fldsize(int, INT *, int *),
             pbase(SYMBOL *);
 static TYPE *qualarray (TYPE *type, int flags, int *oldflags);
-static int  isdecl(void);
+static void staticassertdecl(void);
+static TYPE *typeofspec(void);
+int  isdecl(void);
 static TYPE *fundecl(SYMBOL *, int),
             *paramlist(struct protostate
 *),
@@ -82,18 +88,47 @@ static void plcmpare(TYPE *, TYPE *, int),
 static NODE *dodecl(int, SYMBOL *, SYMBOL *);
 static SYMBOL *declarator(SYMBOL *);
 static TYPE *addpp(TYPE *, TYPE *), *pushsztype(int, INT, INT, TYPE *),
-            *tagspec(int);
+            *fnmaybitptrtype(TYPE *), *tagspec(int);
+static int fnmaybitptrtarget(TYPE *);
 static SYMBOL *sdeclaration(SYMBOL *, SYMBOL *, INT *, int *, int *);
-static NODE *pizer(SYMBOL *);
+NODE *pizer(SYMBOL *);
 static void errtwotyp(SYMBOL *, SYMBOL *), errdupsym(SYMBOL *);
 static TYPE *mkprox(SYMBOL *);
 static int nsetjmps(void);
-static NODE *piztype(TYPE *, int), *chkarith(TYPE *, NODE *, int, int),
+static NODE *piztype(TYPE *, int), *chkarith(TYPE *, NODE *, int),
             *pizstruct(TYPE *, int, int), *pizarray(TYPE *, int),
         *pexizer(int), *pizlist(void);
 static void pizflush(int);
 static int isauto(SYMBOL *), nisconst(NODE *);
+static char *declputd(char *, int);
 static void Set_Register(SYMBOL *, int, int);
+
+static char *
+declputd(char * cp, int val)
+{
+    char buf[20];
+    int i;
+    unsigned int u;
+
+    if (val < 0)
+        {
+        *cp++ = '-';
+        u = (unsigned int)(-(val + 1)) + 1;
+        }
+    else
+        u = (unsigned int)val;
+
+    i = 0;
+    do {
+        buf[i++] = (char)('0' + (u % 10));
+        u /= 10;
+    } while (u != 0);
+
+    while (--i >= 0)
+        *cp++ = buf[i];
+    *cp = '\0';
+    return cp;
+}
 
 
 /* Internal data */
@@ -176,7 +211,7 @@ initpar(void)
 
 NODE*
 extdef (void)
-    {
+{
     SYMBOL*     s;
     SYMBOL      tempsym;
     SYMBOL      base;
@@ -189,6 +224,12 @@ extdef (void)
     curfnnew = fline;           /* Remember line in file where funct started*/
     _reg_count = 0;             /* Count of "preserved" registers used */
                                 /* for register variables */
+
+    if ((token == T_STATIC_ASSERT || token == T_STATIC_ASSERT2))
+        {
+        staticassertdecl();
+        return NULL;
+        }
 
     pbase(&base);               /* Parse base (storage class & type) */
 
@@ -327,6 +368,1374 @@ tntdef(void)
 ** symbols ARE in the table, chained as local symbols.
 */
 
+/* PROMOTE_ABI_PARAMS - Keep a simple register-only parameter list off stack.
+**
+** KCC's expression allocator uses AC1..AC7, so incoming ABI arguments cannot
+** remain indefinitely in AC1..AC4.  For functions whose complete named
+** parameter list consists of at most four one-word arguments, move those
+** arguments directly into KCC's existing call-preserved register-variable
+** ACs.  This avoids constructing the historical private parameter image.
+**
+** Address-taken parameters remain stack based.  Track that property while
+** parsing the address operator instead of walking KCC's non-uniform parse
+** tree after the fact.  Addresses of unrelated local variables do not need
+** to disable register-resident parameters.
+*/
+/* FN_ABI_LEAF - Conservatively recognize a call-free function body.
+**
+** This is intentionally bounded: no CFG and no recursive walk.  Unknown
+** nodes, inline assembly, calls, an overfull work stack, or more than 4096
+** visited nodes all disable the optimization.
+*/
+static int
+fn_abi_leaf(NODE *root, int *has_query)
+{
+    NODE *work[128], *n;
+    NODE *left, *right;
+    int sp, visits, op;
+
+    if (has_query)
+        *has_query = 0;
+    if (root == NULL)
+        return 1;
+    sp = 0;
+    visits = 0;
+    work[sp++] = root;
+    while (sp > 0) {
+        n = work[--sp];
+        if (n == NULL)
+            continue;
+        if (++visits > 4096)
+            return 0;
+        op = n->Nop;
+        left = right = NULL;
+
+        if (op == N_FNCALL || op == Q_ASM || op == Q_MUUO)
+            return 0;
+
+        switch (op) {
+        /* Terminals and statements without expression children. */
+        case Q_IDENT:
+        case N_ICONST:
+        case N_PCONST:
+        case N_ECONST:
+        case N_FCONST:
+        case N_SCONST:
+        case N_VCONST:
+        case Q_BREAK:
+        case Q_CONTINUE:
+            break;
+
+        /* Statement nodes with one specifically defined child. */
+        case Q_RETURN:
+            right = n->Nright;
+            break;
+        case Q_GOTO:
+        case Q_CASE:
+        case Q_DEFAULT:
+        case N_LABEL:
+            left = n->Nleft;
+            break;
+
+        /* Unary expression nodes. */
+        case N_CAST:
+        case N_ADDR:
+        case N_PTR:
+        case N_NEG:
+        case N_PREINC:
+        case N_PREDEC:
+        case N_POSTINC:
+        case N_POSTDEC:
+        case Q_COMPL:
+        case Q_NOT:
+            left = n->Nleft;
+            break;
+
+        /* Nodes whose normal representation has two node children. */
+        case N_NODE:
+        case N_STATEMENT:
+        case N_EXPRLIST:
+        case Q_IF:
+        case Q_FOR:
+        case Q_DO:
+        case Q_WHILE:
+        case Q_SWITCH:
+        case Q_DOT:
+        case Q_MEMBER:
+        case Q_PLUS:
+        case Q_MINUS:
+        case Q_MPLY:
+        case Q_DIV:
+        case Q_MOD:
+        case Q_LSHFT:
+        case Q_RSHFT:
+        case Q_LESS:
+        case Q_GREAT:
+        case Q_LEQ:
+        case Q_GEQ:
+        case Q_EQUAL:
+        case Q_NEQ:
+        case Q_ANDT:
+        case Q_XORT:
+        case Q_OR:
+        case Q_LAND:
+        case Q_LOR:
+            left = n->Nleft;
+            right = n->Nright;
+            break;
+        case Q_QUERY:
+            if (has_query)
+                *has_query = 1;
+            left = n->Nleft;
+            right = n->Nright;
+            break;
+        case Q_ASGN:
+        case Q_ASPLUS:
+        case Q_ASMINUS:
+        case Q_ASMPLY:
+        case Q_ASDIV:
+        case Q_ASMOD:
+        case Q_ASLSH:
+        case Q_ASRSH:
+        case Q_ASAND:
+        case Q_ASXOR:
+        case Q_ASOR:
+            left = n->Nleft;
+            right = n->Nright;
+            break;
+
+        default:
+            return 0;
+        }
+
+        if (left) {
+            if (sp >= (int)(sizeof(work) / sizeof(work[0])))
+                return 0;
+            work[sp++] = left;
+        }
+        if (right) {
+            if (sp >= (int)(sizeof(work) / sizeof(work[0])))
+                return 0;
+            work[sp++] = right;
+        }
+    }
+    return 1;
+}
+
+/* Return nonzero when a function body contains a two-word integer expression.
+** Directly reserving three or four incoming ABI ACs leaves too little room for
+** DImode pair reloads, so such functions should use the preserved-argument
+** path instead of the leaf fast path. */
+static int
+fn_abi_has_dimode(NODE *root)
+{
+    NODE *work[128], *n, *left, *right;
+    int sp, visits, op;
+
+    if (root == NULL)
+        return 0;
+    sp = visits = 0;
+    work[sp++] = root;
+    while (sp > 0) {
+        n = work[--sp];
+        if (n == NULL)
+            continue;
+        if (++visits > 4096)
+            return 1;
+        if (n->Ntype != NULL && tisdimode(n->Ntype))
+            return 1;
+        op = n->Nop;
+        left = right = NULL;
+        switch (op) {
+        case Q_IDENT: case N_ICONST: case N_PCONST: case N_ECONST:
+        case N_FCONST: case N_SCONST: case N_VCONST:
+        case Q_BREAK: case Q_CONTINUE:
+            break;
+        case Q_RETURN:
+            right = n->Nright;
+            break;
+        case Q_GOTO: case Q_CASE: case Q_DEFAULT: case N_LABEL:
+        case N_CAST: case N_ADDR: case N_PTR: case N_NEG:
+        case N_PREINC: case N_PREDEC: case N_POSTINC: case N_POSTDEC:
+        case Q_COMPL: case Q_NOT:
+            left = n->Nleft;
+            break;
+        case N_FNCALL: case N_NODE: case N_STATEMENT: case N_EXPRLIST:
+        case Q_IF: case Q_FOR: case Q_DO: case Q_WHILE: case Q_SWITCH:
+        case Q_DOT: case Q_MEMBER: case Q_PLUS: case Q_MINUS: case Q_MPLY:
+        case Q_DIV: case Q_MOD: case Q_LSHFT: case Q_RSHFT:
+        case Q_LESS: case Q_GREAT: case Q_LEQ: case Q_GEQ:
+        case Q_EQUAL: case Q_NEQ: case Q_ANDT: case Q_XORT: case Q_OR:
+        case Q_LAND: case Q_LOR: case Q_QUERY: case Q_ASGN:
+        case Q_ASPLUS: case Q_ASMINUS: case Q_ASMPLY: case Q_ASDIV:
+        case Q_ASMOD: case Q_ASLSH: case Q_ASRSH: case Q_ASAND:
+        case Q_ASXOR: case Q_ASOR:
+            left = n->Nleft;
+            right = n->Nright;
+            break;
+        default:
+            return 1;
+        }
+        if (left) {
+            if (sp >= (int)(sizeof(work) / sizeof(work[0]))) return 1;
+            work[sp++] = left;
+        }
+        if (right) {
+            if (sp >= (int)(sizeof(work) / sizeof(work[0]))) return 1;
+            work[sp++] = right;
+        }
+    }
+    return 0;
+}
+
+/* FN_ABI_QUERY_NORMAL - Is this scalar ?: safe to merge in a normal AC?
+**
+** CCGEN2 can keep these simple, call-free conditionals out of AC1.  Keep the
+** shape test conservative and in sync with gternary_normal_ok().  Nested
+** conditionals, calls, assignment, division, and other special-register
+** operators stay on the traditional ABI return-register path.
+*/
+static int
+fn_abi_query_normal_expr(NODE *n, int depth)
+{
+    int op;
+
+    if (n == NULL)
+        return 1;
+    if (depth > 128)
+        return 0;
+    op = n->Nop;
+    switch (op) {
+    case Q_IDENT:
+    case N_ICONST:
+    case N_PCONST:
+    case N_ECONST:
+    case N_FCONST:
+    case N_SCONST:
+    case N_VCONST:
+        return 1;
+    case N_CAST:
+    case N_ADDR:
+    case N_PTR:
+    case N_NEG:
+    case Q_COMPL:
+    case Q_NOT:
+        return fn_abi_query_normal_expr(n->Nleft, depth + 1);
+    case Q_DOT:
+    case Q_MEMBER:
+    case Q_PLUS:
+    case Q_MINUS:
+    case Q_MPLY:
+    case Q_LSHFT:
+    case Q_RSHFT:
+    case Q_LESS:
+    case Q_GREAT:
+    case Q_LEQ:
+    case Q_GEQ:
+    case Q_EQUAL:
+    case Q_NEQ:
+    case Q_ANDT:
+    case Q_XORT:
+    case Q_OR:
+    case Q_LAND:
+    case Q_LOR:
+        return fn_abi_query_normal_expr(n->Nleft, depth + 1)
+            && fn_abi_query_normal_expr(n->Nright, depth + 1);
+    default:
+        return 0;
+    }
+}
+
+static int
+fn_abi_query_normal(NODE *n)
+{
+    if (!n || n->Nop != Q_QUERY || sizetype(n->Ntype) != 1 || !n->Nright)
+        return 0;
+    return fn_abi_query_normal_expr(n->Nleft, 0)
+        && fn_abi_query_normal_expr(n->Nright->Nleft, 0)
+        && fn_abi_query_normal_expr(n->Nright->Nright, 0);
+}
+
+/* Mark all locally-safe scalar conditionals in a function.  This is only
+** called when ABI liveness analysis has found a return-AC argument that is
+** actually read after a conditional.  Direct-return min/max expressions are
+** therefore left on the cheaper traditional AC1 merge path.
+*/
+static void
+fn_abi_mark_normal_queries(NODE *root)
+{
+    NODE *work[256], *n;
+    int sp;
+
+    if (!root)
+        return;
+    sp = 0;
+    work[sp++] = root;
+    while (sp) {
+        n = work[--sp];
+        if (!n)
+            continue;
+        if (n->Nop == Q_QUERY && fn_abi_query_normal(n))
+            n->Nflag |= NF_QUERYNORMAL;
+        if (n->Nleft && sp < 255)
+            work[sp++] = n->Nleft;
+        if (n->Nright && sp < 255)
+            work[sp++] = n->Nright;
+    }
+}
+
+/* FN_ABI_PARAM_AFTER_QUERY - Does SYM need its ABI AC after ?: ?
+**
+** gternary() merges a one-word result through AC1 and a two-word result
+** through AC1/AC2.  Track those clobbers as an AC mask in KCC's evaluation
+** order.  An incoming argument used before a query is harmless because normal
+** expression generation has already copied the needed value.  Only a later
+** read whose original ABI AC is in the accumulated clobber mask requires
+** promotion to a preserved register.
+**
+** Q_QUERY is special: its condition executes first, followed by exactly one
+** arm.  The outer query's own return-AC clobber happens while finishing that
+** arm, so it is exposed to the parent but not made to precede its own arms.
+** A nested query in the condition does precede both arms and is propagated.
+**
+** Assignment is also special because gassign() evaluates the RHS before the
+** destination lvalue.  Other expression/statement nodes use the conservative
+** left-then-right order used by the normal generator for call-free trees.
+*/
+static int
+fn_abi_param_after_query_1(NODE *n, SYMBOL *sym, int seen, int depth,
+                           int *clobbers)
+{
+    NODE *left, *right;
+    int op, lm, rm, cm, own;
+
+    if (clobbers)
+        *clobbers = 0;
+    if (n == NULL)
+        return 0;
+    if (depth > 256)
+        return 1;
+
+    op = n->Nop;
+    left = right = NULL;
+    lm = rm = cm = 0;
+
+    if (op == Q_IDENT)
+        return (seen & (1 << sym->Svalue)) && n->Nid == sym;
+
+    switch (op) {
+    case N_ICONST:
+    case N_PCONST:
+    case N_ECONST:
+    case N_FCONST:
+    case N_SCONST:
+    case N_VCONST:
+    case Q_BREAK:
+    case Q_CONTINUE:
+        return 0;
+
+    case Q_RETURN:
+        right = n->Nright;
+        break;
+    case Q_GOTO:
+    case Q_CASE:
+    case Q_DEFAULT:
+    case N_LABEL:
+        left = n->Nleft;
+        break;
+
+    case N_CAST:
+    case N_ADDR:
+    case N_PTR:
+    case N_NEG:
+    case N_PREINC:
+    case N_PREDEC:
+    case N_POSTINC:
+    case N_POSTDEC:
+    case Q_COMPL:
+    case Q_NOT:
+        left = n->Nleft;
+        break;
+
+    case Q_QUERY:
+        if (fn_abi_param_after_query_1(n->Nleft, sym, seen, depth + 1, &cm))
+            return 1;
+        if (n->Nright) {
+            if (fn_abi_param_after_query_1(n->Nright->Nleft, sym,
+                                           seen | cm, depth + 1, &lm))
+                return 1;
+            if (fn_abi_param_after_query_1(n->Nright->Nright, sym,
+                                           seen | cm, depth + 1, &rm))
+                return 1;
+        }
+        own = 0;
+        if (!(n->Nflag & NF_QUERYNORMAL)) {
+            if (sizetype(n->Ntype) >= 1)
+                own |= (1 << 1);
+            if (sizetype(n->Ntype) >= 2)
+                own |= (1 << 2);
+        }
+        if (clobbers)
+            *clobbers = cm | lm | rm | own;
+        return 0;
+
+    case Q_ASGN:
+    case Q_ASPLUS:
+    case Q_ASMINUS:
+    case Q_ASMPLY:
+    case Q_ASDIV:
+    case Q_ASMOD:
+    case Q_ASLSH:
+    case Q_ASRSH:
+    case Q_ASAND:
+    case Q_ASXOR:
+    case Q_ASOR:
+        if (fn_abi_param_after_query_1(n->Nright, sym, seen, depth + 1, &rm))
+            return 1;
+        if (fn_abi_param_after_query_1(n->Nleft, sym, seen | rm,
+                                       depth + 1, &lm))
+            return 1;
+        if (clobbers)
+            *clobbers = lm | rm;
+        return 0;
+
+    case N_NODE:
+    case N_STATEMENT:
+    case N_EXPRLIST:
+    case Q_IF:
+    case Q_FOR:
+    case Q_DO:
+    case Q_WHILE:
+    case Q_SWITCH:
+    case Q_DOT:
+    case Q_MEMBER:
+    case Q_PLUS:
+    case Q_MINUS:
+    case Q_MPLY:
+    case Q_DIV:
+    case Q_MOD:
+    case Q_LSHFT:
+    case Q_RSHFT:
+    case Q_LESS:
+    case Q_GREAT:
+    case Q_LEQ:
+    case Q_GEQ:
+    case Q_EQUAL:
+    case Q_NEQ:
+    case Q_ANDT:
+    case Q_XORT:
+    case Q_OR:
+    case Q_LAND:
+    case Q_LOR:
+        left = n->Nleft;
+        right = n->Nright;
+        break;
+
+    case N_FNCALL:
+    case Q_ASM:
+    case Q_MUUO:
+    default:
+        return 1;
+    }
+
+    if (fn_abi_param_after_query_1(left, sym, seen, depth + 1, &lm))
+        return 1;
+    if (fn_abi_param_after_query_1(right, sym, seen | lm, depth + 1, &rm))
+        return 1;
+    if (clobbers)
+        *clobbers = lm | rm;
+    return 0;
+}
+
+static int
+fn_abi_param_after_query(NODE *root, SYMBOL *sym)
+{
+    int clobbers;
+
+    return fn_abi_param_after_query_1(root, sym, 0, 0, &clobbers);
+}
+
+/* FN_ABI_TAILONLY - Recognize functions whose only calls are returned calls.
+**
+** Such calls consume the incoming ABI arguments before control leaves the
+** function, so AC1..AC4 do not need to be copied to preserved registers.
+** Nested calls in the returned call arguments are deliberately rejected.
+*/
+static int
+fn_abi_tailonly(NODE *root)
+{
+    struct workent { NODE *n; int tail; } work[128];
+    NODE *n, *left, *right;
+    int sp, visits, op, tail;
+
+    if (root == NULL)
+        return 1;
+    sp = 0;
+    visits = 0;
+    work[sp].n = root;
+    work[sp++].tail = 0;
+    while (sp > 0) {
+        --sp;
+        n = work[sp].n;
+        tail = work[sp].tail;
+        if (n == NULL)
+            continue;
+        if (++visits > 4096)
+            return 0;
+        op = n->Nop;
+        left = right = NULL;
+
+        if (op == Q_ASM || op == Q_MUUO)
+            return 0;
+        if (op == N_FNCALL) {
+            if (!tail)
+                return 0;
+            left = n->Nleft;
+            right = n->Nright;
+            tail = 0;
+        } else switch (op) {
+        case Q_IDENT:
+        case N_ICONST:
+        case N_PCONST:
+        case N_ECONST:
+        case N_FCONST:
+        case N_SCONST:
+        case N_VCONST:
+        case Q_BREAK:
+        case Q_CONTINUE:
+            break;
+
+        case Q_RETURN:
+            if (n->Nright && n->Nright->Nop == N_FNCALL) {
+                if (sp >= (int)(sizeof(work) / sizeof(work[0])))
+                    return 0;
+                work[sp].n = n->Nright;
+                work[sp++].tail = 1;
+                continue;
+            }
+            right = n->Nright;
+            break;
+        case Q_GOTO:
+        case Q_CASE:
+        case Q_DEFAULT:
+        case N_LABEL:
+            left = n->Nleft;
+            break;
+
+        case N_CAST:
+        case N_ADDR:
+        case N_PTR:
+        case N_NEG:
+        case N_PREINC:
+        case N_PREDEC:
+        case N_POSTINC:
+        case N_POSTDEC:
+        case Q_COMPL:
+        case Q_NOT:
+            left = n->Nleft;
+            break;
+
+        case N_NODE:
+        case N_STATEMENT:
+        case N_EXPRLIST:
+        case Q_IF:
+        case Q_FOR:
+        case Q_DO:
+        case Q_WHILE:
+        case Q_SWITCH:
+        case Q_DOT:
+        case Q_MEMBER:
+        case Q_PLUS:
+        case Q_MINUS:
+        case Q_MPLY:
+        case Q_DIV:
+        case Q_MOD:
+        case Q_LSHFT:
+        case Q_RSHFT:
+        case Q_LESS:
+        case Q_GREAT:
+        case Q_LEQ:
+        case Q_GEQ:
+        case Q_EQUAL:
+        case Q_NEQ:
+        case Q_ANDT:
+        case Q_XORT:
+        case Q_OR:
+        case Q_LAND:
+        case Q_LOR:
+        case Q_QUERY:
+        case Q_ASGN:
+        case Q_ASPLUS:
+        case Q_ASMINUS:
+        case Q_ASMPLY:
+        case Q_ASDIV:
+        case Q_ASMOD:
+        case Q_ASLSH:
+        case Q_ASRSH:
+        case Q_ASAND:
+        case Q_ASXOR:
+        case Q_ASOR:
+            left = n->Nleft;
+            right = n->Nright;
+            break;
+
+        default:
+            return 0;
+        }
+
+        if (left) {
+            if (sp >= (int)(sizeof(work) / sizeof(work[0])))
+                return 0;
+            work[sp].n = left;
+            work[sp++].tail = 0;
+        }
+        if (right) {
+            if (sp >= (int)(sizeof(work) / sizeof(work[0])))
+                return 0;
+            work[sp].n = right;
+            work[sp++].tail = 0;
+        }
+    }
+    return 1;
+}
+
+/* FN_ABI_PARAM_USED - Conservatively find a parameter reference.
+**
+** The parser's Srefs count includes bookkeeping references and is therefore
+** not accurate enough for deciding whether an ABI argument needs storage.
+** Walk the completed function tree instead.  Unknown node shapes are treated
+** as a use so this can only suppress promotion when absence is proven.
+*/
+static int
+fn_abi_param_used(NODE *root, SYMBOL *sym)
+{
+    NODE *work[128], *n, *left, *right;
+    int sp, visits, op;
+
+    if (root == NULL)
+        return 0;
+    sp = 0;
+    visits = 0;
+    work[sp++] = root;
+    while (sp > 0) {
+        n = work[--sp];
+        if (n == NULL)
+            continue;
+        if (++visits > 4096)
+            return 1;
+        op = n->Nop;
+        left = right = NULL;
+
+        if (op == Q_IDENT) {
+            if (n->Nid == sym)
+                return 1;
+            continue;
+        }
+
+        switch (op) {
+        case N_ICONST:
+        case N_PCONST:
+        case N_ECONST:
+        case N_FCONST:
+        case N_SCONST:
+        case N_VCONST:
+        case Q_BREAK:
+        case Q_CONTINUE:
+            break;
+
+        case Q_RETURN:
+            right = n->Nright;
+            break;
+        case Q_GOTO:
+        case Q_CASE:
+        case Q_DEFAULT:
+        case N_LABEL:
+            left = n->Nleft;
+            break;
+
+        case N_CAST:
+        case N_ADDR:
+        case N_PTR:
+        case N_NEG:
+        case N_PREINC:
+        case N_PREDEC:
+        case N_POSTINC:
+        case N_POSTDEC:
+        case Q_COMPL:
+        case Q_NOT:
+            left = n->Nleft;
+            break;
+
+        case N_FNCALL:
+        case N_NODE:
+        case N_STATEMENT:
+        case N_EXPRLIST:
+        case Q_IF:
+        case Q_FOR:
+        case Q_DO:
+        case Q_WHILE:
+        case Q_SWITCH:
+        case Q_DOT:
+        case Q_MEMBER:
+        case Q_PLUS:
+        case Q_MINUS:
+        case Q_MPLY:
+        case Q_DIV:
+        case Q_MOD:
+        case Q_LSHFT:
+        case Q_RSHFT:
+        case Q_LESS:
+        case Q_GREAT:
+        case Q_LEQ:
+        case Q_GEQ:
+        case Q_EQUAL:
+        case Q_NEQ:
+        case Q_ANDT:
+        case Q_XORT:
+        case Q_OR:
+        case Q_LAND:
+        case Q_LOR:
+        case Q_QUERY:
+        case Q_ASGN:
+        case Q_ASPLUS:
+        case Q_ASMINUS:
+        case Q_ASMPLY:
+        case Q_ASDIV:
+        case Q_ASMOD:
+        case Q_ASLSH:
+        case Q_ASRSH:
+        case Q_ASAND:
+        case Q_ASXOR:
+        case Q_ASOR:
+            left = n->Nleft;
+            right = n->Nright;
+            break;
+
+        case Q_ASM:
+        case Q_MUUO:
+        default:
+            return 1;
+        }
+
+        if (left) {
+            if (sp >= (int)(sizeof(work) / sizeof(work[0])))
+                return 1;
+            work[sp++] = left;
+        }
+        if (right) {
+            if (sp >= (int)(sizeof(work) / sizeof(work[0])))
+                return 1;
+            work[sp++] = right;
+        }
+    }
+    return 0;
+}
+
+/* FN_ABI_DROP_FIRST_CALL - Parameter dies at the first bare call.
+**
+** Walk the straight-line top-level statement chain until its first call.
+** Leading statements must themselves be call-free, so the incoming ABI AC
+** cannot have been clobbered.  The first call must be a bare call statement
+** that uses the parameter, and the parameter must be dead in all following
+** statements.  The AC can then remain reserved through that call and be
+** released immediately afterward.
+*/
+/* FN_ABI_DROP_BEFORE_FIRST_CALL - Parameter dies before the first bare call.
+**
+** As with FN_ABI_DROP_FIRST_CALL, only a straight-line top-level prefix is
+** accepted.  If the parameter is not referenced by the first call or by any
+** following statement, its incoming ABI AC only has to remain reserved until
+** that call is reached.  Releasing it before argument generation avoids a
+** preserved-register promotion and lets the call reuse the volatile AC.
+*/
+static int
+fn_abi_drop_before_first_call(NODE *body, SYMBOL *sym)
+{
+    NODE *stmt, *expr;
+
+    stmt = body;
+    if (stmt != NULL && stmt->Nop == N_STATEMENT
+      && stmt->Nleft != NULL && stmt->Nleft->Nop == N_STATEMENT)
+        stmt = stmt->Nleft;
+    while (stmt != NULL) {
+        if (stmt->Nop != N_STATEMENT)
+            return 0;
+        expr = stmt->Nleft;
+        if (expr == NULL || expr->Nop == N_DATA) {
+            stmt = stmt->Nright;
+            continue;
+        }
+        if (expr->Nop == N_FNCALL)
+            return !fn_abi_param_used(expr, sym)
+                && !fn_abi_param_used(stmt->Nright, sym);
+        if (!fn_abi_leaf(expr, (int *)NULL))
+            return 0;
+        stmt = stmt->Nright;
+    }
+    return 0;
+}
+
+static int
+fn_abi_drop_first_call(NODE *body, SYMBOL *sym)
+{
+    NODE *stmt, *expr;
+
+    stmt = body;
+    if (stmt != NULL && stmt->Nop == N_STATEMENT
+      && stmt->Nleft != NULL && stmt->Nleft->Nop == N_STATEMENT)
+        stmt = stmt->Nleft;
+    while (stmt != NULL) {
+        if (stmt->Nop != N_STATEMENT)
+            return 0;
+        expr = stmt->Nleft;
+        if (expr == NULL || expr->Nop == N_DATA) {
+            stmt = stmt->Nright;
+            continue;
+        }
+        if (expr->Nop == N_FNCALL) {
+            if (!fn_abi_param_used(expr, sym))
+                return 0;
+            return !fn_abi_param_used(stmt->Nright, sym);
+        }
+        if (!fn_abi_leaf(expr, (int *)NULL))
+            return 0;
+        stmt = stmt->Nright;
+    }
+    return 0;
+}
+
+/* FN_ABI_PARAM_REFS - Count exact references in the completed function tree.
+** Stop above one because phase 44 only consumes DImode ABI pairs in place
+** when the parameter has a single read.
+*/
+static int
+fn_abi_param_refs(NODE *root, SYMBOL *sym)
+{
+    NODE *work[128], *n, *left, *right;
+    int sp, visits, count, op;
+
+    if (root == NULL)
+        return 0;
+    sp = visits = count = 0;
+    work[sp++] = root;
+    while (sp > 0) {
+        n = work[--sp];
+        if (n == NULL)
+            continue;
+        if (++visits > 4096)
+            return 2;
+        op = n->Nop;
+        left = right = NULL;
+        if (op == Q_IDENT) {
+            if (n->Nid == sym && ++count > 1)
+                return count;
+            continue;
+        }
+        switch (op) {
+        case N_ICONST:
+        case N_PCONST:
+        case N_ECONST:
+        case N_FCONST:
+        case N_SCONST:
+        case N_VCONST:
+        case Q_BREAK:
+        case Q_CONTINUE:
+            break;
+        case Q_RETURN:
+            right = n->Nright;
+            break;
+        case Q_GOTO:
+        case Q_CASE:
+        case Q_DEFAULT:
+        case N_LABEL:
+        case N_CAST:
+        case N_ADDR:
+        case N_PTR:
+        case N_NEG:
+        case N_PREINC:
+        case N_PREDEC:
+        case N_POSTINC:
+        case N_POSTDEC:
+        case Q_COMPL:
+        case Q_NOT:
+            left = n->Nleft;
+            break;
+        case N_FNCALL:
+        case N_NODE:
+        case N_STATEMENT:
+        case N_EXPRLIST:
+        case Q_IF:
+        case Q_FOR:
+        case Q_DO:
+        case Q_WHILE:
+        case Q_SWITCH:
+        case Q_DOT:
+        case Q_MEMBER:
+        case Q_PLUS:
+        case Q_MINUS:
+        case Q_MPLY:
+        case Q_DIV:
+        case Q_MOD:
+        case Q_LSHFT:
+        case Q_RSHFT:
+        case Q_LESS:
+        case Q_GREAT:
+        case Q_LEQ:
+        case Q_GEQ:
+        case Q_EQUAL:
+        case Q_NEQ:
+        case Q_ANDT:
+        case Q_XORT:
+        case Q_OR:
+        case Q_LAND:
+        case Q_LOR:
+        case Q_QUERY:
+        case Q_ASGN:
+        case Q_ASPLUS:
+        case Q_ASMINUS:
+        case Q_ASMPLY:
+        case Q_ASDIV:
+        case Q_ASMOD:
+        case Q_ASLSH:
+        case Q_ASRSH:
+        case Q_ASAND:
+        case Q_ASXOR:
+        case Q_ASOR:
+            left = n->Nleft;
+            right = n->Nright;
+            break;
+        default:
+            return 2;
+        }
+        if (left) {
+            if (sp >= (int)(sizeof(work) / sizeof(work[0])))
+                return 2;
+            work[sp++] = left;
+        }
+        if (right) {
+            if (sp >= (int)(sizeof(work) / sizeof(work[0])))
+                return 2;
+            work[sp++] = right;
+        }
+    }
+    return count;
+}
+
+/* FN_ABI_DIRECT_PEER_SIMPLE - True when the operand opposite a direct
+** DImode ABI parameter can be consumed without first materializing another
+** doubleword temporary.  A nested wide expression must use the historical
+** stack reconstruction path or it can reserve the only allocatable AC pair.
+*/
+static int
+fn_abi_direct_peer_simple(NODE *n)
+{
+    if (n == NULL)
+        return 1;
+    switch (n->Nop) {
+    case Q_IDENT:
+    case N_ICONST:
+    case N_PCONST:
+    case N_ECONST:
+    case N_FCONST:
+    case N_SCONST:
+    case N_VCONST:
+    case N_CAST:
+    case N_PTR:
+    case Q_DOT:
+    case Q_MEMBER:
+        return 1;
+    default:
+        return sizetype(n->Ntype) != 2;
+    }
+}
+
+/* FN_ABI_PARAM_DIRECT_USE - Limit in-place ABI-pair consumption to node
+** shapes whose DImode generators are already overlap-safe.  Broader pair
+** lifetime support belongs to a later phase.
+*/
+static int
+fn_abi_param_direct_use(NODE *n, SYMBOL *sym)
+{
+    NODE *left, *right;
+    int lhit, rhit;
+
+    if (n == NULL || n->Nop == Q_IDENT)
+        return 0;
+    left = right = NULL;
+    switch (n->Nop) {
+    case N_ICONST:
+    case N_PCONST:
+    case N_ECONST:
+    case N_FCONST:
+    case N_SCONST:
+    case N_VCONST:
+    case Q_BREAK:
+    case Q_CONTINUE:
+        return 0;
+    case Q_RETURN:
+        right = n->Nright;
+        break;
+    case Q_GOTO:
+    case Q_CASE:
+    case Q_DEFAULT:
+    case N_LABEL:
+    case N_CAST:
+    case N_ADDR:
+    case N_PTR:
+    case N_NEG:
+    case N_PREINC:
+    case N_PREDEC:
+    case N_POSTINC:
+    case N_POSTDEC:
+    case Q_COMPL:
+    case Q_NOT:
+        left = n->Nleft;
+        break;
+    case N_FNCALL:
+    case N_NODE:
+    case N_STATEMENT:
+    case N_EXPRLIST:
+    case Q_IF:
+    case Q_FOR:
+    case Q_DO:
+    case Q_WHILE:
+    case Q_SWITCH:
+    case Q_DOT:
+    case Q_MEMBER:
+    case Q_PLUS:
+    case Q_MINUS:
+    case Q_MPLY:
+    case Q_DIV:
+    case Q_MOD:
+    case Q_LSHFT:
+    case Q_RSHFT:
+    case Q_LESS:
+    case Q_GREAT:
+    case Q_LEQ:
+    case Q_GEQ:
+    case Q_EQUAL:
+    case Q_NEQ:
+    case Q_ANDT:
+    case Q_XORT:
+    case Q_OR:
+    case Q_LAND:
+    case Q_LOR:
+    case Q_QUERY:
+    case Q_ASGN:
+    case Q_ASPLUS:
+    case Q_ASMINUS:
+    case Q_ASMPLY:
+    case Q_ASDIV:
+    case Q_ASMOD:
+    case Q_ASLSH:
+    case Q_ASRSH:
+    case Q_ASAND:
+    case Q_ASXOR:
+    case Q_ASOR:
+        left = n->Nleft;
+        right = n->Nright;
+        break;
+    default:
+        return 0;
+    }
+    lhit = left != NULL && left->Nop == Q_IDENT && left->Nid == sym;
+    rhit = right != NULL && right->Nop == Q_IDENT && right->Nid == sym;
+    if (lhit || rhit) {
+        if ((lhit && !fn_abi_direct_peer_simple(right))
+          || (rhit && !fn_abi_direct_peer_simple(left)))
+            return 0;
+        switch (n->Nop) {
+        case Q_RETURN:
+        case Q_PLUS:
+        case Q_MINUS:
+        case Q_MPLY:
+        case Q_LSHFT:
+        case Q_RSHFT:
+        case Q_ANDT:
+        case Q_XORT:
+        case Q_OR:
+            return 1;
+        default:
+            return 0;
+        }
+    }
+    return fn_abi_param_direct_use(left, sym)
+        || fn_abi_param_direct_use(right, sym);
+}
+
+/* FN_ABI_PARAM_MODIFIED - Reject direct register residence when a parameter
+** is used as an lvalue.  Phase 44 keeps DImode pairs direct only for
+** read-only, call-free functions; all other cases retain the stack shim.
+*/
+static int
+fn_abi_param_modified(NODE *n, SYMBOL *sym)
+{
+    NODE *l, *r;
+
+    if (n == NULL)
+        return 0;
+    l = r = NULL;
+    switch (n->Nop) {
+    case Q_ASGN:
+    case Q_ASPLUS:
+    case Q_ASMINUS:
+    case Q_ASMPLY:
+    case Q_ASDIV:
+    case Q_ASMOD:
+    case Q_ASLSH:
+    case Q_ASRSH:
+    case Q_ASAND:
+    case Q_ASXOR:
+    case Q_ASOR:
+        if (fn_abi_param_used(n->Nleft, sym))
+            return 1;
+        r = n->Nright;
+        break;
+    case N_PREINC:
+    case N_PREDEC:
+    case N_POSTINC:
+    case N_POSTDEC:
+    case N_ADDR:
+        if (fn_abi_param_used(n->Nleft, sym))
+            return 1;
+        break;
+    case Q_IDENT:
+    case N_ICONST:
+    case N_PCONST:
+    case N_ECONST:
+    case N_FCONST:
+    case N_SCONST:
+    case N_VCONST:
+    case Q_BREAK:
+    case Q_CONTINUE:
+        break;
+    case Q_RETURN:
+        r = n->Nright;
+        break;
+    case Q_GOTO:
+    case Q_CASE:
+    case Q_DEFAULT:
+    case N_LABEL:
+    case N_CAST:
+    case N_PTR:
+    case N_NEG:
+    case Q_COMPL:
+    case Q_NOT:
+        l = n->Nleft;
+        break;
+    case N_FNCALL:
+    case N_NODE:
+    case N_STATEMENT:
+    case N_EXPRLIST:
+    case Q_IF:
+    case Q_FOR:
+    case Q_DO:
+    case Q_WHILE:
+    case Q_SWITCH:
+    case Q_DOT:
+    case Q_MEMBER:
+    case Q_PLUS:
+    case Q_MINUS:
+    case Q_MPLY:
+    case Q_DIV:
+    case Q_MOD:
+    case Q_LSHFT:
+    case Q_RSHFT:
+    case Q_LESS:
+    case Q_GREAT:
+    case Q_LEQ:
+    case Q_GEQ:
+    case Q_EQUAL:
+    case Q_NEQ:
+    case Q_ANDT:
+    case Q_XORT:
+    case Q_OR:
+    case Q_LAND:
+    case Q_LOR:
+    case Q_QUERY:
+        l = n->Nleft;
+        r = n->Nright;
+        break;
+    default:
+        return 1;
+    }
+    return fn_abi_param_modified(l, sym)
+        || fn_abi_param_modified(r, sym);
+}
+
+static void
+promote_abi_params(SYMBOL *args, SYMBOL *fn, NODE *body)
+{
+    SYMBOL *s;
+    TYPE *p;
+    int need, nargs;
+
+    fnabidirect = 0;
+    fnargkeepmask = 0;
+    fnargdropmask = 0;
+    fnargpredropmask = 0;
+    if (!args || sizetype(fn->Stype->Tsubt) > GCCABI_RET_REGS)
+        return;
+
+    /* Keep fully register-passed, read-only DImode parameters in their
+    ** incoming ABI pairs for call-free functions.  Split AC/stack pairs,
+    ** address-taken or modified parameters, and functions containing calls
+    ** continue to use the historical stack reconstruction.
+    */
+    {
+        int haspair, leaf, has_query, siz, reg;
+
+        haspair = 0;
+        for (s = args; s; s = s->Spmnext)
+            if (sizetype(s->Stype) == 2)
+                haspair = 1;
+        if (haspair) {
+            leaf = fn_abi_leaf(body, &has_query);
+            if (!leaf)
+                return;
+            for (s = args; s; s = s->Spmnext) {
+                siz = sizetype(s->Stype);
+                if ((siz != 1 && siz != 2)
+                  || (s->Sflags & SF_ADDRTAKEN)
+                  || s->Svalue - siz + 1 < 1
+                  || s->Svalue > GCCABI_ARG_REGS
+                  || fn_abi_param_modified(body, s)
+                  || (siz == 2 && (fn_abi_param_refs(body, s) != 1
+                    || !fn_abi_param_direct_use(body, s)))
+                  || (s->Sclass != SC_ARG && s->Sclass != SC_RARG))
+                    return;
+            }
+            for (s = args; s; s = s->Spmnext) {
+                siz = sizetype(s->Stype);
+                s->Sclass = SC_RARG;
+                s->Sreg = s->Svalue - siz + 1;
+                s->Sflags |= SF_ABIREG;
+                if (siz == 2)
+                    s->Sflags |= SF_ABICONSUME;
+                for (reg = 0; reg < siz; ++reg)
+                    fnargkeepmask |= (1 << (s->Sreg + reg));
+            }
+            fnabidirect = 1;
+            return;
+        }
+    }
+
+    need = 0;
+    nargs = 0;
+    for (s = args; s; s = s->Spmnext) {
+        ++nargs;
+        if (sizetype(s->Stype) != 1 || tispacked(s->Stype)
+          || (s->Sflags & SF_ADDRTAKEN)
+          || s->Svalue < 1 || s->Svalue > GCCABI_ARG_REGS)
+            return;
+        if (s->Sclass == SC_ARG) {
+            if (!fn_abi_drop_before_first_call(body, s)
+              && !fn_abi_drop_first_call(body, s))
+                ++need;
+        } else if (s->Sclass != SC_RARG)
+            return;
+    }
+
+    p = fn->Stype->Tproto ? fn->Stype->Tproto : fn->Shproto;
+    while (p && p->Tspec == TS_PARAM)
+        p = p->Tproto;
+    if (p && p->Tspec == TS_PARINF)
+        return;
+
+    /* A call-free function can leave one-word ABI parameters in AC1..AC4.
+    ** Reserve those ACs from temporary allocation and from destructive
+    ** peephole coalescing.  No prologue copies or preserved-register saves
+    ** are then required for the parameters.
+    */
+    if (need <= 4 && !(nargs >= 3 && fn_abi_has_dimode(body))) {
+        int leaf, has_query, nsave;
+
+        leaf = fn_abi_leaf(body, &has_query);
+        if (!(leaf || fn_abi_tailonly(body)))
+            goto preserve_params;
+        nsave = 0;
+
+        /* If a simple scalar ?: is the only reason a live ABI argument
+        ** would have to leave AC1/AC2, mark such queries for normal-AC
+        ** merging before computing the final preservation set.
+        */
+        if (optgen && leaf && has_query) {
+            for (s = args; s; s = s->Spmnext)
+                if (s->Sclass == SC_ARG && s->Svalue <= GCCABI_RET_REGS
+                  && fn_abi_param_after_query(body, s)) {
+                    fn_abi_mark_normal_queries(body);
+                    break;
+                }
+        }
+
+        /* AC1/AC2 are also the mandatory scalar/double return registers.
+        ** Expression generation may need them before the final return (for
+        ** example to merge a ?: value), so an incoming parameter cannot
+        ** safely remain live there for the whole function.  Keep AC3/AC4
+        ** direct, but move ABI parameters from return ACs to preserved ACs.
+        */
+        for (s = args; s; s = s->Spmnext)
+            if (leaf && has_query && s->Sclass == SC_ARG
+              && s->Svalue <= GCCABI_RET_REGS
+              && fn_abi_param_after_query(body, s))
+                ++nsave;
+        if (_reg_count + nsave > R_PRESERVE_COUNT)
+            return;
+
+        for (s = args; s; s = s->Spmnext) {
+            if (s->Sclass == SC_ARG) {
+                s->Sclass = SC_RARG;
+                if (leaf && has_query && s->Svalue <= GCCABI_RET_REGS
+                  && fn_abi_param_after_query(body, s)) {
+                    s->Sreg = _reg_count + r_maxnopreserve + 1;
+                    Reg_Id[_reg_count++] = s;
+                } else {
+                    s->Sreg = s->Svalue;
+                    fnargkeepmask |= (1 << s->Sreg);
+                }
+            } else {
+                s->Sreg = s->Svalue;
+                fnargkeepmask |= (1 << s->Sreg);
+            }
+            s->Sflags |= SF_ABIREG;
+        }
+        fnabidirect = 1;
+        return;
+    }
+
+preserve_params:
+    if (_reg_count + need > R_PRESERVE_COUNT)
+        return;
+
+    for (s = args; s; s = s->Spmnext) {
+        if (fn_abi_drop_before_first_call(body, s)) {
+            if (s->Sclass == SC_ARG)
+                s->Sclass = SC_RARG;
+            s->Sreg = s->Svalue;
+            s->Sflags |= SF_ABIREG;
+            fnargkeepmask |= (1 << s->Sreg);
+            fnargpredropmask |= (1 << s->Sreg);
+            continue;
+        }
+        if (fn_abi_drop_first_call(body, s)) {
+            if (s->Sclass == SC_ARG)
+                s->Sclass = SC_RARG;
+            s->Sreg = s->Svalue;
+            s->Sflags |= SF_ABIREG;
+            fnargkeepmask |= (1 << s->Sreg);
+            fnargdropmask |= (1 << s->Sreg);
+            continue;
+        }
+        if (s->Sclass == SC_ARG) {
+            s->Sclass = SC_RARG;
+            s->Sreg = _reg_count + r_maxnopreserve + 1;
+            Reg_Id[_reg_count++] = s;
+        }
+        s->Sflags |= SF_ABIREG;
+    }
+    fnabidirect = 1;
+}
+
 static NODE *
 funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
 /* Base, contains parsed <decl-specs>, 
@@ -339,6 +1748,7 @@ funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
     NODE *nnode, *header;
     SYMBOL *s1;
     SYMBOL *args = d->Spmnext;  /*  List of parameter syms */
+    SYMBOL *arghead = args;
     int npartypes = (int) d->Svalue;    /* # of params if new-style proto */
     int nparidents = 0;
     NODE *nreg;
@@ -371,7 +1781,7 @@ funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
     */
     n = 0;                              /* set up for first arg */
     siz = sizetype(syment->Stype->Tsubt);       /* get size of return val */
-    if (siz > 2)                        /* If returning too-large object, */
+    if (siz > 4)                        /* If returning too-large object, */
         n = 1;                          /* just use struct-return pointer */
     while (args != NULL)
         {
@@ -396,6 +1806,8 @@ funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
     ** compound() for further discussion.
     */
     nnode = funstmt();                  /* Parse function statement */
+
+    promote_abi_params(arghead, syment, nnode);
 
     expect(T_RBRACE);   /* Now safe to flush the right brace
                         ** and set up new current token.
@@ -477,6 +1889,9 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
     */
     s = symfxext(s);            /* Make SC_XEXTREF visible if any */
 
+    if ((d->Sflags & (SF_INLINE | SF_NOINLINE)) == (SF_INLINE | SF_NOINLINE))
+        warn("inline function given attribute noinline");
+
     switch (baseclass)  /* Not all storage classes are allowed */
         {
         default:
@@ -509,6 +1924,7 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
                 warn("Storage class for function decl in block must be \"extern\"");
         /* Drop thru to assume extern and carry on */
 
+        /* FALLTHROUGH */
         case SC_UNDEF:          /* dpANS: default same as explicit "extern" */
         case SC_EXTREF:         /* Explicit "extern" */
         /* dpANS: linkage is same as any visible decl of this identifier
@@ -553,6 +1969,7 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
                     s->Sclass = SC_UNDEF;               /* Sigh!  Smash it. */
             /* Fall thru to handle as if extern */
 
+                /* FALLTHROUGH */
                 case SC_XEXTREF:
                 case SC_EXTDEF:
                 case SC_EXTREF:
@@ -577,6 +1994,7 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
             s = uniqsym(s);     /* No, ensure local if needed */
         s->Sclass = d->Sclass;          /* Copy the parsed class */
         s->Stype = d->Stype;            /* and the type specification */
+        s->Sflags |= d->Sflags & (SF_NORETURN | SF_NOINLINE | SF_INLINE);
         s->Srefs = 0;                   /* and reset usage cnt in case a ref */
         if (s->Sclass == SC_INTDEF || s->Sclass == SC_INTREF)
             mapintsym(s);               /* Set Smaplab (internal unique) */
@@ -680,6 +2098,7 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
     ** class.
     */
     s->Stype = d->Stype;        /* Force the type specification */
+    s->Sflags |= d->Sflags & (SF_NORETURN | SF_NOINLINE | SF_INLINE);
     if (!def)                   /* If this decl was just a ref, */
         --(s->Srefs);           /* then usage count to undo lookup bump */
     if (s->Sclass != SC_EXTDEF && s->Sclass != SC_INTDEF)
@@ -801,6 +2220,7 @@ pdecllist(void)
 
             default:
                 error("Illegal storage class for function parameter");
+            /* FALLTHROUGH */
             case SC_UNDEF:              /* Default becomes this. */
                 stemp.Sclass = SC_ARG;
                 break;
@@ -968,6 +2388,12 @@ ldecllist(void)
     autodecls = autotail = NULL;
     do
         {
+        if ((token == T_STATIC_ASSERT || token == T_STATIC_ASSERT2))
+            {
+            staticassertdecl();
+            continue;
+            }
+
         /* If current token is start of a declaration, handle it. */
         pbase(&base);           /* Parse base storage-class and type */
                                 /* Note all classes are OK */
@@ -1052,13 +2478,71 @@ decllist(SYMBOL *base, SYMBOL *defbase, SYMBOL *d, SYMBOL *s,
 **              {type-specifier}
 **              {type-qualifier}
 */
-static int
+int
 isdecl(void)
 {
-    return (csymbol != NULL && (
+    return ((token == T_STATIC_ASSERT || token == T_STATIC_ASSERT2)
+        || (csymbol != NULL && (
         (tok[token].tktype == TKTY_RWSC || tok[token].tktype == TKTY_RWTYPE)
         || (csymbol->Sclass == SC_TYPEDEF)
-        ));
+        )));
+}
+
+static void
+staticassertdecl(void)
+{
+    INT v;
+    char *msg = NULL;
+
+    nextoken();
+    expect(T_LPAREN);
+    v = pconst();
+    if (token == T_COMMA)
+        {
+        nextoken();
+        if (token == T_SCONST)
+            {
+            msg = constant.csptr;
+            nextoken();
+            }
+        else
+            error("String literal expected in _Static_assert");
+        }
+    if (!v)
+        {
+        if (msg)
+            error("Static assertion failed: %s", msg);
+        else
+            error("Static assertion failed");
+        }
+    expect(T_RPAREN);
+    expect(T_SCOLON);
+}
+
+static TYPE *
+typeofspec(void)
+{
+    TYPE *t;
+    NODE *n;
+
+    nextoken();
+    expect(T_LPAREN);
+
+    if (csymbol && (tok[token].tktype == TKTY_RWTYPE
+        || csymbol->Sclass == SC_TYPEDEF))
+        {
+        t = typename();
+        expect(T_RPAREN);
+        return t;
+        }
+
+    n = asgnexpr();
+    if (n == NULL || n->Ntype == NULL)
+        t = deftype;
+    else
+        t = n->Ntype;
+    expect(T_RPAREN);
+    return t;
 }
 
 /* PBASE(&sym) - Parse base of declaration (stg class & type)
@@ -1095,7 +2579,7 @@ pbase(SYMBOL *symp)
     int savnsdefs = nsdefs;             /* Remember # side-eff defs so far */
     TYPE *t = NULL, *nt;
     INT nflag, qflags = 0, tflags = 0;
-    int chrsiz = 0;
+    int chrsiz = 0, intsiz = 0, longcnt = 0;
 
     if (symp)
         {
@@ -1169,6 +2653,42 @@ pbase(SYMBOL *symp)
 
                     continue;
 
+                case T_RESTRICT:
+                case T_RESTRICT2:
+                case T_RESTRICT3:
+                    nextoken();             /* Accepted but not represented. */
+                    continue;
+
+                case T_INLINE:
+                case T_INLINE2:
+                case T_INLINE3:
+                    symp->Sflags |= SF_INLINE;
+                    nextoken();
+                    continue;
+
+                case T_EXTENSION:
+                    nextoken();             /* Accepted and ignored. */
+                    continue;
+
+                case T_NORETURN:
+                    symp->Sflags |= SF_NORETURN;
+                    nextoken();
+                    continue;
+
+                case T_TYPEOF:
+                case T_TYPEOF2:
+                case T_TYPEOF3:
+                    nt = typeofspec();
+                    nflag = 1;              /* typeofspec consumed token. */
+
+                    break;
+
+                case T_BOOL:
+                    nt = booltype;
+                    nflag = 0;
+
+                    break;
+
                 case T_VOID:
                     nt = voidtype;
                     nflag = 0;
@@ -1235,6 +2755,7 @@ pbase(SYMBOL *symp)
 
                 case T_LONG:
                     nflag = PF_LONG;
+                    ++longcnt;
 
                     break;
 
@@ -1273,6 +2794,18 @@ pbase(SYMBOL *symp)
 
                     break;
 
+                case T_CHAR16:
+                    nflag = PF_CHAR;
+                    chrsiz = 16;
+
+                    break;
+
+                case T_INT32:
+                    nflag = PF_INT;
+                    intsiz = 32;
+
+                    break;
+
                 default:
                     int_error("pbase: unknown RWTYPE %Q", token);
                     nextoken();         /* Skip over, get next */
@@ -1295,8 +2828,14 @@ pbase(SYMBOL *symp)
             else                        /* Nope, nflag must be set */
                 {
                 if (t || (tflags&nflag))
-                    error(errmsg);      /* Say bad typespec combo */
-                tflags |= nflag;
+                    {
+                    if (nflag == PF_LONG && (tflags&PF_LONG) && longcnt <= 2)
+                        ;               /* long long: second long */
+                    else
+                        error(errmsg);  /* Say bad typespec combo */
+                    }
+                else
+                    tflags |= nflag;
                 }
             nextoken();                 /* On to next token */
             continue;
@@ -1389,12 +2928,14 @@ pbase(SYMBOL *symp)
                     t = chartype;
                     break;
                     }
+            /* FALLTHROUGH */
             case PF_SIGNED|PF_CHAR:
                 if (!chrsiz)
                     {
                     t = schartype;
                     break;
                     }
+            /* FALLTHROUGH */
             case PF_UNSIGNED|PF_CHAR:
                 if (!chrsiz)
                     {
@@ -1421,21 +2962,35 @@ pbase(SYMBOL *symp)
             case PF_INT:
             case PF_SIGNED:
             case PF_SIGNED|PF_INT:
-                t = inttype;
+                if (intsiz) {
+                    t = findctype(TS_INT, qflags | intsiz, 1, (TYPE *)NULL);
+                    qflags = 0;
+                } else
+                    t = inttype;
                 break;
             case PF_UNSIGNED:
             case PF_UNSIGNED|PF_INT:
-                t = uinttype;
+                if (intsiz) {
+                    t = findctype(TS_UINT, qflags | intsiz, 1, (TYPE *)NULL);
+                    qflags = 0;
+                } else
+                    t = uinttype;
                 break;
             case PF_LONG:
             case PF_SIGNED|PF_LONG:
             case PF_LONG|PF_INT:
             case PF_SIGNED|PF_LONG|PF_INT:
-                t = longtype;
+                if (longcnt >= 2)
+                    t = longlongtype;
+                else
+                    t = longtype;
                 break;
             case PF_UNSIGNED|PF_LONG:
             case PF_UNSIGNED|PF_LONG|PF_INT:
-                t = ulongtype;
+                if (longcnt >= 2)
+                    t = ulonglongtype;
+                else
+                    t = ulongtype;
                 break;
             case PF_DOUBLE:
                 t = dbltype;
@@ -1455,7 +3010,7 @@ pbase(SYMBOL *symp)
 
     if (qflags)                         /* Add qualifiers to the basic type */
         {
-        INT oflag = 0;
+        int oflag = 0;
 
 
         if (t->Tspec == TS_FUNCT)       /* See typedef comments */
@@ -1489,7 +3044,16 @@ pbase(SYMBOL *symp)
         }
 
     if (symp)
+        {
+        INT aflags;
+
         symp->Stype = t;
+        aflags = lex_take_gnuattrs();
+        symp->Sflags |= aflags;
+        if ((aflags & SF_PACKED) && t != NULL
+          && (t->Tspec == TS_STRUCT || t->Tspec == TS_UNION))
+            packstruct(t);
+        }
 
     return (INT) t;
     }
@@ -1538,10 +3102,12 @@ tagspec(int typ)                /* TS_STRUCT, TS_UNION, or TS_ENUM */
             if ((tok = nextoken()) == T_LBRACE)
                 nsdefs++;                       /* Defining, say decl has side effs */
                                         /* (Note this clobbers csymbol) */
-            if (tok == T_SCOLON)                /* new incomplete definition */
+            if (tok == T_SCOLON)                /* reference to tag */
                 {
-                tagsym = NULL;          /* Discard old tag, make new later */
-                nsdefs++;
+                nsdefs++;                       /* not a null declaration */
+                if (tagsym != NULL)
+                    break;                      /* tag exists; use it as-is */
+                /* else: no existing tag; fall through to create SC_UTAG */
                 }
             break;
 
@@ -1597,7 +3163,12 @@ tagspec(int typ)                /* TS_STRUCT, TS_UNION, or TS_ENUM */
         else    /* No existing tag, invent one. */
                 /* Note (safe) assumption that ident string is big enough */
             {
-            sprintf(s.Sname, "%c%d", SPC_TAG, ++itags);
+            {
+            char *cp;
+            cp = s.Sname;
+            *cp++ = SPC_TAG;
+            (void) declputd(cp, ++itags);
+            }
             tagsym = creatsym(s.Sname); /* Make symbol of right scope */
             }
         tagsym->Sflags |= SF_TAG;
@@ -1631,6 +3202,154 @@ tagspec(int typ)                /* TS_STRUCT, TS_UNION, or TS_ENUM */
     return tagsym->Stype;
 }
 
+
+/* PACKSTRUCT - Apply the supported GNU packed aggregate subset.
+**
+** GNU packed lays integer members out in C address units (9-bit bytes).
+** Recompute each member offset from that byte stream rather than retaining
+** the normal KCC alignment.  Members whose value fits wholly inside one
+** 36-bit word can still use KCC's existing negative Ssmoff byte encoding,
+** so no new address representation is needed for them.
+**
+** Cross-word packed scalar members need split load/store generation and are
+** deliberately diagnosed until that path is implemented.
+*/
+static void
+packstruct(TYPE *t)
+{
+    SYMBOL *m;
+    unsigned INT pbits = 0;
+    int isunion;
+    unsigned INT maxbits = 0;
+
+    if (t == NULL || t->Tsmtag == NULL)
+        return;
+    if (t->Tspec != TS_STRUCT && t->Tspec != TS_UNION)
+        return;
+    isunion = (t->Tspec == TS_UNION);
+
+    for (m = t->Tsmtag->Ssmnext; m != NULL; m = m->Ssmnext)
+        {
+        unsigned INT bits, storebits, bytes, startbit, wordbit, word;
+
+        /* Packed bit-fields occupy exactly their declared number of bits.
+        ** P=076,S=0 is reserved as an exact-bit-offset marker.
+        */
+        if (tisbitf(m->Stype))
+            {
+            bits = (unsigned INT)tbitsize(m->Stype);
+            startbit = isunion ? 0 : pbits;
+            m->Ssmoff = -(((INT)startbit << 12) | 07600L);
+            if (isunion)
+                {
+                if (bits > maxbits) maxbits = bits;
+                }
+            else
+                pbits += bits;
+            continue;
+            }
+
+        if (tisinteg(m->Stype) && !tisdimode(m->Stype))
+            {
+            bits = (unsigned INT)tbitsize(m->Stype);
+            if (bits == 0 || bits > TGSIZ_WORD)
+                {
+                error("GNU packed member has unsupported size");
+                return;
+                }
+            bytes = (bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR;
+            storebits = bytes * TGSIZ_CHAR;
+            startbit = isunion ? 0 : pbits;
+
+            /* P=075,S=0 marks an ordinary packed scalar whose storage starts
+            ** at an arbitrary bit offset.  Unlike a bit-field, the scalar
+            ** still occupies its normal ceil(width/9) C address units; any
+            ** spare low bits in the final address unit are padding.
+            */
+            if ((startbit % TGSIZ_CHAR) != 0)
+                m->Ssmoff = -(((INT)startbit << 12) | 07500L);
+            else
+                {
+                unsigned INT nbytes = startbit / TGSIZ_CHAR;
+                word = startbit / TGSIZ_WORD;
+                wordbit = startbit % TGSIZ_WORD;
+                if (bits > TGSIZ_CHAR || wordbit + bits > TGSIZ_WORD)
+                    m->Ssmoff = -(((INT)nbytes << 12) | 07700L);
+                else
+                    {
+                    INT woff = (INT)word;
+                    int boff = (int)wordbit;
+                    m->Ssmoff = fldsize((int)bits, &woff, &boff);
+                    }
+                }
+            if (isunion)
+                {
+                if (storebits > maxbits) maxbits = storebits;
+                }
+            else
+                pbits += storebits;
+            continue;
+            }
+
+        if (tispacked(m->Stype)
+          && (m->Stype->Tspec == TS_STRUCT || m->Stype->Tspec == TS_UNION))
+            bytes = m->Stype->Tbytes;
+        else if (m->Stype->Tspec == TS_ARRAY
+              && tispacked(m->Stype->Tsubt)
+              && (m->Stype->Tsubt->Tspec == TS_STRUCT
+                  || m->Stype->Tsubt->Tspec == TS_UNION))
+            bytes = m->Stype->Tsize * m->Stype->Tsubt->Tbytes;
+        else if (m->Stype->Tspec == TS_ARRAY
+              && tisinteg(m->Stype->Tsubt)
+              && !tisdimode(m->Stype->Tsubt))
+            {
+            unsigned INT ebits = (unsigned INT)tbitsize(m->Stype->Tsubt);
+            if (ebits == 0 || ebits > TGSIZ_WORD)
+                {
+                error("GNU packed array member has unsupported element size");
+                return;
+                }
+            bytes = m->Stype->Tsize
+                  * ((ebits + TGSIZ_CHAR - 1) / TGSIZ_CHAR);
+            }
+        else
+            {
+            error("GNU packed currently supports integers, arrays, and nested packed aggregates");
+            return;
+            }
+
+        storebits = bytes * TGSIZ_CHAR;
+        startbit = isunion ? 0 : pbits;
+        if ((startbit % TGSIZ_CHAR) != 0)
+            {
+            /* P=074,S=0 marks a nested aggregate at an exact bit offset.
+            ** Direct child selections are flattened by CCSTMT.  Taking its
+            ** address still requires a future software bit-pointer form.
+            */
+            m->Ssmoff = -(((INT)startbit << 12) | 07400L);
+            }
+        else
+            m->Ssmoff = -(((INT)(startbit / TGSIZ_CHAR) << 12) | 07700L);
+        if (isunion)
+            {
+            if (storebits > maxbits) maxbits = storebits;
+            }
+        else
+            pbits += storebits;
+        }
+
+    if (isunion)
+        pbits = maxbits;
+    if (pbits == 0)
+        return;
+
+    t->Tbytes = (unsigned short)((pbits + TGSIZ_CHAR - 1) / TGSIZ_CHAR);
+    t->Tsize = (t->Tbytes + (TGSIZ_WORD/TGSIZ_CHAR) - 1)
+             / (TGSIZ_WORD/TGSIZ_CHAR);
+    t->Tsmtag->Sflags |= SF_PACKED;
+}
+
+
 /* SDECLENUM - define enumeration type
 */
 static void
@@ -1647,10 +3366,12 @@ sdeclenum(SYMBOL *tag)
         if (token == T_RBRACE)
             {
             if (!s)
+                {
                 if (clevel >= CLEV_STRICT)
                     error("Empty enum definition list");
                 else
                     warn("Empty enum definition list");
+                }
 
             break;
             }
@@ -1681,10 +3402,12 @@ sdeclenum(SYMBOL *tag)
         else
             {
             if (val == INT_MAX)
+                {
                 if (clevel >= CLEV_STRICT)
                     error("ENUM value will exceed INT_MAX");
                 else
                     warn("ENUM value will exceed INT_MAX");
+                }
             s->Svalue = ++val;
             }
         if (token != T_COMMA)
@@ -1721,6 +3444,15 @@ sdeclstruct(SYMBOL *tag, int typ)
         }
     paramok = savpok;                   /* Restore saved paramok */
 
+    /* A flexible array member requires at least one other named member.
+    ** Unnamed bit-fields do not satisfy this C99 constraint.
+    */
+    if (typ == TS_STRUCT && tag->Ssmnext != NULL
+      && tag->Ssmnext == lastmem
+      && lastmem->Stype->Tspec == TS_ARRAY
+      && lastmem->Stype->Tsize == 0)
+        error("Flexible array member in otherwise empty struct");
+
     /* Return either total size (struct) or largest element size (union) */
     if (typ == TS_STRUCT)
         {
@@ -1728,7 +3460,10 @@ sdeclstruct(SYMBOL *tag, int typ)
             offset++;   /* Round offset up to full word */
         maxsize = offset;               /* Total size is current offset */
         }
-    if (maxsize == 0)
+    if (maxsize == 0
+      && !(typ == TS_STRUCT && lastmem != tag
+           && lastmem->Stype->Tspec == TS_ARRAY
+           && lastmem->Stype->Tsize == 0))
         error("Empty %s declaration", typ == TS_STRUCT ? "struct" : "union");
     return maxsize;
 }
@@ -1814,6 +3549,21 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                 break;                  /* Something bad, stop loop */
                 }
 
+            /* C99 flexible array members are represented by KCC as an
+            ** unknown-sized array member.  Such a member is permitted only
+            ** as the final named member of a struct; it is never permitted
+            ** directly in a union.  Diagnose a previous flexible member as
+            ** soon as another named member follows it.
+            */
+            if (prevsmem != tag
+              && prevsmem->Stype->Tspec == TS_ARRAY
+              && prevsmem->Stype->Tsize == 0)
+                error("Flexible array member must be last in struct");
+            if (tempsym.Stype->Tspec == TS_ARRAY
+              && tempsym.Stype->Tsize == 0
+              && tag->Stype->Tspec == TS_UNION)
+                error("Flexible array member not allowed in union");
+
             if (token == T_COLON)
                 {
 
@@ -1827,11 +3577,14 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                         ts = TS_BITF;
                         break;
                     default:
-                        error("Bit-field must be int or unsigned int");
+                        error("Bit-field must be int, unsigned int, or _Bool");
+                    /* FALLTHROUGH */
                     case TS_UINT:               /* Above error drops thru */
                         ts = TS_UBITF;
                         break;
                     }
+                if (tisbool(tempsym.Stype))
+                    ts = TS_UBITF;
                 /* If not on word boundary and previous member was not a
                 ** bitfield, force alignment.  There can be non-bitfield
                 ** objects smaller than a word (eg chars).
@@ -1847,7 +3600,7 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                 bsiz = pconst();                /* Parse size */
                 offcode = fldsize((int)bsiz, offset, boffset);  /* Handle it */
                 tempsym.Stype = findctype(ts,           /* Make bitfld type */
-                        bsiz | (tempsym.Stype->Tflag&TF_QUALS),
+                        bsiz | (tempsym.Stype->Tflag&(TF_QUALS|TF_BOOL)),
                         1, (TYPE *)NULL);
                 }
             else                        /* not bitfield */
@@ -1869,6 +3622,30 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                 bsiz = tisscalar(tempsym.Stype) ?       /* Get object size */
                         tbitsize(tempsym.Stype)         /* in bits if can */
                         : TGSIZ_WORD;           /* else force wd mode */
+
+                /* GNU aligned(N) is expressed in C address units.  On the
+                ** PDP-10 target one unit is 9 bits and useful alignment is
+                ** capped at one 36-bit word.  Apply member alignment before
+                ** the ordinary KCC byte/word placement rules.
+                */
+                if (tempsym.Sflags & SF_ALIGN4)
+                    {
+                    if (*boffset)
+                        {
+                        *boffset = 0;
+                        (*offset)++;
+                        }
+                    }
+                else if ((tempsym.Sflags & SF_ALIGN2) && *boffset)
+                    {
+                    if (*boffset <= TGSIZ_HALFWD)
+                        *boffset = TGSIZ_HALFWD;
+                    else
+                        {
+                        *boffset = 0;
+                        (*offset)++;
+                        }
+                    }
                 if (*boffset > 0                /* If in byte mode */
                   && ((bsiz >= TGSIZ_WORD)      /* and obj not byte */
                       || (*inbitf)))            /* or prev obj was bitfield */
@@ -2056,6 +3833,10 @@ declarator(SYMBOL *d)
                         error("Duplicate \"volatile\"");
                     tflag |= TF_VOLATILE;
                     continue;
+                case T_RESTRICT:
+                case T_RESTRICT2:
+                case T_RESTRICT3:
+                    continue;
                 }
             break;
             }
@@ -2126,6 +3907,7 @@ declarator(SYMBOL *d)
         switch (token)
             {
             case T_LPAREN:              /* Function definition or reference */
+                d->Sflags |= lex_take_gnuattrs();
             /* Parse param list of function.  If idsym is a new symbol,
             ** we set it temporarily so as to avoid bashing our global
             ** function-name symbol if it turns out to have a parameter
@@ -2164,6 +3946,7 @@ declarator(SYMBOL *d)
             /* Add base type to built-up derived type, return the result */
                 if (pp)
                     d->Stype = addpp(pp, d->Stype);
+                d->Sflags |= lex_take_gnuattrs();
                 return idsym;
             }
         }
@@ -2344,6 +4127,7 @@ paramlist(struct protostate
         default:
             error("Only storage class allowed for param is \"register\"");
                 /* Drop thru to pretend normal arg */
+        /* FALLTHROUGH */
         case SC_UNDEF:
             ps->decl.Sclass = SC_ARG;
             break;
@@ -2381,6 +4165,13 @@ paramlist(struct protostate
             ;   /* do nothing */
         }
 
+    /* Function-boundary pointers to sub-word exact-width integers may
+    ** arrive either as their ordinary PDP-10 byte-pointer representation
+    ** or as KCC's S=1 logical pointer.  The raw one-word value remains
+    ** self-describing through its S field.
+    */
+    t = fnmaybitptrtype(t);
+
     /* Add parameter symbol to list.  Always need to build list, even if
     ** discarding later, so we can diagnose duplicate param defs.
     */
@@ -2410,6 +4201,39 @@ paramlist(struct protostate
         t);
 }
 
+/* Exact-width sub-word integer pointers can originate inside a packed
+** object at a non-byte-aligned bit position.  Function boundaries preserve
+** the raw one-word pointer and mark the type as representation-polymorphic.
+*/
+static int
+fnmaybitptrtarget(TYPE *t)
+{
+    INT bits;
+
+    if (t == NULL || !tisinteg(t))
+        return 0;
+    bits = tbitsize(t);
+    /* Ordinary C char pointers define the external byte-address ABI.
+    ** Do not make every char * parameter representation-polymorphic merely
+    ** because a packed object can contain a non-byte-aligned char member.
+    ** Such an extension pointer must remain local unless represented by an
+    ** explicitly non-native exact-width KCC byte type.
+    */
+    if (tischar(t) && bits == TGSIZ_CHAR)
+        return 0;
+    return bits > 0 && bits < TGSIZ_WORD;
+}
+
+static TYPE *
+fnmaybitptrtype(TYPE *t)
+{
+    if (t != NULL && t->Tspec == TS_PTR && t->Tsubt != NULL
+      && fnmaybitptrtarget(t->Tsubt))
+        return findctype(TS_PTR, t->Tflag | TF_MAYBITPTR,
+                         t->Tsize, t->Tsubt);
+    return t;
+}
+
 /* ADDPP - add type to inside of nesting
 **      Only invoked by declarator().
 */
@@ -2499,6 +4323,9 @@ pushsztype(int typ, INT flags, INT siz, TYPE *ptr)
                     }
                 break;
             }
+
+    if (typ == TS_FUNCT)
+        ptr = fnmaybitptrtype(ptr);
 
     /* Now hash up the actual type and return the canonicalized version */
     return findctype(typ, flags | typbsiztab[typ], siz, ptr);
@@ -2592,6 +4419,7 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
         case SC_AUTO:           /* local extent variable, in function */
         case SC_RAUTO:
             if ((ns = isdupsym(s)) != NULL)
+                {
                 if (ns->Sclass == SC_TYPEDEF)
                     {
                     error("typedef type cannot be modified");
@@ -2603,6 +4431,7 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
                     }
                 else
                     error("Duplicate definition: \"%s\"", s->Sname);
+                }
 
             s = uniqsym(s);             /* Always make local cell */
             s->Sclass = d->Sclass;      /* Fill in necessary parts of sym */
@@ -2647,10 +4476,12 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
 
                     default:
                         errdupsym(s);   /* Barf & fall thru */
+                    /* FALLTHROUGH */
                     case SC_UNDEF:
                     case SC_XEXTREF:
                     case SC_EXTREF:
                         s->Sclass = SC_EXLINK;
+                    /* FALLTHROUGH */
                     case SC_EXTDEF:
                     case SC_EXLINK:
                         return NULL;
@@ -2666,6 +4497,7 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
                 case SC_INLINK:
                     error("Linkage conflict (was internal)");
             /* Fall thru to handle as if extern */
+                /* FALLTHROUGH */
                 case SC_UNDEF:
                 case SC_XEXTREF:
                 case SC_EXTREF:
@@ -2722,10 +4554,13 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
                     {
                     default:
                         errdupsym(s);
+                    /* FALLTHROUGH */
                     case SC_UNDEF:
                         s->Stype = d->Stype;
+                    /* FALLTHROUGH */
                     case SC_XEXTREF:
                         s->Sclass = SC_EXTREF;
+                    /* FALLTHROUGH */
                     case SC_INTDEF:
                     case SC_INTREF:
                     case SC_INLINK:
@@ -2750,6 +4585,7 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
                 default:
                     errdupsym(s);               /* Barf and fall thru */
                                         /* to handle as if undef */
+                /* FALLTHROUGH */
                 case SC_UNDEF:
                 case SC_XEXTREF:
                 case SC_EXTREF:
@@ -2894,6 +4730,27 @@ defauto(char *id, TYPE *typ)
     maxauto += sizetype(typ);
     return s;
 }
+
+/* DEFSTATIC - Define an unnamed internal-static object.
+**      Used for file-scope compound literals.  The object is emitted lazily
+**      by the static initializer generator when its address is required.
+**      Keeping only the ordinary symbol and internal label avoids adding any
+**      persistent compiler data structure for this C99 feature.
+*/
+SYMBOL *
+defstatic(char *id, TYPE *typ)
+{
+    SYMBOL *s;
+
+    s = creatsym(id);
+    s->Sclass = SC_ISTATIC;
+    s->Srefs++;
+    s->Stype = typ;
+    s->Sinit = 0;
+    s->Sused = 0;
+    s->Ssym = newlabel();
+    return s;
+}
 
 /* PIZER - Parse initializer.
 **      [dpANS 3.5.7]
@@ -2908,7 +4765,7 @@ defauto(char *id, TYPE *typ)
 **
 ** All expressions for a static extent object, or within an <izer-list> for
 ** an array, struct, or union type, must be constant expressions.  This
-** can be checked for as (!izautof || lev) which will be TRUE if the
+** can be checked for as (!izautof) which will be TRUE if the
 ** expression must be a constant.
 */
 
@@ -2916,7 +4773,7 @@ defauto(char *id, TYPE *typ)
 static int izautof;     /* True if symbol being initialized is automatic */
 static SYMBOL *izsym;   /* Symbol for var being initialized */
 
-static NODE *
+NODE *
 pizer(SYMBOL *s)
 {
     izautof = isauto(izsym = s);        /* Set "globals" for subroutines */
@@ -2948,10 +4805,12 @@ piztype (TYPE *t, int lev)       /* Level being parsed.  0 - outermost */
         case TS_UINT:
         case TS_LONG:
         case TS_ULONG:
+        case TS_LONGLONG:
+        case TS_ULONGLONG:
         case TS_ENUM:                   /* Enums treated like ints */
     
             if ((e = pexizer (lev)) != NULL) /* Parse a single expression */
-                return chkarith (t, e, lev, N_ICONST);
+                return chkarith (t, e, N_ICONST);
     
             break;
 
@@ -2961,7 +4820,7 @@ piztype (TYPE *t, int lev)       /* Level being parsed.  0 - outermost */
         case TS_LNGDBL:
     
             if ((e = pexizer (lev)) != NULL) /* Parse a single expression */
-                return chkarith (t, e, lev, N_FCONST);
+                return chkarith (t, e, N_FCONST);
     
             break;
 
@@ -2971,9 +4830,46 @@ piztype (TYPE *t, int lev)       /* Level being parsed.  0 - outermost */
         
             if ((e = pexizer (lev)) == NULL)
                 break;
+            if (e->Ntype->Tspec == TS_ARRAY)
+                e = convarrfn(e);
+
+            /* A function result whose exact-width pointer may be either
+            ** native or S=1 keeps that representation-polymorphic type in
+            ** an automatic local.  The raw pointer word is unchanged.
+            */
+            if (izautof && tismaybitptr(e->Ntype) && !tismaybitptr(t)
+              && t->Tsubt != NULL && e->Ntype->Tsubt != NULL
+              && cmputype(t->Tsubt, e->Ntype->Tsubt))
+                {
+                t = findctype(TS_PTR, t->Tflag | TF_MAYBITPTR,
+                              t->Tsize, t->Tsubt);
+                izsym->Stype = t;
+                }
+
+            /* A non-byte-aligned packed array decays to KCC's internal
+            ** S=1 logical bit pointer.  An automatic pointer initialized
+            ** from such an expression can retain that representation
+            ** locally without changing the external pointer ABI.
+            */
+            if (tisbitptr(e->Ntype) && !tisbitptr(t)
+              && t->Tsubt != NULL && e->Ntype->Tsubt != NULL
+              && cmputype(t->Tsubt, e->Ntype->Tsubt)
+              && (izautof || (izsym != NULL
+                  && (izsym->Sclass == SC_ISTATIC
+                      || izsym->Sclass == SC_INTDEF))))
+                {
+                /* A file/function-static pointer can retain the exact S=1
+                ** representation too.  Unlike an externally visible object,
+                ** its KCC-only representation tag cannot disagree with a
+                ** declaration in another translation unit.
+                */
+                t = findctype(TS_PTR, t->Tflag | TF_PACKEDPTR | TF_BITPTR,
+                              t->Tsize, t->Tsubt);
+                izsym->Stype = t;
+                }
             
             if ((n = convasgn (t, e)) != e)      /* Apply assignment convs */
-                e = (optpar || !izautof || lev) /* and optimize result if */
+                e = (optpar || !izautof) /* and optimize result if */
                         ? evalexpr (n) : n;      /* want or need to. */
             
             if (!cmputype (t, e->Ntype)) /* Types must match */
@@ -2984,7 +4880,7 @@ piztype (TYPE *t, int lev)       /* Level being parsed.  0 - outermost */
 
             /* A constant expression for a pointer requires hairy checks. */
             
-            if ((!izautof || lev)       /* If must be a constant expr */
+            if ((!izautof)       /* If must be a constant expr */
     	        && !nisconst (e))  /* then check it out */
                 {
                 error("Pointer initializer not constant");
@@ -3036,7 +4932,7 @@ piztype (TYPE *t, int lev)       /* Level being parsed.  0 - outermost */
 **      This is a subroutine for code sharing purposes.
 */
 static NODE *
-chkarith(TYPE *t, NODE *e, int lev, int noptyp)
+chkarith(TYPE *t, NODE *e, int noptyp)
 {
     NODE *n;
 
@@ -3046,232 +4942,399 @@ chkarith(TYPE *t, NODE *e, int lev, int noptyp)
         return e;
         }
     if ((n = convasgn(t, e)) != e)      /* Apply assignment convs */
-        e = (optpar || !izautof || lev) /* and optimize result if */
+        e = (optpar || !izautof) /* and optimize result if */
                 ? evalexpr(n) : n;      /* want or need to. */
-    if ((!izautof || lev) && e->Nop != noptyp)
+    if ((!izautof) && e->Nop != noptyp)
         error("%s constant required as initializer",
                 (noptyp == N_ICONST ? "Integer" : "Floating-point"));
     return e;
 }
 
-/* PIZSTRUCT - Parse initializer for a structure or union.
-**      If struct/union is static (not auto), izer must be brace-enclosed;
-**              an auto izer may or may not have braces.
-**      If izer is brace-enclosed or within a list, all members must be
-**              constants; for unions, only one constant is allowed, and
-**              this constant initializes the first member.
-**      Otherwise (for auto izer w/o braces), the expression need not be
-**              constant, but must have the proper struct/union type.
+/* IZLISTSLOT - Return an initializer-list slot at zero-based index.
 **
-**      Returns parsed stuff even if error, for debugging.
+** Designated initializers are normalized into the historical sequential
+** N_IZLIST representation.  Missing slots have a NULL Nleft and are emitted
+** as zero-fill by the existing generators.  This avoids a second initializer
+** representation and keeps the parser memory cost to one node per object
+** element/member, exactly as for an ordinary positional initializer.
 */
-
-static
-NODE *
-pizstruct (TYPE *t, int lev, int isunion) 
-/* isunion is TRUE if parsing union izer, else struct */
+static NODE *
+izlistslot(NODE **rootp, TYPE *t, INT index)
 {
-    register SYMBOL *smem;
-    NODE *e, *n, *root;
-    int braces;
+    NODE *n;
+    INT i;
 
-    if (clevel < CLEV_ANSI && izautof)                  /* Complain now */
-        error("Initialization of auto struct/union not allowed");
-    if ((smem = t->Tsmtag->Ssmnext) == NULL)
-        {
-        error("Attempting to initialize an undefined struct/union");
-        return pizlist();               /* Flush entire izer */
+    if (index < 0)
+        index = 0;
+    if (*rootp == NULL)
+        *rootp = ndeftl(N_IZLIST, t, NULL);
+    n = *rootp;
+    for (i = 0; i < index; ++i) {
+        if (n->Nright == NULL)
+            n->Nright = ndefl(N_IZLIST, NULL);
+        n = n->Nright;
+    }
+    return n;
+}
+
+/* IZMEMBER - Find a member and its zero-based position in an aggregate.
+** Returns NULL for an unknown member.
+*/
+static SYMBOL *
+izmember(TYPE *t, SYMBOL *name, INT *indexp)
+{
+    SYMBOL *m;
+    INT i;
+
+    m = symfmember(name, t->Tsmtag);
+    if (m == NULL)
+        return NULL;
+    i = 0;
+    for (name = t->Tsmtag->Ssmnext; name != NULL;
+         name = name->Ssmnext, ++i) {
+        if (name->Sclass != SC_MEMBER)
+            int_error("bad smem class");
+        if (name == m) {
+            *indexp = i;
+            return m;
         }
-    if (smem->Sclass != SC_MEMBER)              /* Paranoia check */
+    }
+    int_error("izmember: member not on tag chain");
+    return NULL;
+}
+
+/* PIZDESIGVALUE - Parse the tail of a C99 designator chain.
+**
+** The caller has already selected one aggregate element/member and token is
+** the first token following that selector.  Further .member or [index]
+** selectors are recursively normalized into the existing positional
+** N_IZLIST representation.  This keeps memory use proportional only to the
+** initializer path and adds no persistent compiler data structure.
+*/
+static NODE *
+pizdesigvalue(TYPE *t)
+{
+    SYMBOL *m;
+    NODE *root, *slot, *v;
+    INT idx;
+
+    if (token == Q_ASGN) {
+        nextoken();
+        return piztype(t, 1);
+    }
+
+    if (token == Q_DOT) {
+        if (t->Tspec != TS_STRUCT && t->Tspec != TS_UNION) {
+            error("Member designator applied to non-aggregate type");
+            pizflush(1);
+            return NULL;
+        }
+        if (nextoken() != Q_IDENT) {
+            error("Member name required after . in initializer");
+            pizflush(1);
+            return NULL;
+        }
+        idx = 0;
+        m = izmember(t, csymbol, &idx);
+        if (csymbol->Sclass == SC_UNDEF)
+            freesym(csymbol);
+        if (m == NULL) {
+            error("Unknown struct/union member in initializer");
+            pizflush(1);
+            return NULL;
+        }
+        nextoken();
+        v = pizdesigvalue(m->Stype);
+        if (t->Tspec == TS_UNION) {
+            root = ndeftl(N_IZLIST, t, v);
+            root->Nizmem = m;
+        } else {
+            root = NULL;
+            slot = izlistslot(&root, t, idx);
+            slot->Nleft = v;
+        }
+        return root;
+    }
+
+    if (token == T_LBRACK) {
+        if (t->Tspec != TS_ARRAY) {
+            error("Array designator applied to non-array type");
+            pizflush(1);
+            return NULL;
+        }
+        nextoken();
+        idx = pconst();
+        if (idx < 0) {
+            error("Array designator index must not be negative");
+            idx = 0;
+        }
+        if (token != T_RBRACK) {
+            error("] required after array designator");
+            pizflush(1);
+            return NULL;
+        }
+        nextoken();
+        v = pizdesigvalue(t->Tsubt);
+        if (t->Tsize != 0 && idx >= (INT)t->Tsize) {
+            error("Array designator index exceeds array bounds");
+            return NULL;
+        }
+        root = NULL;
+        slot = izlistslot(&root, t, idx);
+        slot->Nleft = v;
+        return root;
+    }
+
+    error("= required after designator");
+    pizflush(1);
+    return NULL;
+}
+
+/* PIZSTRUCT - Parse initializer for a structure or union.
+** Supports C99 member designators (.member = value).  Designators are
+** flattened into the existing positional N_IZLIST form, with NULL entries
+** for skipped structure members.  For a union the selected member is kept
+** in Nizmem so static generation can select the same overlapping member.
+*/
+static NODE *
+pizstruct(TYPE *t, int lev, int isunion)
+{
+    SYMBOL *first, *smem, *found;
+    NODE *e, *root, *slot;
+    INT curidx, desidx;
+    int braces, haveitem, designated;
+
+    if (clevel < CLEV_ANSI && izautof)
+        error("Initialization of auto struct/union not allowed");
+    first = t->Tsmtag->Ssmnext;
+    if (first == NULL) {
+        error("Attempting to initialize an undefined struct/union");
+        return pizlist();
+    }
+    if (first->Sclass != SC_MEMBER)
         int_error("bad smem class");
 
-    braces = (token == T_LBRACE);       /* Remember if have braces */
-    if (!braces && lev == 0)            /* Izing with struct/union expr? */
-        {
-        if (!izautof)                   /* Can only do if auto */
-            {
+    braces = (token == T_LBRACE);
+    if (!braces && lev == 0) {
+        if (!izautof) {
             error("Static struct/union initializer must be enclosed in braces");
-            return pizlist();           /* Flush entire izer */
-            }
-        e = pexizer(lev);               /* Get struct/union expr */
-        if (e && !cmputype(t, e->Ntype))
-            {
+            return pizlist();
+        }
+        e = pexizer(lev);
+        if (e && !cmputype(t, e->Ntype)) {
             error("Struct/union initializer has wrong type");
             pizlist();
-            }
-        return e;
         }
+        return e;
+    }
 
-    /* Now loop through structure members, reading an initializer for each.
-    ** Note that first thing in list has its type set either to
-    ** the overall type being initialized, if a struct, or the first
-    ** member of the union, if a union.  This is for genadata() in CCGEN1.
-    */
-    if (braces)
-        nextoken();                     /* Skip over left-brace */
-    root = n = ndeftl(N_IZLIST,                 /* Start list, */
-                (isunion ? smem->Stype : t),    /* giving its type. */
-                piztype(smem->Stype, 1));       /* Parse 1st member */
-
-    if (!braces)
-        {
-        while (token == T_COMMA)
-            {
-            if (isunion
-              || (smem = smem->Ssmnext)==NULL)  /* Stop if no more members */
+    if (!braces) {
+        /* Preserve the historical inner-list positional parser. */
+        smem = first;
+        root = slot = ndeftl(N_IZLIST, (isunion ? smem->Stype : t),
+                             piztype(smem->Stype, 1));
+        while (token == T_COMMA) {
+            if (isunion || (smem = smem->Ssmnext) == NULL)
                 return root;
-            if (smem->Sclass != SC_MEMBER)      /* Paranoia check */
-                int_error("bad smem class");
-            if (nextoken() == T_RBRACE)         /* Skip comma, allow ",}" */
+            if (nextoken() == T_RBRACE)
                 return root;
-            n = n->Nright = ndefl(N_IZLIST,     /* Parse element and add in */
-                                piztype(smem->Stype, 1));
-            }
+            slot = slot->Nright = ndefl(N_IZLIST, piztype(smem->Stype, 1));
+        }
         if (token != T_RBRACE)
             error("Bad initializer list syntax");
         return root;
-        }
-    else        /* Have braces, life is more complicated */
-        {
-        while (token == T_COMMA)
-            {
-            if (nextoken() == T_RBRACE) /* Skip comma, allow ",}" */
-                break;                  /* Stop when done */
-            if (isunion || (smem = smem->Ssmnext) == NULL)
-                {
-                error("Too many members in initializer list");
-                pizflush(1);                    /* Flush rest of list */
-                if (token == T_RBRACE)
-                    nextoken();
-                return root;
-                }
-            if (smem->Sclass != SC_MEMBER)      /* Paranoia check */
-                int_error("bad smem class");
-            n = n->Nright = ndefl(N_IZLIST,     /* Parse element and add in */
-                                piztype(smem->Stype, 1));
+    }
+
+    nextoken();
+    root = NULL;
+    smem = first;
+    curidx = 0;
+    haveitem = 0;
+
+    while (token != T_RBRACE && token != T_EOF) {
+        designated = 0;
+        if (token == Q_DOT) {
+            if (nextoken() != Q_IDENT) {
+                error("Member name required after . in initializer");
+                pizflush(1);
+                break;
             }
-        /* Check for proper ending */
-        if (token != T_RBRACE)
-            {
-            error("Bad initializer list syntax");
-            pizflush(1);                /* Flush inside of list */
-            if (token == T_RBRACE)
-                nextoken();             /* Flush end close-brace if one */
-            return root;
+            desidx = 0;
+            found = izmember(t, csymbol, &desidx);
+            if (csymbol->Sclass == SC_UNDEF)
+                freesym(csymbol);
+            if (found == NULL) {
+                error("Unknown struct/union member in initializer");
+                pizflush(1);
+                break;
             }
-        nextoken();                     /* Skip close-brace */
+            smem = found;
+            curidx = desidx;
+            nextoken();
+            designated = 1;
         }
 
+        if (smem == NULL) {
+            error("Too many members in initializer list");
+            pizflush(1);
+            break;
+        }
+
+        if (isunion) {
+            if (root == NULL)
+                root = ndeftl(N_IZLIST, t, NULL);
+            slot = root;
+            root->Ntype = t;
+            root->Nizmem = smem;
+        } else
+            slot = izlistslot(&root, t, curidx);
+        slot->Nleft = designated ? pizdesigvalue(smem->Stype)
+                                 : piztype(smem->Stype, 1);
+        haveitem = 1;
+
+        if (!isunion) {
+            smem = smem->Ssmnext;
+            ++curidx;
+        } else
+            smem = NULL;
+
+        if (token != T_COMMA)
+            break;
+        if (nextoken() == T_RBRACE)
+            break;
+        if (isunion) {
+            if (token != Q_DOT) {
+                error("Too many members in union initializer list");
+                pizflush(1);
+                break;
+            }
+            smem = first;       /* The designator will select the member. */
+        }
+    }
+
+    if (!haveitem) {
+        error("Null initializer");
+        if (root == NULL)
+            root = ndeftl(N_IZLIST, t, NULL);
+    }
+    if (token != T_RBRACE) {
+        error("Bad initializer list syntax");
+        pizflush(1);
+        if (token == T_RBRACE)
+            nextoken();
+    } else
+        nextoken();
     return root;
 }
-
+
 /* PIZARRAY - Parse initializer for an array.
+** Supports C99 array designators ([constant-index] = value).  Sparse
+** designators are normalized into the existing positional initializer list.
 */
 static NODE *
 pizarray(TYPE *t, int lev)
 {
-    register TYPE *subt;
-    NODE *n, *root;
-    INT size, cnt;
-    int braces, gotstr = 0;
+    TYPE *subt;
+    NODE *n, *root, *slot, *value;
+    INT cnt, idx, maxidx, limit;
+    int braces, gotstr, designated;
 
-    if (clevel < CLEV_ANSI && izautof)                  /* Complain now */
+    if (clevel < CLEV_ANSI && izautof)
         error("Initialization of auto arrays is not allowed");
+    subt = t->Tsubt;
+    if (subt == NULL) {
+        int_error("pizarray: null subt");
+        return pizlist();
+    }
+    if (t->Tsize == 0 && lev) {
+        error("Flexible or incomplete array member cannot be initialized");
+        return pizlist();
+    }
 
-    if (((subt = t->Tsubt) == NULL)     /* Paranoia - must have subtype */
-      || (t->Tsize == 0 && lev))        /* Unknown size only OK for top lev */
-        {
-        int_error("pizarray: %s",
-                        (!subt) ? "null subt" : "no inner array size");
-        return pizlist();               /* Flush entire izer */
-        }
-
-    braces = (token == T_LBRACE);       /* Remember whether have braces */
+    braces = (token == T_LBRACE);
     if (braces)
-        nextoken();             /* Skip over left-brace */
+        nextoken();
 
-    /* Now handle first array element.  Requires some special hackery
-    ** for initializing array of char with a string literal.
-    */
-    if (tischar(subt) && token == T_SCONST)     /* Char array, and str lit? */
-        {
-        if ((n = pexizer(1)) == NULL || n->Nop != N_SCONST)
-            {
-            int_error("pizarray: bad sconst");  /* Paranoia check */
+    /* Keep the historical string-literal special case. */
+    gotstr = 0;
+    if (tischar(subt) && token == T_SCONST) {
+        n = pexizer(1);
+        if (n == NULL || n->Nop != N_SCONST) {
+            int_error("pizarray: bad sconst");
             return NULL;
-            }
-        ++gotstr;                       /* Got string, set flag! */
-        cnt = n->Nsclen;                /* Set # of elements acquired */
-        if (braces && token == T_COMMA) /* Permit {"str",} */
-            nextoken();
         }
-    else
-        {
-        if (!braces && lev == 0)
-            {
+        gotstr = 1;
+        cnt = n->Nsclen;
+        root = ndeftl(N_IZLIST, t, n);
+        if (braces && token == T_COMMA)
+            nextoken();
+    } else {
+        if (!braces && lev == 0) {
             error("Outer array initializer must be enclosed in braces");
             pizflush(1);
             return NULL;
-            }
-        n = piztype(subt, 1);           /* Parse 1st element of subtype */
         }
+        root = NULL;
+        idx = 0;
+        maxidx = -1;
+        limit = (t->Tsize == 0) ? ((unsigned)(~0) >> 1) : t->Tsize;
 
-    /* Now loop through list, reading array elements (unless had a string).
-    ** If brace-enclosed, read infinite elements up to closing brace, else
-    ** stop when read just enough elements.
-    ** Note that first node on list has its type set to the overall type
-    ** of the array; this is for genadata() in CCGEN1.
-    */
-    root = n = ndeftl(N_IZLIST, t, n);          /* Put 1st into list */
-
-    if (!gotstr)
-        {
-        size = (braces ? size = ((unsigned)(~0)>>1)     /* Inf if braces */
-                        : t->Tsize);
-        for (cnt = 1; token == T_COMMA && cnt < size; ++cnt)
-            {
-            if (nextoken() == T_RBRACE)         /* Skip comma, allow ",}" */
+        while (token != T_RBRACE && token != T_EOF) {
+            designated = 0;
+            if (token == T_LBRACK) {
+                nextoken();
+                idx = pconst();
+                if (idx < 0) {
+                    error("Array designator index must not be negative");
+                    idx = 0;
+                }
+                if (token != T_RBRACK) {
+                    error("] required after array designator");
+                    pizflush(1);
+                    break;
+                }
+                nextoken();
+                designated = 1;
+            }
+            value = designated ? pizdesigvalue(subt) : piztype(subt, 1);
+            if (idx >= limit) {
+                error("Array designator index exceeds array bounds");
+            } else {
+                slot = izlistslot(&root, t, idx);
+                slot->Nleft = value;
+                if (idx > maxidx)
+                    maxidx = idx;
+            }
+            ++idx;
+            if (token != T_COMMA)
                 break;
-            n = n->Nright = ndefl(N_IZLIST,     /* Parse element and add in */
-                                        piztype(subt, 1));
-            }
+            if (nextoken() == T_RBRACE)
+                break;
         }
+        cnt = maxidx + 1;
+        if (root == NULL)
+            root = ndeftl(N_IZLIST, t, NULL);
+    }
 
-    /* Now either fix up size of array, or check it against # elems we found */
-    if (t->Tsize == 0)                  /* If setting size, cnt always OK */
-        root->Ntype = izsym->Stype = findctype(TS_ARRAY,
-                t->Tflag,               /* Keep same flags */
-                cnt, subt);
-    else if (cnt > (INT) (t->Tsize))            /* Complain if too many */ // FW KCC-NT
-        {
-        if (gotstr)
-            {
-            if (cnt-1 > (INT) (t->Tsize))       /* For string, permit NUL omission */ // FW KCC-NT
-                error("String exceeds char array bounds");
-            }
-        else
-            error("Too many elements in array initializer list");
-        }
+    if (t->Tsize == 0)
+        root->Ntype = izsym->Stype = findctype(TS_ARRAY, t->Tflag, cnt, subt);
+    else if (gotstr && cnt-1 > (INT)t->Tsize)
+        error("String exceeds char array bounds");
 
-    /* Type checked out, do final checking for valid terminator and return */
-    if (braces)                         /* If brace-enclosed, */
-        {
+    if (braces) {
         if (token == T_RBRACE)
-            nextoken(); /* must end in right brace */
-        else
-            {
+            nextoken();
+        else {
             error("Bad initializer list syntax");
-            pizflush(1);                        /* Flush inner list */
+            pizflush(1);
             if (token == T_RBRACE)
                 nextoken();
-            }
         }
-    else if ((!gotstr || lev) && token != T_COMMA && token != T_RBRACE)
+    } else if ((!gotstr || lev) && token != T_COMMA && token != T_RBRACE)
         error("Bad initializer list syntax");
-
-    return root;                        /* Done, return N_IZLIST! */
+    return root;
 }
-
+
 /* PEXIZER - Parse single initializer expression.
 **      Should be only one expression; outermost braces are allowed.
 **      Never returns a list; complains and fixes up as necessary.
@@ -3283,7 +5346,7 @@ pexizer(int lev)                /* 0 if outermost level */
 
     if (token != T_LBRACE)
         {
-        if (!izautof || lev)
+        if (!izautof)
             return exprconst();                 /* need constant */
         else if (optpar)
             return evalexpr(asgnexpr());        /* want constant folding */
@@ -3311,7 +5374,7 @@ pexizer(int lev)                /* 0 if outermost level */
         while (n->Nop == N_IZLIST && (n = n->Nleft) != NULL)
             ;
         }
-    return (optpar || !izautof || lev)  /* If want or need constant */
+    return (optpar || !izautof)  /* If want or need constant */
                 ?  evalexpr(n)          /* evaluate parse result */
                 : n;
 }
@@ -3403,6 +5466,9 @@ nisconst(NODE *e)
         case N_SCONST:
             return 2;           /* Address */
 
+        case N_ACONST:
+            return 2;           /* Label address */
+
         case Q_IDENT:
                 /* Identifier.  See documentation for Q_IDENT in INTERN.DOC
                 ** for explanation of this method of testing.
@@ -3416,6 +5482,20 @@ nisconst(NODE *e)
         case N_ADDR:
             switch (e->Nleft->Nop)
                 {
+                case N_COMPLIT:
+                    /* File-scope compound literals have static storage
+                    ** duration, so their address is a valid static
+                    ** initializer constant.  Block-scope literals use an
+                    ** automatic hidden object and therefore are not.
+                    */
+                    if (e->Nleft->Nleft != NULL
+                      && e->Nleft->Nleft->Nop != N_DATA
+                      && e->Nleft->Nright != NULL
+                      && e->Nleft->Nright->Nop == Q_IDENT
+                      && e->Nleft->Nright->Nid->Sclass == SC_ISTATIC)
+                        return 2;
+                    return 0;
+
                 case N_PTR:
                     return nisconst(e->Nleft->Nleft);
 
@@ -3521,6 +5601,7 @@ q_member_label:
                 && nisconst(e->Nright) == 2)    /* plus address */
                 return 2;
             /* Fall through into Q_MINUS code */
+        /* FALLTHROUGH */
         case Q_MINUS:
             if (nisconst(e->Nleft) == 2         /* Address */
               && e->Nright->Nop == N_ICONST)    /* plus/minus integ constant */
@@ -3642,8 +5723,7 @@ errtwotyp(SYMBOL *d, SYMBOL *s)         /* New decl sym and existing sym */
 }
 
 static void
-errdupsym(s)
-SYMBOL *s;
+errdupsym(struct symbol * s)
 {
     error("Symbol %S previously defined", s);
 }
@@ -3681,3 +5761,4 @@ Set_Register (SYMBOL *s, int rarg, int arg)
             }
         }
     }
+

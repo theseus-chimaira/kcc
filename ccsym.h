@@ -394,6 +394,17 @@ enum symbolspec {
 #define SF_MEMBER	01000	/* SC_MEMBER only: overloading class flag */
 #define SF_TAG		02000	/* SC_TAG/SC_UTAG only: ditto */
 #define SF_LABEL	04000	/* SC_LABEL/SC_ULABEL only: ditto */
+#define SF_ABIREG	010000	/* Parameter initialized directly from ABI AC */
+#define SF_ADDRTAKEN	020000	/* Parameter has an explicit address use */
+#define SF_ABICONSUME	040000	/* Read-once ABI pair may be used in place */
+#define SF_NORETURN	0100000	/* Function is declared not to return */
+#define SF_NOINLINE	0200000	/* Function must not be inlined */
+#define SF_INLINE	0400000	/* Function was declared inline */
+#define SF_ALIGN2	01000000	/* GNU aligned(2): halfword alignment */
+#define SF_ALIGN4	02000000	/* GNU aligned(4+) or aligned: word alignment */
+#define SF_PACKED	04000000	/* GNU packed aggregate/member */
+#define SF_MAYBITMEM	010000000	/* Auto aggregate may retain TF_MAYBITPTR */
+#define SF_MACVAR	020000000	/* SC_MACRO only: C99 variadic macro */
 #define SF_OVCLS (SF_MACRO|SF_MEMBER|SF_TAG|SF_LABEL)	/* All ov classes */
 
 
@@ -438,7 +449,8 @@ enum symbolspec {
 */
 
 TYPE {
-    char Tspec;			/* Type specifier, set to a TS_ value */
+    unsigned char Tspec;		/* Type specifier, set to a TS_ value */
+    unsigned short Tbytes;	/* Exact C-byte extent for packed aggregate */
     INT Tflag;			/* Flags, plus size in bits (mask 0777) */
     union {
 	unsigned INT t_int;	/* Size in words, or # elements. */
@@ -703,7 +715,9 @@ TYPE {
     typespec(TS_UCHAR,"u_char",  TGSIZ_CHAR, TF_UINTEG+TF_CHAR) \
     typespec(TS_USHORT,"u_short",TGSIZ_SHORT,TF_UINTEG) \
     typespec(TS_UINT, "u_int",   TGSIZ_INT,  TF_UINTEG) \
-    typespec(TS_ULONG,"u_long",  TGSIZ_LONG, TF_UINTEG)
+    typespec(TS_ULONG,"u_long",  TGSIZ_LONG, TF_UINTEG) \
+    typespec(TS_LONGLONG,"long long", TGSIZ_LONGLONG, TF_INTEG) \
+    typespec(TS_ULONGLONG,"u_long long", TGSIZ_LONGLONG, TF_UINTEG)
 
 /* Define values for Tspec */
 
@@ -732,6 +746,7 @@ enum typespecs {
 #define TF_BITF		0400000L /* Bitfield type */
 #define TF_STRUCT	01000000L /* Struct or Union type */
 #define TF_BYTE		02000000L /* Byte (non-word) type (MACH DEPENDENT) */
+#define TF_BOOL         010000000000L /* C99 _Bool semantic type */
 
 #define TF_SICONST	04000000L  /* Struct/union with inner "const" */
 #define TF_SIVOLAT	010000000L /* Struct/union with inner "volatile" */
@@ -739,6 +754,9 @@ enum typespecs {
 #define TF_FORTRAN      0100000000L /* fortran attribute for functions */
 #define TF_BLISS        0200000000L /* bliss attribute for functions */
 #define TF_INTERRUPT	0400000000L /* FW 2A(52) interrupt fn qualifier */
+#define TF_PACKEDPTR	01000000000L /* pointer into GNU packed byte stream */
+#define TF_BITPTR	02000000000L /* S=1 pointer to exact packed bit position */
+#define TF_MAYBITPTR	04000000000L /* function-boundary ptr may be S=1 */
 #endif
 
 /* Combos */
@@ -754,6 +772,25 @@ enum typespecs {
 #define tisstructivolat(t)	(((t)->Tflag&TF_SIVOLAT)!=0)
 #define tisanyvolat(t)		(((t)->Tflag&(TF_VOLATILE|TF_SIVOLAT))!=0)
 #define tisinteg(t)		(((t)->Tflag&TF_INTEG)!=0)
+#define tisdimode(t)		((t) && sizetype(t) == 2 && !tisfloat(t))
+#define dimode_hi36mask()	((unsigned long long)0777777777777ULL)
+#define dimode_lo35mask()	((unsigned long long)0377777777777ULL)
+#define dimode_word_signbit()	((unsigned long long)0400000000000ULL)
+#define dimode_wd36mask()	dimode_hi36mask()
+#define dimode_hi_negative(hi)	(((unsigned long long)(hi) & dimode_word_signbit()) != 0)
+#define dimode_lo_expand(hi, lo)	((INT)((lo) & dimode_lo35mask()))
+#define dimode_lo_signcopy(hi, lo)	((INT)((lo) & dimode_lo35mask()))
+#define dimode_lo_abi(hi, lo)\
+    ((INT)((lo) & dimode_lo35mask()))
+#define dimode_sighi(lo)	\
+    ((((unsigned long long)(lo) & dimode_word_signbit()) != 0) ? (INT)(-1) : 0)
+#define dimode_iconst_words(n, hip, lop) do { \
+    INT _di_lo = (n)->Niconst; \
+    INT _di_hi = ((n)->Nflag & NF_WIDE) ? (n)->n_var1.n_int \
+        : (tisunsign((n)->Ntype) ? 0 : dimode_sighi(_di_lo)); \
+    *(hip) = _di_hi & dimode_hi36mask(); \
+    *(lop) = _di_lo & dimode_lo35mask(); \
+} while (0)
 #define tisfloat(t)		(((t)->Tflag&TF_FLOAT)!=0)
 #define tisarith(t)		(((t)->Tflag&(TF_INTEG+TF_FLOAT))!=0)
 #define tisscalar(t)	(((t)->Tflag&(TF_INTEG+TF_FLOAT+TF_SCALAR))!=0)
@@ -763,6 +800,12 @@ enum typespecs {
 #define tissigned(t)		(!tisunsign(t))		     /* signed    */
 #define tisstruct(t)	(((t)->Tflag&TF_STRUCT)!=0)  /* struct or union   */
 #define tisbyte(t)	(((t)->Tflag&TF_BYTE)!=0) /* Byte (non-word) object */
+#define tisbool(t)      ((t) && (((t)->Tflag&TF_BOOL)!=0))
+#define tispackedptr(t) ((t) && (t)->Tspec == TS_PTR && ((t)->Tflag & TF_PACKEDPTR))
+#define tisbitptr(t) ((t) && (t)->Tspec == TS_PTR && ((t)->Tflag & TF_BITPTR))
+#define tismaybitptr(t) ((t) && (t)->Tspec == TS_PTR && ((t)->Tflag & TF_MAYBITPTR))
+#define tispacked(t)	((t) && ((t)->Tspec == TS_STRUCT || (t)->Tspec == TS_UNION) \
+			 && (t)->Tbytes != 0)
 
 /* Similar functions too complex for macros */
 #define tischarpointer tischp	/* External name disambiguation */
@@ -808,6 +851,8 @@ extern INT tfltab[];	/* Flag table, kept in CCDATA */
     /* Casts to Pointer Type */\
 	castspec(CAST_PT_PT,"pt_pt")	/* from Pointer Type */\
 	castspec(CAST_IT_PT,"it_pt")	/* from Integer Type */\
+    /* C99 truth-value conversion */\
+	castspec(CAST_BOOL,"bool")\
     /* Misc casts */\
 	castspec(CAST_AR_PA,"ar_pa")	/* Array -> Ptr to 1st element */\
 	castspec(CAST_FN_PF,"fn_pf")	/* Function -> Pointer to Function */\

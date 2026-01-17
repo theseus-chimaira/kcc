@@ -11,6 +11,7 @@
 #define R_ZERO		000	/* AC0, never used for many reasons */
 #define R_RETVAL	001	/* register for subroutine return */
 #define R_RETDBL	002	/* second return for doublewords */
+#define R_ABITMP	006	/* volatile ABI prologue/epilogue temporary */
 #define R_SCRREG	016	/* scratch for CCOUT */
 #define R_FAP		016	/* Also use as Fortran Arg Pointer reg */
 #define	R_SP		017	/* push down Stack Pointer */
@@ -42,11 +43,15 @@ VREG
 				** set it)
 				*/
 #define VR_RETVAL &vr_retval	/* Constant virtual regs */
+#define VR_RETDBL &vr_retdbl
 #define VR_SP &vr_sp
-extern VREG vr_retval, vr_sp;	/* Initialized in CCREG */
+extern VREG vr_retval, vr_retdbl, vr_sp;	/* Initialized in CCREG */
 
 /* FW 2A(47) */
-#define Register_Nopreserve(r) (((r) <= r_maxnopreserve) || ((r) > R_MAXREG))
+#define Register_CallVolatile(r) (((r) <= r_maxnopreserve) || \
+    ((r) > R_MAXREG))
+#define Register_Nopreserve(r) (Register_CallVolatile(r) && \
+    !(fnargkeepmask & (1 << (r))))
 #define Register_Preserve(r)  (((r) > r_maxnopreserve) && ((r) <= R_MAXREG))
 
 #define Register_Id(node)  ((node)->Nop == Q_IDENT &&	\
@@ -62,23 +67,24 @@ extern VREG vr_retval, vr_sp;	/* Initialized in CCREG */
 extern VREG vr_zero, vr_fap;
 
 /* Virtual Register routines, in CCREG */
-extern void vrinit(),		/* Init regs for new routine */
-	vrendchk();		/* Check regs at end of routine */
-extern VREG *vrget(), *vrdget();	/* Allocate virtual register or pair */
-extern VREG *vrretget(), *vrretdget();	/* Same but use return-value regs */
-extern void vrfree();		/* Release vreg */
-extern void vrset();		/* Capture vreg */
-extern void vrallspill();	/* Spill all active regs onto stack */
-extern VREG *vrwiden();		/* Widen a vreg into a pair */
-extern void vrlowiden();	/* Common case: widen vreg in low direction */
-extern void vrnarrow();		/* Narrow a vreg pair into single vreg */
-extern int vrreal();		/* Get real reg # for active virtual reg */
-extern int vrtoreal();		/* Ensure reg is active, return real # */
-extern int vrstoreal();		/* Same for 2 regs, return # of 1st */
-extern int vrispair();		/* TRUE if vreg is 1st of a vreg pair */
-extern void vrufcreg();		/* Undo MOVE of failed changereg w/o freeing*/
-extern int rfree();		/* TRUE if real register is assigned */
-extern void rset();		/* sets a real register */
+extern void vrinit(void),		/* Init regs for new routine */
+	vrendchk(void);		/* Check regs at end of routine */
+extern VREG *vrget(void), *vrdget(void), *vrdgetreg(int);
+	/* Allocate virtual register or pair, optionally at a fixed pair */
+extern VREG *vrretget(void), *vrretdget(void);	/* Same but use return-value regs */
+extern void vrfree(VREG *);		/* Release vreg */
+extern void vrallspill(void);	/* Spill all active regs onto stack */
+extern void vrspillothers(VREG *, VREG *); /* Spill all except two values */
+extern void vrunspillall(void);	/* Reload all spilled regs from stack */
+extern VREG *vrwiden(VREG *, int);		/* Widen a vreg into a pair */
+extern void vrlowiden(VREG *);	/* Common case: widen vreg in low direction */
+extern void vrnarrow(VREG *);		/* Narrow a vreg pair into single vreg */
+extern int vrreal(VREG *);		/* Get real reg # for active virtual reg */
+extern int vrtoreal(VREG *);		/* Ensure reg is active, return real # */
+extern int vrstoreal(VREG *, VREG *);		/* Same for 2 regs, return # of 1st */
+extern int vrispair(VREG *);		/* TRUE if vreg is 1st of a vreg pair */
+extern void vrufcreg(VREG *);		/* Undo MOVE of failed changereg w/o freeing*/
+extern int rfree(int);		/* TRUE if real register is assigned */
 #if 0
  extern int rhasval();		/* TRUE if real register has a value */
 #endif
@@ -91,12 +97,17 @@ extern void rset();		/* sets a real register */
 
 /* Register bit routines, in CCOPT */
 
-extern int rbref(), rbset(), rbmod(), rbuse(), rbchg(), rbin();
+struct pcode;
+extern int rbref(struct pcode *), rbset(struct pcode *), rbmod(struct pcode *),
+    rbuse(struct pcode *), rbchg(struct pcode *), rbin(struct pcode *);
+extern int rruse(struct pcode *, int), rrchg(struct pcode *, int);
 #if 0	/* 5/91 KCC size */
-extern int rrref(), rrset(), rrmod(), rruse(), rrchg(), rrin();
+extern int rrref(), rrset(), rrmod(), rrin();
 #endif
-extern int rbincode(), rbinreg(), rbinaddr();
-extern int rincode(), rinreg(), rinaddr();
+extern int rbincode(struct pcode *), rbinreg(struct pcode *),
+    rbinaddr(struct pcode *);
+extern int rincode(struct pcode *, int), rinreg(struct pcode *, int),
+    rinaddr(struct pcode *, int);
 
 /* Array of register bits indexed by register #, for faster use. */
 

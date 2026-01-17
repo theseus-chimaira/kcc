@@ -15,19 +15,20 @@
 #include <sys/types.h>			/* For stat(), for symval stuff */
 #include <sys/stat.h>
 
-#if !__MSDOS__ 							// FW KCC-NT
+#if !__MSDOS__ && !HOST_UNIX					// FW KCC-NT
  #include <sys/file.h>			/* For open() */
 #endif
 
 #include <errno.h>			/* For strerror */
 #include <string.h>			/* For strchr etc */
 
-#if !__MSDOS__							// FW KCC-NT
+#if !__MSDOS__ && !HOST_UNIX					// FW KCC-NT
  #include <frkxec.h>			/* New stuff */
 #endif
 
-#if __MSDOS__				/* 4/92 avoid non-ANSI stat() */
+#if __MSDOS__ || HOST_UNIX		/* 4/92 avoid non-ANSI stat() */
  #define stats stat			/* just use stat() function */
+static char stats_parse = 0;
 #else
 
  #ifdef mod /* KAR-4/92, remove collision with mod in comdef (boom!) */
@@ -42,14 +43,14 @@
 
 int	    stats (char *source_fname, struct stat *statb);
 static
-int	    long to_sixbit (char *str);
+INT	    to_sixbit (char *str);
 static
 char	    stats_parse = 0;
 #endif
 
 #include <stdio.h>
 
-#if !__MSDOS__							// FW KCC-NT
+#if !__MSDOS__ && !HOST_UNIX					// FW KCC-NT
  #define _getpid(_pid)  ((MUUO_VAL("PJOB", &_pid)), _pid)
 
  #include <muuo.h>	/* For TMPCOR etc */
@@ -61,11 +62,11 @@ char	    stats_parse = 0;
 #endif
 
 #ifndef LH
- #define LH (-1<<18)	/* Mask for LH */
+ #define LH (((INT)0777777) << 18)	/* Mask for LH of a 36-bit word */
 #endif
 
 #ifndef XWD		/* Put halves together */
- #define XWD(a,b) (((unsigned)(a)<<18) | ((unsigned)(b)&RH))
+ #define XWD(a,b) (((INT)(a) * 01000000L) + ((INT)(b)&RH))
 #endif
 
 /* Exported routines */
@@ -81,7 +82,7 @@ INT	    sixbit (char *);
 
 /* Imported routines */
 
-#if !SYS_CSI /* KAR-3/92, removed LIBC dependency, use ANSI calls */
+#if !SYS_CSI && !HOST_UNIX /* KAR-3/92, removed LIBC dependency, use ANSI calls */
 
 extern
 int	    open (char *path, int flags),		/* , int mode)?? */
@@ -116,6 +117,11 @@ int*	    maktflink (int, char **, char *, char *),
 	    crsfunv (char *, long),
 	    hackfork (char *, int *, int, int, int),
 	    ldsymfile (char *);
+static
+char*	    eputn (char *, char *, int),
+	   *eputdec (char *, int),
+	   *eputdec3 (char *, int),
+	   *eputtmpnam (char *, char *, int);
 
 #if DEBUG_KCC	/* 8/91 KCC size */
 static
@@ -129,12 +135,83 @@ int	    asmtflen = 0;	/* Length not including trailing NUL */
 
 /* BP7 - macro to convert a char ptr into a 7-bit byte pointer */
 
-#if __MSDOS__
+#if __MSDOS__ || HOST_UNIX
+#if HOST_UNIX
+extern int getpid(void);
+#define _getpid(_pid)  getpid()
+#else
 #include <process.h>	/* getpid() */
+#endif
 #define bp7(cp) ((char *)(cp))
 #else
 #define bp7(cp) ((char *)(int)(_char7 *)(cp))
 #endif
+
+static char *
+eputn(char *d, char *s, int n)
+{
+    while (n-- > 0 && *s)
+	*d++ = *s++;
+    *d = '\0';
+    return d;
+}
+
+static char *
+eputdec(char *d, int v)
+{
+    char buf[16];
+    int i;
+    unsigned int u;
+
+    if (v < 0)
+	{
+	*d++ = '-';
+	u = (unsigned int)(-(v + 1)) + 1;
+	}
+    else
+	u = (unsigned int)v;
+
+    i = 0;
+    do
+	{
+	buf[i++] = (char)('0' + (u % 10));
+	u /= 10;
+	}
+    while (u != 0);
+
+    while (--i >= 0)
+	*d++ = buf[i];
+    *d = '\0';
+    return d;
+}
+
+static char *
+eputdec3(char *d, int v)
+{
+    unsigned int u = (unsigned int)v;
+
+    if (u < 100)
+	*d++ = '0';
+    if (u < 10)
+	*d++ = '0';
+    return eputdec(d, v);
+}
+
+static char *
+eputtmpnam(char *d, char *name, int pid)
+{
+#if HOST_UNIX
+    (void)pid;
+    d = eputdec3(d, getpid() & 0777);
+#elif !__MSDOS__
+    d = estrcpy(d, "DSK:");
+    d = eputdec3(d, ((pid == 0) ? _getpid(pid) : pid));
+#else
+    d = eputdec3(d, getpid());
+#endif
+    d = eputn(d, name, 3);
+    return estrcpy(d, ".TMP");
+}
 
 /*
 Description of COMPIL (or RPG) argument passing mechanism.
@@ -191,15 +268,21 @@ asmb (char *m, char *f1, char *f2)
     int		n;
 
 
-    sprintf (str, "%s%s=%s%s%s%s%s\n",
-	     m,				/* Specify output file name */
-	     (longidents ? "/k" : ""),	/* FW 2A(51) Using long identifiers? */
-	     (f1 ? f1 : ""),		/* Specify 1st input file if one */
-	     ((f1 && delete) ? "/d" : ""), /* delete asm source  */
-	     (f1 && f2) ? "," : "",	/* Use separator if 2 inputs */
-	     (f2 ? f2 : ""),		/* Specify 2nd input file if exists */
-	     ((f2 && delete && (!mlist)) ? "/d" : ""));
-					/* Specify delete asm source */
+    nptr = str;
+    nptr = estrcpy(nptr, m);		/* Specify output file name */
+    if (longidents)			/* FW 2A(51) Using long identifiers? */
+	nptr = estrcpy(nptr, "/k");
+    *nptr++ = '=';
+    nptr = estrcpy(nptr, (f1 ? f1 : ""));	/* Specify 1st input file if one */
+    if (f1 && delete)			/* delete asm source */
+	nptr = estrcpy(nptr, "/d");
+    if (f1 && f2)			/* Use separator if 2 inputs */
+	*nptr++ = ',';
+    nptr = estrcpy(nptr, (f2 ? f2 : ""));	/* Specify 2nd input file if exists */
+    if (f2 && delete && (!mlist))		/* Specify delete asm source */
+	nptr = estrcpy(nptr, "/d");
+    *nptr++ = '\n';
+    *nptr = '\0';
 
     /* Add new command to assembler's saved TMPCOR file block */
 
@@ -210,7 +293,7 @@ asmb (char *m, char *f1, char *f2)
     else
 	{
 	asmtfptr = nptr;
-	strcpy (asmtfptr + asmtflen, str); /* Add new cmd to end */
+	estrcpy (asmtfptr + asmtflen, str); /* Add new cmd to end */
 	asmtflen += n;
 	}
 
@@ -375,6 +458,7 @@ gtmpfile(char *name)
     char tmpfile[20];		/* For DSK:nnnNAM.TMP */
     int pid = 0;
 
+#if !HOST_UNIX
     /* See if TMPCOR UUO has anything for us */
 	{
 	INT argblk[2];
@@ -405,16 +489,10 @@ gtmpfile(char *name)
 #endif
 	    }
 	}
+#endif
 
     /* Try opening a .TMP file */
-    sprintf(tmpfile,
-#if !__MSDOS__
-	/* KAR-3/92, use new _getpid() macro instead of routine in LIBC */
-	"DSK:%03.3d%.3s.TMP", ((pid == 0) ? _getpid(pid) : pid)
-#else
-	"%03.3d%.3s.TMP", getpid()
-#endif
-		    , name);
+    eputtmpnam(tmpfile, name, pid);
     if ((tf = fopen(tmpfile, "r")) == NULL)
 	return NULL;
 #define TMPBSIZ (0400*sizeof(int))		/* # chars in incr blk */
@@ -491,7 +569,7 @@ stmpfile(char *name, char *str, char *nextprog)
 
 	argblk[0] = sixbit(name) & ~RH;		/* Set up TMPCOR arg blk */
 	argblk[1] = XWD(-nwds, ((int *)str)-1);
-	strcpy(bp7(str), str); /* Make 7-bit buff */
+	estrcpy(bp7(str), str); /* Make 7-bit buff */
 	if (MUUO_AC("TMPCOR", XWD(uuosym(".TCRWF"),argblk)) > 0)
 	    {
 	    if (cp)
@@ -505,13 +583,7 @@ stmpfile(char *name, char *str, char *nextprog)
 #endif
 
     /* Can't use PRARG% or TMPCOR, make .TMP file */
-    sprintf(tmpfile,
-#if __MSDOS__
-	"%03.3d%.3s.TMP",   getpid() & 0777,
-#else
-	"DSK:%03.3d%.3s.TMP", ((pid == 0) ? _getpid(pid) : pid),
-#endif
-		    name);
+    eputtmpnam(tmpfile, name, pid);
     if ((tf = fopen(tmpfile, "w")) == NULL)
 	{
 	errfopen("output TMP", tmpfile);
@@ -550,8 +622,10 @@ maktflink (int argct, char **argvt, char *ofilename, char *nextprog)
 
     t = tmpfile;
 
-    sprintf (t, "/define:$stksz:%d\n", stksz);	/* define stack size */
-    t += strlen (t);
+    t = estrcpy(t, "/define:$stksz:");	/* define stack size */
+    t = eputdec(t, stksz);
+    *t++ = '\n';
+    *t = '\0';
 
     if (profbliss)
 
@@ -590,10 +664,16 @@ maktflink (int argct, char **argvt, char *ofilename, char *nextprog)
 #ifdef	MULTI_SECTION /* FW 2A(51) */
     if (ldpsectf)		/* Hacking PSECTs? */
 	{
-	sprintf (t,"/SET:DATA:%o/LIMIT:DATA:%o/SET:CODE:%o/LIMIT:CODE:%o\n",
-		ldpsdata.ps_beg, ldpsdata.ps_lim,
-		ldpscode.ps_beg, ldpscode.ps_lim );
-	t += strlen (t);
+	t = estrcpy(t, "/SET:DATA:");
+	t = eputoct(t, (unsigned int)ldpsdata.ps_beg);
+	t = estrcpy(t, "/LIMIT:DATA:");
+	t = eputoct(t, (unsigned int)ldpsdata.ps_lim);
+	t = estrcpy(t, "/SET:CODE:");
+	t = eputoct(t, (unsigned int)ldpscode.ps_beg);
+	t = estrcpy(t, "/LIMIT:CODE:");
+	t = eputoct(t, (unsigned int)ldpscode.ps_lim);
+	*t++ = '\n';
+	*t = '\0';
 	t = estrcpy (t, "/REDIRECT:DATA:CODE/SYMSEG:PSECT:DATA\n");
 	}
 
@@ -633,6 +713,7 @@ maktflink (int argct, char **argvt, char *ofilename, char *nextprog)
 
 		/* If -L not followed by =, drop thru and complain */
 
+		/* FALLTHROUGH */
 		default:
 		    jerr ("Internal error: bad LINK sw \"%s\"", argvt[-1]);
 		}
@@ -710,7 +791,7 @@ runlink (int linkf, int argc, char** argv, char* ofilename, char* nextprog)
 
 	if (!(ldddtf | debcsi | profbliss))
 	    {
-	    sprintf (mks_cmd_str, "%s/o\n", ofilename);
+	    estrcpy(estrcpy(estrcpy(mks_cmd_str, ofilename), "/o"), "\n");
 	    stmpfile ("MKS", mks_cmd_str, NULL);
 	    }
 
@@ -744,7 +825,7 @@ static
 int
 hackfork (char* pgmname, int* argblk, int blklen, int stoffset, int chainf)
     {
-#if !__MSDOS__							// FW KCC-NT
+#if !__MSDOS__ && !HOST_UNIX					// FW KCC-NT
     struct
     frkxec	fx;
 
@@ -767,6 +848,16 @@ hackfork (char* pgmname, int* argblk, int blklen, int stoffset, int chainf)
 #endif
 
 #else
+#if HOST_UNIX
+    (void) argblk;
+    (void) blklen;
+    (void) stoffset;
+    (void) chainf;
+#endif
+#if HOST_UNIX
+    if (vrbld)
+	fprintf(outmsgs, "Not invoking %s on this host\n", pgmname);
+#endif
 	return 1;
 #endif
 }
@@ -793,14 +884,14 @@ fnparse (char* source, char* dir, char* name, char* ext, char* suf)
 	char*		cp;
 
 
-	strcpy (buf, source);				// Make a copy we can play with.
+	estrcpy (buf, source);				// Make a copy we can play with.
 	*suf = '\0';						// Not going to return this anyhow.
 
 	cp = strrchr (buf, '.');			// Is there an extension?
 
 	if (cp)
 		{
-		strcpy (ext, cp);				// Yes: return it.
+		estrcpy (ext, cp);				// Yes: return it.
 		*cp = '\0';						// Delimit the basename.
 		}
 	else
@@ -815,9 +906,9 @@ fnparse (char* source, char* dir, char* name, char* ext, char* suf)
 		}
 	while ((cp >= buf) && (*cp != '\\') && (*cp != '/') && (*cp != ':'));
 
-	strcpy (name, ++cp);
+	estrcpy (name, ++cp);
 	*cp = '\0';
-	strcpy (dir, buf);
+	estrcpy (dir, buf);
 
 	return NULL;
 #endif
@@ -858,6 +949,7 @@ fnparse (char* source, char* dir, char* name, char* ext, char* suf)
 	    /* Now drop through to handle as if randomly terminated */
 
 	/* Check for other random word terminators */
+	    /* FALLTHROUGH */
 	    case DIRSTOP:		/* Directory */
 	    case '/':			/* Un*x-simulation directory */
 		start = ++cp;
@@ -895,6 +987,7 @@ fnparse (char* source, char* dir, char* name, char* ext, char* suf)
 		++cp;			/* Else OK, include quote char. */
 
 	/* Handle normal filename char */
+	    /* FALLTHROUGH */
 	    default:
 		++cp;
 		continue;
@@ -911,7 +1004,7 @@ fnparse (char* source, char* dir, char* name, char* ext, char* suf)
     if (devf)			/* Handle "FOO:" specially */
 	{
 	if (dir)
-	    strcpy (dir, source);
+	    estrcpy (dir, source);
 	return NULL;
 	}
     if (start != source && dir && !stats_parse)	/* Copy stuff preceding name */
@@ -927,7 +1020,7 @@ fnparse (char* source, char* dir, char* name, char* ext, char* suf)
 	}
 
     if (*cp && suf)			/* If anything left after ext, */
-	strcpy (suf, cp);		/* just copy it all. */
+	estrcpy (suf, cp);		/* just copy it all. */
 
     return NULL;			/* Say we won, no error msg! */
 #endif	/* not MSDOS */
@@ -984,21 +1077,19 @@ fstrcpy (register char *d, register char *ps, register char *fname)
 }
 
 INT
-sixbit (str)
-register char *str;
+sixbit(register char *str)
 {
     register int i = 6*6, c;
     register unsigned INT val = 0;
 
     --str;
     while (i > 0 && (c = *++str) != '\0')
-	val |= tosixbit ((char) c) << (i -= 6);	// FW KCC-NT
+	val |= (unsigned INT) tosixbit ((char) c) << (i -= 6);	// FW KCC-NT
 
     return val;
 }
 INT
-rad50 (str)
-register char *str;
+rad50 (char * str)
 {
     register char i = 6, c;
     register unsigned INT val = 0;
@@ -1092,8 +1183,7 @@ symval (char *fnam, char *sym, int valf)	/* valf=true if want symbol's value */
 **	list.
 */
 static int
-ldsymfile (fnam)
-char *fnam;
+ldsymfile (char * fnam)
 {
     register struct symfile
     *sf;
@@ -1101,7 +1191,7 @@ char *fnam;
     struct stat statb;
     int typ, nsyms, sts;
     long flen;
-    FILE *fp;
+    FILE *fp = NULL;
 
 
     /* Allocate a symfile struct, plus room for filename after it */
@@ -1113,7 +1203,7 @@ char *fnam;
 	error ("Out of memory for symfile \"%s\"", fnam);
 	return 0;
 	}
-    strcpy (sf->sf_fname, fnam);		/* Copy filename into block */
+    estrcpy (sf->sf_fname, fnam);		/* Copy filename into block */
     sf->sf_type = -1;			/* Say no contents yet */
     sf->sf_next = sfhead;		/* Link onto start of list */
     sfhead = sf;
@@ -1128,7 +1218,7 @@ char *fnam;
 	error ("Could not open symbol file \"%s\": %s",
 		    fnam, strerror (_ERRNO_LASTSYSERR));
 
-	if (fp == NULL)
+	if (fp != NULL)
 	    fclose (fp);
 	return 0;
 	}
@@ -1190,7 +1280,7 @@ char *fnam;
 }
 
 
-#if !__MSDOS__	/* 4/92 avoid non-ANSI stat () (use LIBCA) */
+#if !__MSDOS__ && !HOST_UNIX	/* 4/92 avoid non-ANSI stat () (use LIBCA) */
 
 static void ppnprs (struct _filespec
 *f, char *beg, char *end);
@@ -1214,13 +1304,18 @@ stats (char *source_fname, struct stat
 	else
 	    ppnprs (&fs, beg, end);
 
-	strncpy (nname, source_fname, (beg - source_fname));
-	strcat (nname, (end + 1));
+	{
+	char *np;
+
+	np = nname;
+	np = eputn (np, source_fname, (int)(beg - source_fname));
+	estrcpy (np, (end + 1));
+	}
 	f->lerppn = fs.fs_path.p_path.ppn;
 	}
     else
 	{
-	strcpy (nname, source_fname);
+	estrcpy (nname, source_fname);
 	f->lerppn = 0;
 	}
 
@@ -1287,10 +1382,10 @@ stats (char *source_fname, struct stat
     return 0;
 }
 
-static long
+static INT
 to_sixbit (char *str)
 {
-    long    tmp, sbit_val = 0;
+    INT     tmp, sbit_val = 0;
     short    cnt = 36;
 
     while (*str != NULL)
@@ -1304,11 +1399,11 @@ to_sixbit (char *str)
     return sbit_val;
 }
 
-#define _LHALF 0777777000000	/* Left half mask */
+#define _LHALF (((INT)0777777) << 18)	/* Left half mask */
 #define _RHALF 0777777		/* Right half mask */
 
 /* FLDGET (wd,mask)     - Get right-justified value from field in word */
-#define FLDGET(wd,mask) ( ( (unsigned) (wd)& (mask))/ ( (mask)& (- (mask))))
+#define FLDGET(wd,mask) ((((unsigned INT)(wd) & (mask)) / ((mask) & (-(mask)))))
 
 /* KAR-5/92, added to allow stats () to parse PPN numbers */
 /* beg pts to '[' and end ptrs to ']' */
@@ -1368,32 +1463,30 @@ Followed by the symbol table definitions, which are all at least
 #define UNVF_MAD 001	/* "macro arg default value bug fixed" */
 
 /* Symbol table flags */
-#define USF_SYMF (0400000L <<18) /* Symbol */
-#define	USF_TAGF (0200000L <<18) /* Tag */
-#define USF_NOUT (0100000<<18)	/* No DDT output */
-#define USF_SYNF  (040000<<18)	/* Synonym */
-#define	USF_MACF  (020000<<18)	/* Macro */
-#define USF_OPDF  (010000<<18)	/* Opdef */
-#define	USF_PNTF   (04000<<18)	/* Symtab "val" points to real 36-bit val */
-#define	USF_UNDF   (02000<<18)	/* Undefined */
-#define	USF_EXTF   (01000<<18)	/* External */
-#define	USF_INTF    (0400<<18)	/* Internal */
-#define	USF_ENTF    (0200<<18)	/* Entry */
-#define USF_VARF    (0100<<18)	/* Variable */
-#define USF_NCRF     (040<<18)	/* Don't cref this sym */
-#define	USF_MDFF     (020<<18)	/* multiply defined */
-#define	USF_SPTR     (010<<18)	/* special external pointer */
-#define USF_SUPR      (04<<18)	/* Suppress output to .REL and .LST */
-#define	USF_LELF      (02<<18)	/* LH relocatable */
-#define	USF_RELF      (01<<18)	/* RH relocatable */
+#define USF_SYMF (((INT)0400000) << 18) /* Symbol */
+#define USF_TAGF (((INT)0200000) << 18) /* Tag */
+#define USF_NOUT (((INT)0100000) << 18)	/* No DDT output */
+#define USF_SYNF (((INT)040000) << 18)	/* Synonym */
+#define USF_MACF (((INT)020000) << 18)	/* Macro */
+#define USF_OPDF (((INT)010000) << 18)	/* Opdef */
+#define USF_PNTF (((INT)04000) << 18)	/* Symtab "val" points to real 36-bit val */
+#define USF_UNDF (((INT)02000) << 18)	/* Undefined */
+#define USF_EXTF (((INT)01000) << 18)	/* External */
+#define USF_INTF (((INT)0400) << 18)	/* Internal */
+#define USF_ENTF (((INT)0200) << 18)	/* Entry */
+#define USF_VARF (((INT)0100) << 18)	/* Variable */
+#define USF_NCRF (((INT)040) << 18)	/* Don't cref this sym */
+#define USF_MDFF (((INT)020) << 18)	/* multiply defined */
+#define USF_SPTR (((INT)010) << 18)	/* special external pointer */
+#define USF_SUPR (((INT)04) << 18)	/* Suppress output to .REL and .LST */
+#define USF_LELF (((INT)02) << 18)	/* LH relocatable */
+#define USF_RELF (((INT)01) << 18)	/* RH relocatable */
 
-#define	SYM6_SYMTAB	0166371556441L	/* .SYMTAB in sixbit */
-#define	SYM6_UNVEND	0373737373737L
+#define	SYM6_SYMTAB	((INT)0166371556441)	/* .SYMTAB in sixbit */
+#define	SYM6_UNVEND	((INT)0373737373737)
 
 static int
-crsfunv (tabp, flen)
-char *tabp;			/* Location of file in memory */
-long flen;			/* # bytes in file */
+crsfunv (char * tabp, long flen)
 {
     register INT *rp;
     register INT cnt;
@@ -1409,7 +1502,7 @@ long flen;			/* # bytes in file */
 #define nextwd() (--cnt >= 0 ? *++rp : 0)
 #define skipwd(n) ( (void) (cnt -= n, rp += n))
 
-    if ( (*rp&LH) != (0777<<18))	/* Is it really a UNV file? */
+    if ( (*rp&LH) != (((INT)0777)<<18))	/* Is it really a UNV file? */
 	{
 	return -1;		/* No, say bad format. */
 	}
@@ -1449,7 +1542,7 @@ long flen;			/* # bytes in file */
 	    while (wd & LH)
 		;
 	    wd = nextwd ();
-	    if (wd & 0770000000000L)	/* possible sixbit sym? */
+	    if (wd & ((INT)0770000000000))	/* possible sixbit sym? */
 		{
 		++cnt, --rp;		/* Yes, assume no macro args */
 		continue;		/* Back up one and continue */
@@ -1497,3 +1590,5 @@ long flen;			/* # bytes in file */
     return ep - ( (struct sfent
     *)tabp); /* Return # entries we got */
 }
+
+

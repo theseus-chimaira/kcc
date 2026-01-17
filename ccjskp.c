@@ -87,8 +87,7 @@ dropsout(PCODE *p)
 */
 
 static void
-dropjump(p)
-PCODE *p;
+dropjump(struct pcode * p)
 {
     if ((p->Ptype & PTF_ADRMODE) == PTA_MINDEXED)
 	reflabel(p->Pptr, -1);
@@ -103,8 +102,7 @@ PCODE *p;
 */
 
 static int
-invskip(p)
-PCODE *p;
+invskip(struct pcode * p)
 {
     int r;
     PCODE *q, *b;
@@ -169,12 +167,12 @@ foldskip(PCODE *p, int safechange)
 {
     PCODE *q;
 
+    if (p == NULL) return;
+
 #if SYS_CSI		/*  Reg linkage */
     if (Register_Preserve (p->Pr2))
 	return;			/* avoid faulty optimizations */
 #endif
-
-    if (p == NULL) return;
 
     /*
     ** fold:  P_MOVE S,x
@@ -211,6 +209,7 @@ foldskip(PCODE *p, int safechange)
 
     if ((p->Pop & POF_OPCODE) != P_CAI) return; /* must be P_CAIx */
     q = before(p);			/* look before it */
+    if (q == NULL) return;
 
     if (q != NULL && q->Ptype == PTA_REGIS /* !prevskips */
 #if SYS_CSI		/*  Reg linkage */
@@ -228,12 +227,15 @@ foldskip(PCODE *p, int safechange)
 	p->Preg = (char) (q->Pr2);		/* flatten tested register */ // FW KCC-NT
 	q->Pop = P_NOP;			/* flush useless move */
 	q = before(q);			/* try for more optimizations */
+	if (q == NULL) return;
     }
+
 
     if (q->Preg == p->Preg && q->Ptype == PTV_IMMED && safechange)
 	switch(q->Pop) {
 	    case P_SUB:
 		if (!unsetz (q)) break;
+	    /* FALLTHROUGH */
 	    case P_ADD:
 
 		/*
@@ -280,24 +282,21 @@ foldskip(PCODE *p, int safechange)
     ** value being compared against is zero.
     */
 
-    switch ((int) p->Pvalue) {
-    case 1:
+    if (p->Pvalue == 1) {
 	if (!safechange) return;	/* not for switch you don't */
 	p->Pop ^= (P_CAI ^ P_SOS);		/* make P_SOSx */
 	p->Ptype ^= (PTA_RCONST ^ PTA_REGIS);	/* from and to register */
 	p->Pr2 = p->Preg;		/* same register */
 	return;				/* that's all */
-
-    case -1:
+    }
+    if (p->Pvalue == -1) {
 	if (!safechange) return;	/* not for switch you don't */
 	p->Pop ^= (P_CAI ^ P_AOS);		/* make P_AOSx */
 	p->Ptype ^= (PTA_RCONST ^ PTA_REGIS);	/* from and to register */
 	p->Pr2 = p->Preg;		/* same register */
 	return;				/* that's all */
-
-    case 0: break;			/* zero is ok to continue with */
-    default: return;			/* anything else we can't handle */
     }
+    if (p->Pvalue != 0) return;	/* rest only handles zero */
 
     /*
     ** The remaining optimizations fold a test against zero with
@@ -327,7 +326,8 @@ foldskip(PCODE *p, int safechange)
 		p->Pvalue = q->Pvalue - 1;
 		q->Pop = P_NOP;
 		q = before(q);		/* now look at before the P_IDIVI */
-		if (q->Ptype == PTA_REGIS /* !prevskips */ && q->Pop == P_MOVE &&
+		if (q != NULL &&
+		    q->Ptype == PTA_REGIS /* !prevskips */ && q->Pop == P_MOVE &&
 		    q->Preg == p->Preg) {
 		    p->Preg = (char) (q->Pr2);	// FW KCC-NT
 		    q->Pop = P_NOP;	/* flatten failed changereg() */
@@ -378,6 +378,7 @@ foldskip(PCODE *p, int safechange)
 	/* Now that we know we'll do the optimization, safe to clobber instr */
 	q->Pvalue = - q->Pvalue;
 
+    /* FALLTHROUGH */
     case P_SUB:
 	if (!safechange) return;
 
@@ -428,8 +429,7 @@ foldskip(PCODE *p, int safechange)
 */
 
 static void
-jumptoskip (p)
-PCODE *p;
+jumptoskip (struct pcode * p)
 {
     if ((p->Ptype &~ PTF_SKIPPED) == PTA_MINDEXED) switch (p->Pop & POF_OPCODE) {
     case P_JRST:
@@ -479,9 +479,7 @@ PCODE *p;
 */
 
 static void
-crossjump(pcur, lab)
-PCODE *pcur;
-label lab;
+crossjump(struct pcode * pcur, label lab)
 {
     PCODE *q, *p;
     int op;
@@ -580,27 +578,26 @@ foldjump(PCODE *prev, label lab)
 	    dropinstr(prev);		/* drop MOVN and fix prev */
 	    prev = b;			/* to point to new previous op */
 	}
-    } else if (isskip(q->Pop) && oneinstr(q)
-		&& b->Pop == P_JRST && b->Pptr == lab
-		&& invskip(before(b))) {
+    } else if (0) {
 	/*
-	** fold:  skip1
-	**         JRST lab
-	**        skip2		(must be skippable)
-	**         op
-	**    lab:  (or JRST lab)
+	** Disabled unsafe cascade-skip fold.  The transformation here was
+	** intended to fold:
 	**
-	** into:  reverse skip1
-	**         reverse skip2
-	**          JRST lab
-	**        op
-	**    lab:  (or JRST lab)
+	**      skip1
+	**       JRST lab
+	**      skip2
+	**       op
+	**  lab:
+	**
+	** into a pair of reversed skips.  For short-circuit expressions such as
+	**
+	**      if (p == 0 || q == 0)
+	**
+	** it can reverse the first null check after earlier jump-to-skip
+	** optimization, making a non-null left operand skip the right operand.
+	** Keep this peephole disabled; correctness is more important than the
+	** small code-size win.
 	*/
-
-	q->Pop = revop(q->Pop);		/* reverse the second skip */
-	setskip(q);			/* skip now will be skipped over */
-	swappseudo(b, q);		/* switch the skip and the jump */
-	clrskip(prev);			/* op no longer skipped over */
     }
 
     crossjump(prev, lab);		/* pull JUMPx across skips */
@@ -613,8 +610,7 @@ foldjump(PCODE *prev, label lab)
 */
 
 static int
-newskip (p)
-PCODE *p;
+newskip (struct pcode * p)
 {
     PCODE *q;
 
@@ -623,6 +619,7 @@ PCODE *p;
 	if ((p->Ptype &~ PTF_SKIPPED) != PTV_IMMED || p->Pvalue != 1) break;
 	p->Ptype ^= (PTV_IMMED ^ PTA_REGIS);
 	p->Pr2 = p->Preg;
+    /* FALLTHROUGH */
     case P_SOS:
 	p->Pop = P_SOS+POF_ISSKIP+POS_SKPA;
 	return 1;
@@ -631,6 +628,7 @@ PCODE *p;
 	if ((p->Ptype &~ PTF_SKIPPED) != PTV_IMMED || p->Pvalue != 1) break;
 	p->Ptype ^= (PTV_IMMED ^ PTA_REGIS);
 	p->Pr2 = p->Preg;
+    /* FALLTHROUGH */
     case P_AOS:
 	p->Pop = P_AOS+POF_ISSKIP+POS_SKPA;
 	return 1;
@@ -687,10 +685,9 @@ PCODE *p;
 */
 
 void
-unskip (p)
-PCODE *p;
+unskip (struct pcode * p)
 {
-    if (!isskip (p->Pop)) return;	/* be safe for P_JUMPx */
+    if (p == NULL || !isskip (p->Pop)) return;	/* be safe for P_JUMPx */
     switch (p->Pop &= POF_OPCODE) {
     case P_SOS:
 	if ((p->Ptype &~ PTF_SKIPPED) != PTA_REGIS || p->Pr2 != p->Preg) return;
@@ -698,6 +695,7 @@ PCODE *p;
 	p->Ptype ^= (PTA_REGIS ^ PTV_IMMED);	/* becomes P_SUBI R,1 */
 	p->Pvalue = 1;
 	return;
+
 
     case P_AOS:
 	if ((p->Ptype &~ PTF_SKIPPED) != PTA_REGIS || p->Pr2 != p->Preg) return;
@@ -708,12 +706,14 @@ PCODE *p;
 
     case P_TRO:
 	p->Ptype |= PTF_IMM;
+    /* FALLTHROUGH */
     case P_TDO:
 	p->Pop = P_IOR;
 	return;
 
     case P_TRC:
 	p->Ptype |= PTF_IMM;
+    /* FALLTHROUGH */
     case P_TDC:
 	p->Pop = P_XOR;
 	return;
@@ -750,12 +750,16 @@ optlab(label lab)
 {
     PCODE *p, *q, *b, *bb;
 
+    if (previous == NULL)
+	return;
+
     /* Fold useless jumps and preceeding skips into nothing */
     if ((previous->Pop == P_JRST || (previous->Pop & POF_OPCODE) == P_JUMP) &&
 	previous->Pptr == lab && !(previous->Ptype & PTF_IND)) {
 
+	p = before(previous);		/* save predecessor before buffer changes */
 	dropjump(previous);		/* drop the jump or skip */
-	unskip(previous);		/* disable the skip before it */
+	unskip(p);			/* disable the skip before it */
     }
 
     p = before(previous);
@@ -821,7 +825,8 @@ optlab(label lab)
     }					/* end switch(b->Pop) */
 
     foldjump(previous, lab);		/* common optimizations with JRST */
-    if (!oneinstr (previous) || (p = before (previous)) == NULL) return;
+    if (previous == NULL || !oneinstr (previous)
+      || (p = before (previous)) == NULL) return;
 
     /* fold  P_JUMPx R,lab / instr / lab::  into  P_CAIx R,0 / instr */
     if (p->Pptr == lab) {
@@ -927,7 +932,7 @@ optlab(label lab)
 	    if (b->Pop == P_MOVEM) {		/* Find MOVEM if any */
 		if (prevskips(b)) b = NULL;	/*Forget it if it's skipped */
 #if SYS_CSI		/*  Reg linkage */
-		if (Register_Preserve (b->Preg))
+		if (b != NULL && Register_Preserve (b->Preg))
 		    b = NULL;	 /* avoid faulty opts */
 #endif
 		break;
@@ -940,7 +945,8 @@ optlab(label lab)
 	 * and all others are right out.
 	 */
 
-	for (bb = after(b); b != NULL && bb != NULL && bb != p; bb = after(bb))
+	for (bb = (b != NULL) ? after(b) : NULL;
+	     b != NULL && bb != NULL && bb != p; bb = after(bb))
 	    switch (bb->Pop & POF_OPCODE) {
 		case P_MOVE: case P_ADD: case P_AOJ: case P_SOJ: case P_SKIP:
 		case P_SETZ: case P_SETO: case P_IOR: case P_LDB:
@@ -991,7 +997,20 @@ optlab(label lab)
     if (Register_Preserve (p->Preg)) /* avoid faulty opts */
         return;
 #endif
-    if (q->Pop != P_JRST || !newskip (p)) return;
+    if (q->Pop != P_JRST) return;
+
+    /*
+    ** Do not fold conditional returns into SKIPA/TRNA followed by a
+    ** control-flow exit.  A return may be a POPJ or a JRST to the shared
+    ** function epilogue.  Folding either form can reverse the effective
+    ** sense of the preceding comparison.
+    */
+    if (dropsout(previous)) return;
+
+    if (((b = after (p)) != NULL && (b->Pop & POF_OPCODE) == P_ADD)
+     && (b->Pop & POF_BOTH))
+	return;
+    if (!newskip (p)) return;
     if (!invskip (before (q))) {
 	unskip (p);			/* can't flip, undo changes */
 	return;				/* and give up */
@@ -1075,6 +1094,16 @@ foldtrna(PCODE *p)
       || (a = after(q)) == NULL
       || !newskip(a))
 		return 0;		/* no good */
+
+    /* DImode compare cascades can skip into the folded SKIPA and break. */
+    for (q = before(p); q != NULL; q = before(q))
+	{
+	if (q->Pop == P_NOP)
+	    continue;
+	if ((q->Pop & POF_OPCODE) == P_CAM)
+	    return 0;
+	break;
+	}
 
     /*
     ** fold:  TRNA

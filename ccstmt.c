@@ -10,14 +10,16 @@
 
 #include "cc.h"
 #include "cclex.h"	/* For reference to "constant" structure */
+#include <string.h>
 
 /* Imported functions */
 extern NODE *debug_node(NODE *, int, int, int);	/* CCDBUG */
 extern TYPE *typename(void);	/* CCDECL */
-extern SYMBOL *defauto(char *, TYPE *);	/* CCDECL */
+extern SYMBOL *defauto(char *, TYPE *), *defstatic(char *, TYPE *); /* CCDECL */
+extern NODE *pizer(SYMBOL *);		/* CCDECL */
 extern SYMBOL *funchk(int, int, SYMBOL *, SYMBOL *);	/* CCDECL */
 extern TYPE *findtype(int, TYPE *), *findftype(TYPE *, TYPE *),	/* CCSYM */
-	*findqtype(TYPE *, INT);
+	*findqtype(TYPE *, INT), *findctype(int, INT, unsigned INT, TYPE *);
 extern INT sizearray(TYPE *), sizeptobj(TYPE *);	/* CCSYM */
 extern SYMBOL *newlabel(void);	/* CCSYM */
 extern SYMBOL *symqcreat(SYMBOL *);	/* CCSYM */
@@ -37,10 +39,12 @@ extern void tokpush(int, SYMBOL *);			/* CCLEX */
 extern int expect (int);
 extern SYMBOL *beglsym (void);
 extern NODE *ldecllist (void);	/* from CCDECL */
+extern int isdecl (void);		/* from CCDECL */
 extern void endlsym (SYMBOL *);
+extern SYMBOL *lsymhead;		/* CCSYM block-scope marker */
 
 /* Exported functions */
-long pconst(void);			/* For CCDECL and CCINP */
+INT pconst(void);			/* For CCDECL and CCINP */
 NODE *funstmt(void), *asgnexpr(void);	/* For CCDECL */
 NODE *exprconst(void);		/* For CCDECL */
 
@@ -50,19 +54,25 @@ static NODE *statement(void),
 	*switchstmt(void), *casestmt(void), *defaultstmt(void),
 	*returnstmt(void), *gotostmt(void), *ifstmt(void),
 	*compoundstmt(int), *breakstmt(void), *continuestmt(void),
-	*exprstmt(void);
+	*exprstmt(void), *stmtexpr(void);
 static SYMBOL *plabel(SYMBOL *, int);
 static NODE *exprcntrl(void);
 static NODE *evalifok(NODE *), *ediscifok(NODE *);
 
 static NODE *expression(void),
 	*condexpr(void), *binary(int), *unary(void), *primary(void),
-	*castexpr(void), *postexpr(void), *sizeexpr(void),
+	*castexpr(void), *postexpr(void), *posttail(NODE *), *sizeexpr(void),
 	*pincdec(NODE *, int);
 static NODE *ptrapply(NODE *), *chkadd(int, NODE *),
 	    *parglist(SYMBOL *, TYPE *);
-static NODE *bin_asm(void), *bin_offsetof(void), *bin_muuo(void);
+static NODE *bin_asm(void), *bin_offsetof(void), *bin_muuo(void),
+	*bin_jffo(void);
 static int cmpatype(TYPE *, TYPE *);
+static int stmtpackedagg(INT);
+static INT stmtpackedbit(INT);
+static INT stmtpackedencode(TYPE *, INT);
+static SYMBOL *stmtlocalaggroot(NODE *);
+static int stmtmaybitptrmembertype(TYPE *, TYPE *);
 #if 0
 static int cmpatype();
 static NODE *statement(),
@@ -79,8 +89,98 @@ static NODE *expression(),
 	*castexpr(), *postexpr(), *sizeexpr(),
 	*pincdec();
 static NODE *ptrapply(), *chkadd(), *parglist();
-static NODE *bin_asm(), *bin_offsetof(), *bin_muuo();
+static NODE *bin_asm(), *bin_offsetof(), *bin_muuo(), *bin_jffo();
 #endif
+
+
+/* Return the automatic aggregate object at the root of a direct member
+** selection.  Indirect Q_MEMBER accesses are deliberately excluded because
+** an automatic pointer does not imply that the pointed-to aggregate is local.
+*/
+static SYMBOL *
+stmtlocalaggroot(NODE *n)
+{
+    while (n != NULL && n->Nop == Q_DOT)
+        n = n->Nleft;
+    if (n == NULL || n->Nop != Q_IDENT)
+        return NULL;
+    if (n->Nid->Sclass != SC_AUTO && n->Nid->Sclass != SC_RAUTO)
+        return NULL;
+    return n->Nid;
+}
+
+/* True when a pointer member can carry the same exact-width boundary
+** representation as rt without changing its one-word storage.
+*/
+static int
+stmtmaybitptrmembertype(TYPE *lt, TYPE *rt)
+{
+    INT bits;
+
+    if (lt == NULL || rt == NULL || lt->Tspec != TS_PTR
+      || rt->Tspec != TS_PTR || !tismaybitptr(rt)
+      || lt->Tsubt == NULL || rt->Tsubt == NULL
+      || !cmputype(lt->Tsubt, rt->Tsubt) || !tisinteg(lt->Tsubt))
+        return 0;
+    bits = tbitsize(lt->Tsubt);
+    return bits > 0 && bits < TGSIZ_WORD;
+}
+
+/* STMT packed-member helpers.  P=074,S=0 marks a packed aggregate whose
+** first bit is not necessarily on a 9-bit C address-unit boundary.  Such
+** aggregates cannot themselves have a native PDP-10 byte pointer, but a
+** following member selection can be flattened into the containing object.
+*/
+static int
+stmtpackedagg(INT off)
+{
+    unsigned INT code;
+
+    if (off >= 0) return 0;
+    code = (unsigned INT)(-off);
+    return (code & 07777) == 07400;
+}
+
+/* Return the exact bit offset represented by a packed member encoding. */
+static INT
+stmtpackedbit(INT off)
+{
+    unsigned INT code;
+    INT word, bit;
+    int pos, siz;
+
+    if (off >= 0) return off * TGSIZ_WORD;
+    code = (unsigned INT)(-off);
+    if ((code & 07777) == 07400
+      || (code & 07777) == 07500
+      || (code & 07777) == 07600)
+        return (INT)(code >> 12);
+    if ((code & 07777) == 07700)
+        return (INT)(code >> 12) * TGSIZ_CHAR;
+
+    word = (INT)(code >> 12);
+    pos = (int)((code >> 6) & 077);
+    siz = (int)(code & 077);
+    bit = word * TGSIZ_WORD + TGSIZ_WORD - pos - siz;
+    return bit;
+}
+
+/* Encode a member at an exact bit offset after flattening a nested packed
+** aggregate.  Scalar and bit-field encodings are already understood by
+** code generation; P=074,S=0 keeps another nested aggregate flattenable.
+*/
+static INT
+stmtpackedencode(TYPE *t, INT bit)
+{
+    if (tisbitf(t))
+        return -((bit << 12) | 07600L);
+    if (tisinteg(t) && !tisdimode(t))
+        return -((bit << 12) | 07500L);
+    if ((tispacked(t) && (t->Tspec == TS_STRUCT || t->Tspec == TS_UNION))
+      || t->Tspec == TS_ARRAY)
+        return -((bit << 12) | 07400L);
+    return 0;
+}
 
 /* Variables global to statement parsing routines */
 static int contlevel,		/* Current nesting depth for continue (loop) */
@@ -118,7 +218,7 @@ extern char ra_expr;		/* KAR-11/91, usage before init. flag */
 */
 
 NODE *
-funstmt()
+funstmt(void)
 {
     NODE *f, *nreg;
     int offset = 0;
@@ -154,7 +254,7 @@ funstmt()
 */
 
 static NODE *
-statement()
+statement(void)
 {
     SYMBOL *sym, *nlabel;
     NODE *s;
@@ -227,6 +327,7 @@ statement()
 		}
 	    tokpush (tokn, sym);		/* push back token */
 					/* and fall through to try expr */
+	/* FALLTHROUGH */
 	default:
 	    s = exprstmt();			/* Parse expression stmt */
 	    break;
@@ -236,6 +337,8 @@ statement()
 	    return NULL;
 	}
 
+    if (s == NULL)
+	return NULL;
     if (s->Nop == Q_RETURN)
 	s = debug_node(s, stmt_line, stmt_num, FN_EXIT);
     else
@@ -274,7 +377,7 @@ statement()
 */
 
 static NODE *
-compoundstmt(toplev)		/* toplev TRUE if this is function body */
+compoundstmt(int toplev)
 {
     SYMBOL *prevlsym;
     NODE *u, *beg, *n, *nr = NULL;
@@ -288,7 +391,10 @@ compoundstmt(toplev)		/* toplev TRUE if this is function body */
 
     for (beg = n = NULL; token != T_RBRACE && token != T_EOF; n = nr)
 	{
-	nr = ndefl(N_STATEMENT, statement());
+	if (isdecl())
+	    nr = ndefl(N_STATEMENT, ldecllist());
+	else
+	    nr = ndefl(N_STATEMENT, statement());
 	if (n != NULL)
 	    n->Nright = nr;
 	else
@@ -311,7 +417,7 @@ compoundstmt(toplev)		/* toplev TRUE if this is function body */
 */
 
 static NODE *
-dostmt()
+dostmt(void)
 {
     NODE *cond, *stmt;
 
@@ -334,7 +440,7 @@ dostmt()
 */
 
 static NODE *
-whilestmt()
+whilestmt(void)
 {
     NODE *cond, *stmt;
 
@@ -355,7 +461,7 @@ whilestmt()
 */
 
 static NODE *
-continuestmt()
+continuestmt(void)
 {
     if (contlevel == 0)
 	error("Continue must be within loop");
@@ -369,7 +475,7 @@ continuestmt()
 */
 
 static NODE *
-breakstmt()
+breakstmt(void)
 {
     if (breaklevel == 0)
 	error("Break must be within loop or switch");
@@ -383,7 +489,7 @@ breakstmt()
 */
 
 static NODE *
-forstmt()
+forstmt(void)
 {
     NODE *preamble, *e1, *e2, *e3, *s;
 
@@ -391,8 +497,17 @@ forstmt()
     e1 = e2 = e3 = NULL;
     expect(T_LPAREN);
     if (token != T_SCOLON)		/* Get initialization expr if one */
-	e1 = ediscifok(evalifok(expression()));
-    expect(T_SCOLON);
+	{
+	if (isdecl())
+	    e1 = ldecllist();
+	else
+	    {
+	    e1 = ediscifok(evalifok(expression()));
+	    expect(T_SCOLON);
+	    }
+	}
+    else
+	expect(T_SCOLON);
     if (token != T_SCOLON)		/* Get control expr if one */
 	e2 = exprcntrl();
     expect(T_SCOLON);
@@ -413,7 +528,7 @@ forstmt()
 **	[K&R A.9.3] [H&S 8.5]
 */
 static NODE *
-ifstmt()
+ifstmt(void)
 {
     NODE *cond, *then, *elsec;
 
@@ -438,12 +553,20 @@ ifstmt()
 /* ----------------------------------------- */
 
 static NODE *
-gotostmt()
+gotostmt(void)
 {
     NODE *n;
     SYMBOL *s;
 
     nextoken();
+    if (token == Q_MPLY)		/* goto *expr; (computed goto) */
+	{
+	nextoken();
+	n = ndefop(Q_GOTO);
+	n->Nleft = convcast(voidptrtype, expression());
+	expect(T_SCOLON);
+	return n;
+	}
     s = csymbol;
     expect(Q_IDENT);			/* goto lab */
     n = ndefop(Q_GOTO);
@@ -456,8 +579,7 @@ gotostmt()
 /* PLABEL - Handle label identifier
 */
 static SYMBOL *
-plabel(osym, defp)
-SYMBOL *osym;
+plabel(struct symbol * osym, int defp)
 {
     SYMBOL *sym;
 
@@ -494,7 +616,7 @@ SYMBOL *osym;
 */
 
 static NODE *
-switchstmt()
+switchstmt(void)
 {
     NODE *cond, *stmt, *n;
     struct sw savesw;		/* Saved state of case stmt collection */
@@ -521,7 +643,7 @@ switchstmt()
     savesw = sw;			/* Save current level's variables */
     sw.swdefault = sw.swcases = sw.swtail = NULL;
     sw.swcount = 0;			/* No case stmts seen yet */
-    sw.swrange = (unsigned long) ~0;			/* Range is all bits for now */ // FW KCC-NT
+    sw.swrange = (unsigned INT) ~0;			/* Range is all bits for now */ // FW KCC-NT
     if (cond->Nop == Q_ANDT)		/* but check for const AND */
 	{
 	if (cond->Nleft->Nop == N_ICONST)
@@ -552,7 +674,7 @@ switchstmt()
 */
 
 static NODE *
-casestmt()
+casestmt(void)
 {
     NODE *n, *this, *old;
 
@@ -595,7 +717,7 @@ casestmt()
 		}
 	if (old == NULL)		/* do this unless it was a dup */
 	    {
-	    if ((n->Niconst & (long) sw.swrange) != n->Niconst) /* check range */
+	    if ((n->Niconst & (INT) sw.swrange) != n->Niconst) /* check range */
 		advise("Case label outside range of AND in switch -- %ld",
 			(INT) n->Niconst);
 	    this->Nxfint = n->Niconst;	/* now safe to set case value */
@@ -622,7 +744,7 @@ casestmt()
 */
 
 static NODE *
-defaultstmt()
+defaultstmt(void)
 {
     NODE *n;
 
@@ -643,10 +765,13 @@ defaultstmt()
 */
 
 static NODE *
-returnstmt()
+returnstmt(void)
 {
     NODE *e, *nreg;
     TYPE *t;
+
+    if (curfn->Sflags & SF_NORETURN)
+        warn("return statement in noreturn function");
 
     t = curfn->Stype->Tsubt;		/* Get type of function return val */
     if (nextoken() == T_SCOLON)
@@ -694,6 +819,7 @@ exprstmt(void)
 }
 
 #if 0
+/*
 			EXPRESSION PARSER
 
 Here is some information about how the expression parser works.  It is
@@ -733,6 +859,7 @@ It is better to err on the side of bumping it up than down since the worst
 that will happen if the count is too high is that some optimizations will
 not be done.
 
+*/
 #endif
 
 /* This page contains functions which provide an interface between
@@ -745,8 +872,8 @@ not be done.
 **	and returns a node pointer.
 */
 static NODE *
-exprcntrl()
-	    {
+exprcntrl(void)
+{
 		NODE *e;
 		e = expression();			/* Parse expression */
 
@@ -783,8 +910,8 @@ exprcntrl()
 ** need to be able to fully resolve all constant arithmetic ops and
 ** the like.
 */
-long
-pconst()
+INT
+pconst(void)
 {
     NODE *e;
 
@@ -803,7 +930,7 @@ pconst()
 **	are not parsed.
 */
 NODE *
-exprconst()
+exprconst(void)
 {
     NODE *e;
 
@@ -819,14 +946,12 @@ exprconst()
 **	to crunch a parsed expression.
 */
 static NODE *
-evalifok(e)
-NODE *e;
+evalifok(struct node * e)
 {
     return (optpar ? evalexpr(e) : e);
 }
 static NODE *
-ediscifok(e)
-NODE *e;
+ediscifok(struct node * e)
 {
     if (optpar)
 	return evaldiscard(e);
@@ -915,7 +1040,7 @@ expression(void)
 */
 
 NODE *
-asgnexpr()
+asgnexpr(void)
 {
     NODE *l, *r, *b;
     TYPE *restype;
@@ -948,8 +1073,91 @@ asgnexpr()
 
 	l = b;				/* Save ptr to left-hand side */
 
+        if (op == Q_ASGN && l->Ntype->Tspec == TS_PTR
+          && r->Ntype->Tspec == TS_ARRAY)
+            r = convarrfn(r);
+
 	if (l->Nop == Q_IDENT)
 	    l->Nid->Sinit = 1;		/* Set flag to show initialization */
+
+        /* Preserve a representation-polymorphic function-boundary pointer
+        ** in an automatic local without changing its raw pointer word.
+        */
+        if (op == Q_ASGN && tismaybitptr(r->Ntype)
+          && !tismaybitptr(l->Ntype))
+            {
+            if (l->Nop == Q_IDENT && l->Ntype->Tspec == TS_PTR
+              && l->Ntype->Tsubt != NULL && r->Ntype->Tsubt != NULL
+              && cmputype(l->Ntype->Tsubt, r->Ntype->Tsubt)
+              && (l->Nid->Sclass == SC_AUTO || l->Nid->Sclass == SC_RAUTO
+                  || l->Nid->Sclass == SC_ISTATIC
+                  || l->Nid->Sclass == SC_INTDEF
+                  || l->Nid->Sclass == SC_INLINK))
+                {
+                TYPE *mt = findctype(TS_PTR,
+                                     l->Ntype->Tflag | TF_MAYBITPTR,
+                                     l->Ntype->Tsize, l->Ntype->Tsubt);
+                l->Ntype = mt;
+                l->Nid->Stype = mt;
+                }
+            else if (l->Nop == Q_DOT
+              && stmtmaybitptrmembertype(l->Ntype, r->Ntype))
+                {
+                SYMBOL *aroot = stmtlocalaggroot(l);
+                if (aroot != NULL)
+                    {
+                    aroot->Sflags |= SF_MAYBITMEM;
+                    l->Ntype = findctype(TS_PTR,
+                                         l->Ntype->Tflag | TF_MAYBITPTR,
+                                         l->Ntype->Tsize, l->Ntype->Tsubt);
+                    }
+                }
+            }
+
+        /* A known S=1 logical pointer can safely be stored in a local
+        ** void pointer without changing its raw pointer word.  Preserve the
+        ** representation flag so a later explicit cast can recover it.
+        ** TF_MAYBITPTR is deliberately excluded: a native runtime value
+        ** would lose the element-width information required to reinterpret
+        ** the pointer safely after passing through void *.
+        */
+        if (op == Q_ASGN && l->Nop == Q_IDENT
+          && tisbitptr(r->Ntype) && !tisbitptr(l->Ntype)
+          && l->Ntype->Tspec == TS_PTR
+          && l->Ntype->Tsubt != NULL && r->Ntype->Tsubt != NULL
+          && l->Ntype->Tsubt->Tspec == TS_VOID
+          && (l->Nid->Sclass == SC_AUTO || l->Nid->Sclass == SC_RAUTO
+              || l->Nid->Sclass == SC_ISTATIC
+              || l->Nid->Sclass == SC_INTDEF
+              || l->Nid->Sclass == SC_INLINK))
+            {
+            TYPE *bt = findctype(TS_PTR,
+                                 l->Ntype->Tflag | TF_PACKEDPTR | TF_BITPTR,
+                                 l->Ntype->Tsize, l->Ntype->Tsubt);
+            l->Ntype = bt;
+            l->Nid->Stype = bt;
+            }
+
+        /* Keep an S=1 logical packed pointer through assignment to an
+        ** automatic local pointer.  The symbol type is promoted so later
+        ** references in this function retain the representation.
+        */
+        if (op == Q_ASGN && l->Nop == Q_IDENT
+          && tisbitptr(r->Ntype) && !tisbitptr(l->Ntype)
+          && l->Ntype->Tspec == TS_PTR
+          && l->Ntype->Tsubt != NULL && r->Ntype->Tsubt != NULL
+          && cmputype(l->Ntype->Tsubt, r->Ntype->Tsubt)
+          && (l->Nid->Sclass == SC_AUTO || l->Nid->Sclass == SC_RAUTO
+              || l->Nid->Sclass == SC_ISTATIC
+              || l->Nid->Sclass == SC_INTDEF
+              || l->Nid->Sclass == SC_INLINK))
+            {
+            TYPE *bt = findctype(TS_PTR,
+                                 l->Ntype->Tflag | TF_PACKEDPTR | TF_BITPTR,
+                                 l->Ntype->Tsize, l->Ntype->Tsubt);
+            l->Ntype = bt;
+            l->Nid->Stype = bt;
+            }
 
 	restype = l->Ntype;		/* Remember what result type shd be */
 	b = ndef(op, restype, 0, l, r);	/* Set up operator node */
@@ -1050,7 +1258,7 @@ asgnexpr()
 */
 
 static NODE *
-condexpr()
+condexpr(void)
 {
     NODE *c, *n;
 
@@ -1117,7 +1325,7 @@ condexpr()
 */
 
 static NODE *
-binary(prec)
+binary(int prec)
 {
     int nprec, op, typ;
     NODE *lx, *rx, *bx;	/* Left, right, and binary expressions */
@@ -1341,7 +1549,7 @@ binary(prec)
 */
 
 static NODE *
-castexpr()
+castexpr(void)
 {
     NODE *n;
     TYPE *t;
@@ -1349,11 +1557,49 @@ castexpr()
     if (token != T_LPAREN)
 	return unary();
     nextoken();			/* Peek at next token */
+    if (token == T_LBRACE)
+	return stmtexpr();	/* GNU statement expression */
     if (csymbol && (tok[token].tktype == TKTY_RWTYPE
 			|| csymbol->Sclass == SC_TYPEDEF))
 	{
 	t = typename();		/* Parse the type-name */
 	expect(T_RPAREN);
+
+	/* C99 compound literal: (type-name) { initializer-list }.
+	** At block scope the unnamed object has automatic storage duration.
+	** Represent it as an ordinary hidden automatic declaration attached to
+	** an expression node; code generation performs the initialization at
+	** the point where the expression is evaluated and then yields the
+	** hidden object as an lvalue.
+	*/
+	if (token == T_LBRACE)
+	    {
+	    static int clcntr = 0;
+	    char temp[24];
+	    SYMBOL *s;
+	    NODE *iz, *id, *data;
+	    INT oldsz, newsz;
+
+	    sprintf(temp, "%cclit%d", SPC_IAUTO, ++clcntr);
+	    oldsz = sizetype(t);
+	    if (lsymhead == NULL)
+		s = defstatic(temp, t);
+	    else
+		s = defauto(temp, t);
+	    iz = pizer(s);
+	    newsz = sizetype(s->Stype);
+	    if (lsymhead != NULL && newsz > oldsz)
+		maxauto += newsz - oldsz;
+	    id = ndefident(s);
+	    id->Nflag |= NF_LVALUE;
+	    if (lsymhead == NULL)
+		data = iz;
+	    else
+		data = ndeflr(N_DATA, ndeflr(N_IZ, ndefident(s), iz), NULL);
+	    n = ndef(N_COMPLIT, s->Stype, NF_LVALUE, data, id);
+	    return posttail(n);
+	    }
+
 	n = convcast(t, convarrfn(castexpr()));
 					/* Get expression, apply cast */
 	n->Nflag |= NF_USERCAST;	/* Say this was explicit user cast */
@@ -1363,8 +1609,91 @@ castexpr()
     return unary();			/* and parse unary-expr instead! */
 }
 
+/* STMTEXPR - Parse GNU ({ statements; expression; }).
+**
+** This reuses KCC's normal local-symbol scope and N_STATEMENT list.  The
+** final expression statement is retained as the value while earlier
+** expression statements are discarded normally.  The representation costs
+** one extra NODE and does not enlarge NODE, TYPE, SYMBOL, or any other
+** persistent compiler structure.
+**
+** Current token is the '{' following the already-consumed '('.
+*/
 static NODE *
-unary()
+stmtexpr(void)
+{
+    SYMBOL *prevlsym;
+    NODE *decls, *beg, *tail, *sn, *st, *e, *value;
+    TYPE *t;
+    int exprstart;
+
+    if (lsymhead == NULL)
+	error("Statement expressions are only allowed inside functions");
+    prevlsym = beglsym();
+    expect(T_LBRACE);
+    decls = ldecllist();
+    beg = tail = NULL;
+    value = NULL;
+
+    while (token != T_RBRACE && token != T_EOF) {
+	if (isdecl()) {
+	    st = ldecllist();
+	    exprstart = 0;
+	} else {
+	    switch (token) {
+	    case T_SCOLON:
+	    case T_LBRACE:
+	    case Q_SWITCH:
+	    case Q_CASE:
+	    case Q_DEFAULT:
+	    case Q_DO:
+	    case Q_WHILE:
+	    case Q_FOR:
+	    case Q_GOTO:
+	    case Q_IF:
+	    case Q_CONTINUE:
+	    case Q_BREAK:
+	    case Q_RETURN:
+		exprstart = 0;
+		break;
+	    default:
+		exprstart = 1;
+		break;
+	    }
+
+	    if (exprstart) {
+		e = evalifok(expression());
+		expect(T_SCOLON);
+		if (token == T_RBRACE) {
+		    value = e;
+		    break;
+		}
+		st = ediscifok(e);
+	    } else
+		st = statement();
+	}
+
+	sn = ndefl(N_STATEMENT, st);
+	if (tail != NULL)
+	    tail->Nright = sn;
+	else
+	    beg = sn;
+	tail = sn;
+    }
+
+    if (decls != NULL)
+	beg = ndeflr(N_STATEMENT, decls, beg);
+
+    endlsym(prevlsym);
+    expect(T_RBRACE);
+    expect(T_RPAREN);
+
+    t = (value != NULL) ? value->Ntype : voidtype;
+    return posttail(ndef(N_STMTEXPR, t, 0, beg, value));
+}
+
+static NODE *
+unary(void)
 {
     NODE *n;
     int op;
@@ -1375,6 +1704,10 @@ unary()
 	    return postexpr();	/* Parse <postfix-expr> */
 	case T_SIZEOF:
 	    return sizeexpr();	/* Parse <sizeof-expr> */
+
+	case T_EXTENSION:
+	    nextoken();
+	    return unary();
 
 	case T_INC:
 	    nextoken();		/* ++() Prefix increment */
@@ -1409,6 +1742,23 @@ unary()
 	case Q_MPLY:
 	    op = N_PTR;
 	    break;	/* *() Indirection */
+
+	case Q_LAND:		/* &&label (GNU label address) */
+	    {
+	    SYMBOL *lab;
+
+	    nextoken();
+	    if (token != Q_IDENT)
+		{
+		error("Label expected after &&");
+		return ndeficonst(0);
+		}
+	    lab = csymbol;
+	    nextoken();
+	    n = ndeft(N_ACONST, voidptrtype);
+	    n->Nxfsym = plabel(lab, 0);
+	    return n;
+	    }
 	}
     nextoken();			/* Have a prefix op, move on to next token */
     n = castexpr();		/* and parse cast-expr following the op */
@@ -1491,6 +1841,8 @@ unary()
 	    if (!(n->Nflag & NF_LVALUE))	/* Operand must be lvalue */
 		error("Operand of & must be lvalue");
 	    if (n->Nop == Q_IDENT)
+		n->Nid->Sflags |= SF_ADDRTAKEN;
+	    if (n->Nop == Q_IDENT)
 		if (n->Nid->Sclass == SC_RAUTO || n->Nid->Sclass == SC_RARG)
 #if 0
 		    if (clevel < CLEV_STRICT)
@@ -1507,13 +1859,23 @@ unary()
 #endif
 		    error("& applied to bitfield");
 
-	    n = ndef(N_ADDR, n->Ntype, 0, n, (NODE*)NULL);
+            {
+            TYPE *at = n->Ntype;
+            int bitaddr = (n->Nop == Q_MEMBER || n->Nop == Q_DOT)
+                       && stmtpackedagg(n->Nxoff)
+                       && (stmtpackedbit(n->Nxoff) % TGSIZ_CHAR) != 0;
+
+            n = ndef(N_ADDR, at, 0, n, (NODE*)NULL);
+            n->Ntype = bitaddr
+                ? findctype(TS_PTR, typbsiztab[TS_PTR] | TF_PACKEDPTR | TF_BITPTR,
+                            typsiztab[TS_PTR], at)
+                : findtype(TS_PTR, at);
+            }
 	    if (!(n->Nleft->Nflag & NF_GLOBAL)) /* If object has local extent */
 		{
 		stackrefs++;		/* then count it as a */
 		n->Nflag |= NF_STKREF;	/* stack reference */
 		}
-	    n->Ntype = findtype(TS_PTR, n->Ntype); /* add ref to type */
 	    break;
 
 	case N_PTR:			/* *() Indirection */
@@ -1529,8 +1891,7 @@ unary()
 ** array subscripting wants to invoke "*" as well.
 */
 static NODE *
-ptrapply(n)
-NODE *n;
+ptrapply(struct node * n)
 {
     n = convunary(n);			/* Apply usual unary conversions */
     if (n->Ntype->Tspec != TS_PTR)
@@ -1559,6 +1920,22 @@ NODE *n;
     if (n->Ntype->Tspec != TS_FUNCT)
 	n->Nflag |= NF_LVALUE;		/* Result is lvalue unless function */
     return n;
+}
+
+/* PACKEDARRAYBYTES - Exact C-byte extent for an array whose base
+** element is a supported packed aggregate.  Zero means not such an array.
+*/
+static INT
+packedarraybytes(TYPE *t)
+{
+    INT n = 1;
+
+    while (t != NULL && t->Tspec == TS_ARRAY)
+        {
+        n *= t->Tsize;
+        t = t->Tsubt;
+        }
+    return (t != NULL && tispacked(t)) ? n * t->Tbytes : 0;
 }
 
 /* SIZEEXPR - Handle "sizeof" operator.
@@ -1630,15 +2007,30 @@ sizeexpr(void)
 	    break;
 
 	case TS_ARRAY:
+	    {
+	    INT pbytes;
 	    if (t->Tsize == 0)
 		{
 		error("Size of array not known");
 		n->Niconst = 0;
 		break;
 		}
+            if ((pbytes = packedarraybytes(t)) != 0)
+                {
+                n->Niconst = pbytes;
+                break;
+                }
 	    if (tischararray(t))		/* If char array, */
 		{
 		n->Niconst = sizearray(t);	/* size is # of elements */
+		break;
+		}
+	    if (tisbytearray(t))
+		{
+		TYPE *bt = t;
+		while (bt->Tspec == TS_ARRAY) bt = bt->Tsubt;
+		n->Niconst = sizearray(t)
+		    * ((tbitsize(bt) + TGSIZ_CHAR - 1) / TGSIZ_CHAR);
 		break;
 		}
 		/* 8/91 ensure short s[1] is size 2 NOT 4 (SPR 9578) */
@@ -1649,9 +2041,12 @@ sizeexpr(void)
 		break;
 		}
 		/* Drop through */
+            }
+	/* FALLTHROUGH */
 	case TS_STRUCT:
-	case TS_UNION:	/* (size in wds)*(chars per word) */
-	    n->Niconst = sizetype(t) * (TGSIZ_WORD/TGSIZ_CHAR);
+	case TS_UNION:	/* packed extent or (size in wds)*(chars per word) */
+	    n->Niconst = tispacked(t) ? t->Tbytes
+		: sizetype(t) * (TGSIZ_WORD/TGSIZ_CHAR);
 	    break;
 
 	case TS_CHAR:
@@ -1665,6 +2060,7 @@ sizeexpr(void)
 		/* Drop through */
 
 		/* Anything left had better be a scalar type! */
+	/* FALLTHROUGH */
 	default:
 	    if (!tisscalar(t))
 		int_error("sizeexpr: invalid type: %d", t->Tspec);
@@ -1692,15 +2088,19 @@ sizeexpr(void)
 */
 
 static NODE *
-postexpr()
+postexpr(void)
+{
+    return posttail(primary());
+}
+
+static NODE *
+posttail(NODE *n)
 {
     int op;
     INT off;
-    NODE *n;
     TYPE *tp, *mt;
     SYMBOL *sy;
 
-    n = primary();		/* First get primary expression */
     for (;;)
 	switch (token)	/* Loop to handle all postfixes */
 	    {
@@ -1713,6 +2113,20 @@ postexpr()
 		switch (tp->Tspec)
 		    {
 		    case TS_FUNCT:
+			/* (*function_name)(...) is the same direct call as
+			** function_name(...).  Canonicalize it here, before
+			** leaf/call analysis decides whether a scratch-register
+			** save or ordinary call frame is required.  Do not fold
+			** actual function-pointer variables.
+			*/
+			if (n->Nop == N_PTR && n->Nleft != NULL
+			  && n->Nleft->Nop == Q_IDENT
+			  && n->Nleft->Nid->Stype->Tspec == TS_FUNCT)
+			    {
+			    n = n->Nleft;
+			    n->Ntype = tp;
+			    sy = n->Nid;
+			    }
 			break;	/* Should be this */
 		    case TS_PTR:		/* OK to be this */
 			sy = NULL;
@@ -1739,6 +2153,7 @@ postexpr()
 			    break;
 			    }
 		    /* Else fall thru to fail */
+		    /* FALLTHROUGH */
 		    default:
 			error("Call to non-function");
 			n = ndeft(N_UNDEF, tp = findftype(tp, (TYPE *)NULL));
@@ -1748,14 +2163,15 @@ postexpr()
 
 	    /* Hack for returning structures -- see if internal auto
 	    ** struct is needed to hold return value, and allocate if so.
+	    ** KCC represents aggregates larger than two words by address even
+	    ** when the GCC ABI returns three or four words in AC1..AC4.
 	    */
 		if (sizetype(n->Ntype) > 2)
 		    {
 		    static int cntr = 0;
 		    char temp[20];
-		    if (n->Ntype->Tspec != TS_STRUCT && n->Ntype->Tspec !=TS_UNION)
+		    if (n->Ntype->Tspec != TS_STRUCT && n->Ntype->Tspec != TS_UNION)
 			int_error("postexpr: Fn retval too large");
-		/* Make unique ident and then a local variable for type */
 		    sprintf(temp,"%cstruct%d", SPC_IAUTO, ++cntr);
 		    n->Nretstruct = defauto(temp, n->Ntype);
 		    }
@@ -1773,15 +2189,62 @@ postexpr()
 	    /*
 	    ** Parse array subscript ::= <postfix-expr> '[' <expr> ']'
 	    **
-	    **	This is implemented by converting it into
-	    **		*(<postfix-expr> + <expr>)
+	    ** Normally this becomes *(<postfix-expr> + <expr>).  A GNU
+	    ** packed array member can begin between 9-bit C address units,
+	    ** however, and ordinary array decay would lose that phase.  For
+	    ** direct p->a[i] indexing, keep the native 9-bit base pointer and
+	    ** advance it by i*element_bytes while retaining the fixed phase.
 	    */
+		if (n->Nop == Q_MEMBER && n->Ntype->Tspec == TS_ARRAY
+		  && stmtpackedagg(n->Nxoff)
+		  && tisinteg(n->Ntype->Tsubt)
+		  && !tisdimode(n->Ntype->Tsubt))
+		    {
+		    NODE *idx, *step, *base, *addr;
+		    TYPE *et = n->Ntype->Tsubt;
+		    INT startbit = stmtpackedbit(n->Nxoff);
+		    INT firstbyte = startbit / TGSIZ_CHAR;
+		    INT phase = startbit % TGSIZ_CHAR;
+		    int ebits = tbitsize(et);
+		    int ebytes = (ebits + TGSIZ_CHAR - 1) / TGSIZ_CHAR;
+
+		    nextoken();
+		    idx = expression();
+		    expect(T_RBRACK);
+		    if (!tisinteg(idx->Ntype))
+			error("Array subscript must have integral type");
+		    idx = convunary(idx);
+		    if (ebytes != 1)
+			{
+			step = ndeflr(Q_MPLY, ndeficonst(ebytes), idx);
+			step = convbinary(step);
+			}
+		    else
+			step = idx;
+		    if (firstbyte != 0)
+			{
+			step = ndeflr(Q_PLUS, ndeficonst(firstbyte), step);
+			step = convbinary(step);
+			}
+
+		    base = convcast(findtype(TS_PTR, chartype), n->Nleft);
+		    addr = ndeflr(Q_PLUS, step, base);
+		    addr = chkadd(Q_PLUS, addr);
+		    n = ndef(Q_MEMBER, et, n->Nflag | NF_LVALUE, addr, (NODE *)NULL);
+		    n->Nxoff = stmtpackedencode(et, phase);
+		    break;
+		    }
+
 		nextoken();			/* Move on to expr */
 		n = ndeflr(Q_PLUS, expression(), n);
 		n = chkadd(Q_PLUS, n);	/* Do type checking etc */
 		tp = n->Ntype;		/* get type back, make sure ptr */
-		if (tp->Tspec != TS_PTR)
+		if (tp == NULL || tp->Tspec != TS_PTR)
+		    {
 		    error("Array or pointer type required");
+		    expect(T_RBRACK);
+		    break;		/* Do not dereference an invalid result type. */
+		    }
 		expect(T_RBRACK);
 
 	    /* Propagate flags (global & stkref only) */
@@ -1879,6 +2342,46 @@ postexpr()
 		if (csymbol->Sclass == SC_UNDEF)
 		    freesym(csymbol);
 
+        /* Once an automatic aggregate has retained a function-boundary
+        ** exact-width pointer in one of its members, later direct member
+        ** selections from that same object must preserve the runtime S-field
+        ** interpretation.  The marker lives on the local object symbol, not
+        ** on the shared structure-member definition.
+        */
+        if (op == Q_DOT)
+            {
+            SYMBOL *aroot = stmtlocalaggroot(n);
+            if (aroot != NULL && (aroot->Sflags & SF_MAYBITMEM)
+              && mt != NULL && mt->Tspec == TS_PTR && mt->Tsubt != NULL
+              && tisinteg(mt->Tsubt)
+              && tbitsize(mt->Tsubt) > 0
+              && tbitsize(mt->Tsubt) < TGSIZ_WORD)
+                mt = findctype(TS_PTR, mt->Tflag | TF_MAYBITPTR,
+                               mt->Tsize, mt->Tsubt);
+            }
+
+	/* A packed nested aggregate may begin at an arbitrary bit offset.
+	** It has no directly representable PDP-10 byte pointer, so flatten a
+	** following member selection into the containing aggregate instead.
+	** This preserves exact bit layout for expressions such as o.in.x and
+	** p->in.x without introducing a software bit-pointer ABI.
+	*/
+	if (tp != NULL && (n->Nop == Q_DOT || n->Nop == Q_MEMBER)
+	  && stmtpackedagg(n->Nxoff))
+	    {
+	    INT combit = stmtpackedbit(n->Nxoff) + stmtpackedbit(off);
+	    INT comboff = stmtpackedencode(mt, combit);
+	    NODE *base = n->Nleft;
+	    int baseop = n->Nop;
+
+	    if (comboff == 0)
+		error("GNU packed nested member has unsupported type");
+	    else
+		off = comboff;
+	    n = base;
+	    op = baseop;
+	    }
+
 	/* Now ensure that any type qualifiers for the struct are also
 	** applied to the type of the member we just selected.
 	** If the struct/union was not an lvalue (as can happen for Q_DOT)
@@ -1967,9 +2470,7 @@ postexpr()
 ** worry about conversions rather than telling it what to do.
 */
 static NODE *
-pincdec(n, op)
-NODE *n;	/* Operand expression */
-int op;		/* Operator (N_PREINC, N_PREDEC, N_POSTINC, N_POSTDEC) */
+pincdec(struct node * n, int op)
 {
     if (constexpr)
 	error("++ or -- in constant expression");
@@ -2030,7 +2531,7 @@ int op;		/* Operator (N_PREINC, N_PREDEC, N_POSTINC, N_POSTDEC) */
 */
 
 static NODE *
-primary()
+primary(void)
 {
     NODE *n;
     SYMBOL *s, d;
@@ -2071,6 +2572,7 @@ primary()
 
 	    /* Now can drop through to handle normally */
 
+		/* FALLTHROUGH */
 		default:
 	    /* Normal variable or function name */
 		    n = ndefident(s);		/* Make Q_IDENT node */
@@ -2096,6 +2598,11 @@ primary()
 	case T_CCONST:		/* Handle character constant */
 	    n = ndeft(N_ICONST, constant.ctype);
 	    n->Niconst = constant.cvalue;
+	    if (constant.cwide)
+		{
+		n->Nflag |= NF_WIDE;
+		n->n_var1.n_int = constant.chi;
+		}
 	    nextoken();
 	    break;
 
@@ -2145,9 +2652,13 @@ primary()
 	case T_OFFSET:		/* Handle "_KCC_offsetof" built-in */
 	    return bin_offsetof();
 
+	case T_JFFO:		/* Handle "_KCC_jffo" built-in */
+	    return bin_jffo();
+
 	case T_ELSE:
 	    advise("Orphan 'else'");
 
+	/* FALLTHROUGH */
 	default:				/* Bad token... */
 	    error("Primary expr expected");	/* Complain and return dummy */
 	    return ndeft(N_UNDEF, deftype);
@@ -2165,7 +2676,7 @@ primary()
 ** "asm" was initialized as a keyword by CCSYM on startup.
 */
 static NODE *
-bin_asm()
+bin_asm(void)
 {
     NODE *n;
 
@@ -2186,6 +2697,39 @@ bin_asm()
     return ndef(Q_ASM, voidtype, 0, n, (NODE*)NULL);
 }
 
+/* "_KCC_jffo" - handle JFFO-to-label extension
+**
+**	<jffo-expr> ::= "_KCC_jffo" '(' <expr> ',' <label-ident> ')'
+**
+** This is a statement-like expression that emits a JFFO instruction.  The
+** label argument deliberately uses a plain label identifier instead of GCC's
+** labels-as-values syntax.
+*/
+static NODE *
+bin_jffo(void)
+{
+    NODE *value, *n;
+    SYMBOL *s, *lab;
+
+    if (nextoken() != T_LPAREN)
+	{
+	error("Bad syntax for \"_KCC_jffo\" - no left paren");
+	return primary();
+	}
+
+    nextoken();
+    value = asgnexpr();
+    expect(T_COMMA);
+    s = csymbol;
+    expect(Q_IDENT);
+    lab = plabel(s, 0);
+    expect(T_RPAREN);
+
+    n = ndef(T_JFFO, voidtype, 0, convunary(value), (NODE*)NULL);
+    n->Nxfsym = lab;
+    return n;
+}
+
 #define param1	temp->Nleft->Nleft->Nright
 #define param2	temp->Nleft
 #define param3  temp->Nright
@@ -2198,7 +2742,7 @@ bin_asm()
 ** "muuo" was initialized as a keyword by CCSYM on startup.
 */
 static NODE *
-bin_muuo()
+bin_muuo(void)
 {
     NODE *n, *temp;
 
@@ -2209,16 +2753,41 @@ bin_muuo()
 	}
     n = parglist(NULL, NULL);	/* Parse args as if function call */
 
-    if (n)
-	temp = n->Nleft->Nleft;	/* else, BC++ fails!? */
     /* Check out against currently supported syntax.
     ** This must have four parameters (op, ac, av, eff_addr).
     */
-    if ((!n) || (temp->Nleft->Nleft->Nleft != NULL))
+    if (!n || !n->Nleft || !n->Nleft->Nleft)
+	{
 	error("Must be exactly five args to \"imuuo\"");
+	return ndeficonst(0);
+	}
+
+    temp = n->Nleft->Nleft;
+    if (!temp->Nleft || !temp->Nleft->Nleft
+      || temp->Nleft->Nleft->Nleft != NULL)
+	{
+	error("Must be exactly five args to \"imuuo\"");
+	return ndeficonst(0);
+	}
 
     if (param1->Nop != N_SCONST)
 	error("1st arg to \"imuuo\" must be a string literal");
+    else if (!strcmp(param1->Nsconst, "CIRC"))
+	{
+	if (!tgits)
+	    error("CIRC requires an ITS target variant");
+	if (param2->Ntype->Tspec != TS_PTR)
+	    error("2nd parameter to CIRC must point to two raw words");
+	if (param3->Nop == N_ICONST && param3->Niconst == 0)
+	    ;
+	else if (param3->Ntype->Tspec != TS_PTR)
+	    error("3rd parameter to CIRC must point to two writable raw words");
+	if (!tisinteg(param4->Ntype))
+	    error("4th parameter to CIRC must be an integer count");
+	if (n->Nright->Nop != N_ICONST || n->Nright->Niconst != 0)
+	    error("5th parameter to CIRC must be zero");
+	return ndef(Q_MUUO, inttype, 0, n, (NODE*)NULL);
+	}
 
     switch (param2->Ntype->Tspec)
 	{
@@ -2275,7 +2844,7 @@ bin_muuo()
 ** keyword by CCSYM on startup.
 */
 static NODE *
- bin_offsetof()
+ bin_offsetof(void)
 {
     SYMBOL *s;
     NODE *n;
@@ -2343,9 +2912,7 @@ static NODE *
 */
 
 static NODE *
-parglist(s, ft)
-SYMBOL *s;			/* Function identifier, if known */
-TYPE *ft;			/* Function type */
+parglist(struct symbol * s, struct type * ft)
 {
     NODE *e, *n = NULL;		/* Start with no args */
     int warnf = 0;
@@ -2428,11 +2995,22 @@ TYPE *ft;			/* Function type */
 **	since the default promotions have been done.
 */
 static int
-cmpatype(pt, at)
-TYPE *pt, *at;		/* Param type, Arg type */
+cmpatype(struct type * pt, struct type * at)
 {
+    TYPE *ps, *as;
+
     if (cmputype(pt, at))	/* If unqualifiedly compatible, win. */
 	return 1;
+    if (pt->Tspec == TS_PTR && at->Tspec == TS_PTR)
+	{
+	ps = pt->Tsubt;
+	as = at->Tsubt;
+	if ((((~ps->Tflag) & as->Tflag) & TF_QUALS) == 0
+	  && (cmputype(ps, as)
+	    || (ps->Tspec == TS_VOID && as->Tspec != TS_FUNCT)
+	    || (as->Tspec == TS_VOID && ps->Tspec != TS_FUNCT)))
+	    return 1;
+	}
     switch (pt->Tspec)	/* Hmm, check for signedness */
 	{
 	case TS_INT:
@@ -2453,9 +3031,7 @@ TYPE *pt, *at;		/* Param type, Arg type */
 /* CHKADD - Check an add/sub expression node for conversions and validity.
 */
 static NODE *
-chkadd(op, n)
-int op;		/* Either Q_PLUS or Q_MINUS */
-NODE *n;
+chkadd(int op, struct node * n)
 {
     TYPE *lt, *rt;
 

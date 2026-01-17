@@ -17,7 +17,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#if !__MSDOS__ 							// FW KCC-NT
+#if !__MSDOS__ && !HOST_UNIX					// FW KCC-NT
 #include <muuo.h>	/* KAR-8/92, needed for set_level(); PPS 4516 */
 #endif
 
@@ -85,14 +85,16 @@ static void cindfiles(int *, char ***);
 static void showcpu(clock_t);
 static void coptimize(char *), cdebug(char *), csidebug(char *),
 	ctargmach(char *), cportlev(char *), cwarnlev(char *),
-	cverbose(char *);
+	casmdialect(char *), cverbose(char *), settgcpu(int);
 
 static int cswitch(char *, int *, char ***), cfile(char *),
 	files(char *), mainsymp(void), needcomp(char *, char *);
 static int chkmacname(char *);
 static void parcswi(char *, flagent_t *, int);
 static char *cmpname(char *, char *);
+#if !__MSDOS__ && !HOST_UNIX
 static int set_level (int level); /* KAR-8/92, support leveled headers PPS 4516 */
+#endif
 
 extern char *mlbuf, *mlbptr;		/* mixed listing */
 char *savofnam = NULL;			/* KAR-3/92, save -R= name */
@@ -130,12 +132,15 @@ Syntax is: cc [switches] file[s]		  * indicates default.\n\
 -P=ansi	  carm with some ANSI stuff	-P=stdc   * Full ANSI-Standard C\n\
 -p	  link with Bliss profiler	-q	    compile only if changed\n\
 -R=<fname> designate .REL, .MAC name    -s          redirect messages to stdout\n\
--S	  compile: don't asm or link	-Uident     #undef ident\n\
+-S	  compile: don't asm or link	-m=macro    old MACRO-style asm\n\
+-Uident     #undef ident\n\
 -v	  dump all -v messgs & cmd args	-v=fundef   dump function names\n\
 -v=load	  dump link loader commands	-v=nostats  suppress lines/minute\n\
 -w=note   suppress [Note] messages	-w=advise   suppress [Advisory] also\n\
 -w=warn   suppress [Warning] also	-w, -w=all  suppress all warnings\n\
--x=ch7	  default char size 7 bits.";
+-x=ch7	  default char size 7 bits	-x=base   portable base CPU.	-x=pdp10  target PDP-10 portable CPU.\n\
+-x=pdp6   target PDP-6 CPU.	-x=ki10   target KI-10 CPU.\n\
+-x=ka10+its target KA10 ITS variant.\n";
 
 #if DEBUG_KCC	
 static const _char7 *debugscreen = "\n\
@@ -154,7 +159,9 @@ static const _char7 *debugscreen = "\n\
 int
 main (int argc, char **argv)
     {
+#ifdef __COMPILER_KCC__
     extern int JOBERR;
+#endif
     int ac;			/* temp copy of argc */
     char **av;			/* temp copy of argv */
     char *nextprog = NULL;	/* Set to program to chain through, if any */
@@ -180,6 +187,9 @@ main (int argc, char **argv)
     ** All are either initially 0, or given default values in CCDATA.
     */
     link = assemble = delete = 1;
+#if HOST_UNIX
+    link = assemble = delete = 0;
+#endif
 
     module_pragma = XF4_call_spill = r_preserve = _reg_count = 0;
 
@@ -194,7 +204,8 @@ main (int argc, char **argv)
 
     outmsgs = stderr;		/* '-s' switch to stdout, PPS 4298 */
     insert_all_files = mlist = 0;
-    longidents = 0;			/* FW 2A(51) default */
+    longidents = (asmdialect == ASM_GAS); /* FW 2A(51) */
+    settgcpu(tgcpu);
     
     coptimize("all");			/* Turn on all optimizer flags */
 
@@ -210,7 +221,7 @@ main (int argc, char **argv)
 	else				/* Sigh, tell user where help lives */
 	    {
 	    fprintf(stderr, "KCC Version %s", ver_str);
-	    fprintf(stderr, (void *) helpscreen);	/* MVS 9/8/90 */
+	    fprintf(stderr, "%s", (char *)helpscreen);	/* MVS 9/8/90 */
 #if DEBUG_KCC	
 	    fprintf(stderr, (void *) debugscreen);
 #endif
@@ -243,7 +254,8 @@ main (int argc, char **argv)
 	else
 	    ++nfiles;		/* Assume a filename spec */
 
-#if !__MSDOS__  /* KAR-8/92, support for leveled header files; PPS 4516 */
+#if !__MSDOS__ && !HOST_UNIX
+		/* KAR-8/92, support for leveled header files; PPS 4516 */
 		/* but not for KCCDOS.                                  */
 
     switch (set_level (RET_CUR_LEV))
@@ -276,7 +288,7 @@ main (int argc, char **argv)
 	default: /* error assume level 0 */
 	    break;
 	}
-#endif /* !__MSDOS__ */
+#endif /* !__MSDOS__ && !HOST_UNIX */
 
     /* Get the string rep. of the version */
     if (mlist)
@@ -292,9 +304,7 @@ main (int argc, char **argv)
 
     /* Now finalize after all switches scanned */
 
-#ifndef __COMPILER_KCC__
-    tgmachuse.mapdbl = -1;
-#endif
+    settgcpu(tgcpu);
 
     if (nfiles == 0)			/* This sometimes happens */
 	jerr("No filenames specified");
@@ -610,10 +620,20 @@ cswitch (char *s, int *aac, char ***aav)
 		if (t == NULL)
 		    jerr("Out of memory for -L= library path\n");
 
-		strcpy(t, libpath);
-		strcat(t, "LIB+.REL");
+		estrcpy(estrcpy(t, libpath), "LIB+.REL");
 		libpath = t;
 		return 1;
+
+	    case 'm':			/* -m=<dialect> Assembler output dialect */
+		if (s[1] == '=')
+		    {
+		    ++s;
+		    casmdialect(++s);
+		    return 1;
+		    }
+		else
+		    jerr("No assembler dialect arg for -m");
+		break;
 
 	    case 'n':			/* -n	No optimize */
 		coptimize("");		/*	Turn off all optimizations */
@@ -679,16 +699,15 @@ cswitch (char *s, int *aac, char ***aav)
 
 #if REGISTER_VARIABLES
 		use_registers = 0;
-#else					/* FW 2A(47) */
-		r_maxnopreserve = atoi (++s);
+#else					/* Fixed GCC-compatible C ABI */
+		{
+		int n = atoi (++s);
 
-		if ((r_maxnopreserve < R_MAX_NOPRESERVE)
-		    || (r_maxnopreserve > 12))
-		    {
-		    jwarn ("register count out of range, using default = %d",
-			  R_MAX_NOPRESERVE);
-		    r_maxnopreserve = R_MAX_NOPRESERVE;
-		    }
+		if (n != R_MAX_NOPRESERVE)
+		    jerr ("-r%d changes the fixed GCC C ABI; only -r%d is supported",
+			  n, R_MAX_NOPRESERVE);
+		r_maxnopreserve = R_MAX_NOPRESERVE;
+		}
 #endif
 
 		return 1;
@@ -906,16 +925,15 @@ chkmacname (char* s)
 ** off; this makes debugging easier.
 */
 static flagent_t copttab[] = {
-	"all",	NULL,	   0,	/* First element is special */
-	"parse", &optpar,  1,	/* Parse tree optimization */
-	"gen",	&optgen,   1,	/* Code generator optimizations */
-	"object", &optobj, 1,	/* Object code (peephole) optimizations */
-	NULL,	NULL,	0					// FW KCC-NT
+	{"all",	NULL,	   0},	/* First element is special */
+	{"parse", &optpar,  1},	/* Parse tree optimization */
+	{"gen",	&optgen,   1},	/* Code generator optimizations */
+	{"object", &optobj, 1},	/* Object code (peephole) optimizations */
+	{NULL,	NULL,	0}					// FW KCC-NT
 };
 
 static void
-coptimize(s)
-char *s;
+coptimize(char * s)
 {
     parcswi(s, copttab, 1);	/* Reset switches and parse */
 }
@@ -932,20 +950,19 @@ char *s;
 */
 static flagent_t cdebtab[] = {
 /* FW 2A(42) SPR9986 07-Dec-92 moved "all" entry outside #if conditional */
-	"all",	NULL,     0,	/* First element is special */
+	{"all",	NULL,     0},	/* First element is special */
 #if DEBUG_KCC		/* 5/91 KCC size */
 	"parse", &debpar, 1,	/* Parse tree output */
 	"gen",	&debgen,  1,	/* Code generator output */
 	"pho",	&debpho,  1,	/* Peephole optimizer output */
 	"sym",	&debsym,  1,	/* Symbol table output */
 #endif
-	"list", &mlist,   1,    /* CSI Mixed Listing generation-KAR */
-	NULL,	NULL,	0					// FW KCC-NT
+	{"list", &mlist,   1},    /* CSI Mixed Listing generation-KAR */
+	{NULL,	NULL,	0}					// FW KCC-NT
 };
 
 static void
-cdebug(s)
-char *s;
+cdebug(char * s)
 {
     parcswi(s, cdebtab, 1);	/* Reset switches and parse */
 }
@@ -973,14 +990,14 @@ char *s;
 static
 flagent_t csidebtab[] =
     {
-    "ddt",	&ldddtf,    1,	/* link in DDT object debugger */
-    "debug", 	&debcsi,    KCC_DBG_SDBG, /* use KCC Source Level Debugger */
-    "bprof",  	&profbliss, 1,	/* use Benny Jones' Bliss Profiler */
-    "sprof",  	&debcsi,    KCC_DBG_SPRF, /* use KCC Statement Profiler */
-    "fnprof", 	&debcsi,    KCC_DBG_FPRF, /* use KCC Function Profiler */
-    "nullptr",	&debcsi,    KCC_DBG_NULL, /* use null pointer detection */
-    "fndbg",  	&debcsi,    KCC_DBG_FDBG, /* KCCDBG function-level only */
-    NULL, 	NULL,	    0				// FW KCC-NT
+    {"ddt",	&ldddtf,    1},	/* link in DDT object debugger */
+    {"debug", 	&debcsi,    KCC_DBG_SDBG}, /* use KCC Source Level Debugger */
+    {"bprof",  	&profbliss, 1},	/* use Benny Jones' Bliss Profiler */
+    {"sprof",  	&debcsi,    KCC_DBG_SPRF}, /* use KCC Statement Profiler */
+    {"fnprof", 	&debcsi,    KCC_DBG_FPRF}, /* use KCC Function Profiler */
+    {"nullptr",	&debcsi,    KCC_DBG_NULL}, /* use null pointer detection */
+    {"fndbg",  	&debcsi,    KCC_DBG_FDBG}, /* KCCDBG function-level only */
+    {NULL, 	NULL,	    0}				// FW KCC-NT
     };
 
 static void
@@ -993,16 +1010,15 @@ csidebug (char *s)
 **	Same syntax as for -O and -d.  -w alone is same as "all".
 */
 static flagent_t cwlevtab[] = {
-	"all",	&wrnlev, WLEV_ALL,	/* Suppress everything */
-	"note",	&wrnlev, WLEV_NOTE,	/* Suppress notes */
-	"advise", &wrnlev, WLEV_ADVISE,	/* Suppress notes & advice */
-	"warn",	&wrnlev, WLEV_WARN,	/* Suppress n & a & warnings */
-	NULL,	NULL,	0					// FW KCC-NT
+	{"all",	&wrnlev, WLEV_ALL},	/* Suppress everything */
+	{"note",	&wrnlev, WLEV_NOTE},	/* Suppress notes */
+	{"advise", &wrnlev, WLEV_ADVISE},	/* Suppress notes & advice */
+	{"warn",	&wrnlev, WLEV_WARN},	/* Suppress n & a & warnings */
+	{NULL,	NULL,	0}					// FW KCC-NT
 };
 
 static void
-cwarnlev(s)
-char *s;
+cwarnlev(char * s)
 {
     parcswi(s, cwlevtab, 1);	/* Reset switches and parse */
 }
@@ -1013,21 +1029,132 @@ char *s;
 ** Note that the value for the CPU type switches is not 1, so that
 ** we can distinguish between a default setting (1) and a switch setting (2).
 */
+static int tgarch_dummy;
+
 static flagent_t ctgmtab[] = {
-	"ch7",	&tgcsize, 7,		/* Size of chars, in bits */
-	NULL,	NULL,	0					// FW KCC-NT
+	{"ch7",	&tgcsize, 7},		/* Size of chars, in bits */
+	{"base",	&tgcpu, TGCPU_PDP6},	/* DAIMOS portable base: PDP-6-safe code */
+	{"pdp10",&tgcpu, TGCPU_KA},	/* DAIMOS PDP-10 portable: KA-safe code */
+	{"pdp6",	&tgcpu, TGCPU_PDP6},	/* DEC PDP-6 */
+	{"166",	&tgcpu, TGCPU_PDP6},
+	{"ka",	&tgcpu, TGCPU_KA},	/* DEC KA-10 */
+	{"ka10",	&tgcpu, TGCPU_KA},
+	{"ki",	&tgcpu, TGCPU_KI},	/* DEC KI-10 */
+	{"ki10",	&tgcpu, TGCPU_KI},
+	{"ks",	&tgcpu, TGCPU_KS},	/* DEC KS-10 / KL-10A */
+	{"ks10",	&tgcpu, TGCPU_KS},
+	{"kl",	&tgcpu, TGCPU_KL0},	/* DEC KL-10B section 0 */
+	{"kl0",	&tgcpu, TGCPU_KL0},
+	{"kl10",	&tgcpu, TGCPU_KL0},
+	{"klx",	&tgcpu, TGCPU_KLX},	/* DEC KL-10B non-zero section */
+	{"its",	&tgits, 1},		/* ITS CPU/environment variant */
+	{NULL,	NULL,	0}					// FW KCC-NT
+};
+
+static flagent_t ctgarchtab[] = {
+	{"ch7",	&tgarch_dummy, 1},
+	{"base",	&tgarch, TGARCH_BASE},
+	{"pdp10",&tgarch, TGARCH_PDP10},
+	{"pdp6",	&tgarch, TGARCH_PDP6},
+	{"166",	&tgarch, TGARCH_PDP6},
+	{"ka",	&tgarch, TGARCH_KA},
+	{"ka10",	&tgarch, TGARCH_KA},
+	{"ki",	&tgarch, TGARCH_KI},
+	{"ki10",	&tgarch, TGARCH_KI},
+	{"ks",	&tgarch, TGARCH_KS},
+	{"ks10",	&tgarch, TGARCH_KS},
+	{"kl",	&tgarch, TGARCH_KL0},
+	{"kl0",	&tgarch, TGARCH_KL0},
+	{"kl10",	&tgarch, TGARCH_KL0},
+	{"klx",	&tgarch, TGARCH_KLX},
+	{"its",	&tgarch_dummy, 1},
+	{NULL,	NULL,	0}
 };
 
 static void
-ctargmach(s)
-char *s;
+ctargmach(char * s)
 {
     parcswi(s, ctgmtab, 0);		/* Don't reset switches; parse */
+    parcswi(s, ctgarchtab, 0);	/* Record exact requested profile. */
     tgcpw = TGSIZ_WORD/tgcsize;		/* Ensure right vars set if charsize */
     tgcmask = (1<<tgcsize)-1;		/* was specified. */
-#ifndef __COMPILER_KCC__
-    tgmachuse.mapdbl = -1;
+
+    if (tgits && !(tgcpu == TGCPU_KA || tgcpu == TGCPU_KS
+		    || tgcpu == TGCPU_KL0 || tgcpu == TGCPU_KLX))
+	jerr("ITS target variant requires KA10, KS10, or KL10");
+    settgcpu(tgcpu);
+}
+
+static void
+settgcpu(int cpu)
+{
+    tgmachuse.fltr = 1;		/* KA floating hardware is assumed present. */
+    tgmachuse.fpimm = 1;	/* KA and later have FP immediate mode. */
+    switch (cpu) {
+    case TGCPU_PDP6:
+	tgmachuse.dmovx = 0;
+	tgmachuse.adjsp = 0;
+	tgmachuse.adjbp = 0;
+	tgmachuse.fltr = 0;
+	tgmachuse.fpimm = 0;
+	tgmachuse.mapdbl = -1;	/* PDP-6 long FP is not KA software format. */
+	break;
+
+    case TGCPU_KA:
+	tgmachuse.dmovx = 0;
+	tgmachuse.adjsp = 0;
+	tgmachuse.adjbp = 0;
+	tgmachuse.fltr = 0;
+#ifdef __COMPILER_KCC__
+	tgmachuse.mapdbl = 1;	/* Native KCC double is hardware format. */
+#else
+	tgmachuse.mapdbl = -1;	/* Host constants still need PDP-10 mapping. */
 #endif
+	break;
+
+    case TGCPU_KI:
+	tgmachuse.dmovx = 1;
+	tgmachuse.adjsp = 0;
+	tgmachuse.adjbp = 0;
+#ifndef __COMPILER_KCC__
+	tgmachuse.mapdbl = -1;
+#else
+	tgmachuse.mapdbl = 0;
+#endif
+	break;
+
+    case TGCPU_KS:
+    case TGCPU_KL0:
+    case TGCPU_KLX:
+    default:
+	if (cpu <= 0)
+	    tgcpu = TGCPU_KL0;
+	tgmachuse.dmovx = 1;
+	tgmachuse.adjsp = 1;
+	tgmachuse.adjbp = 1;
+#ifndef __COMPILER_KCC__
+	tgmachuse.mapdbl = -1;
+#else
+	tgmachuse.mapdbl = 0;
+#endif
+	break;
+    }
+}
+
+/* CASMDIALECT - Set assembler output dialect.
+**	Same keyword syntax as for -O and -d.
+*/
+static flagent_t casmtab[] = {
+	{"gas",	&asmdialect, ASM_GAS},	/* GNU as style */
+	{"macro", &asmdialect, ASM_MACRO}, /* DEC MACRO/FAIL style */
+	{NULL,	NULL,	0}
+};
+
+static void
+casmdialect(char *s)
+{
+    parcswi(s, casmtab, 1);
+    longidents = (asmdialect == ASM_GAS);
 }
 
 /* CPORTLEV - Set -P portability level switches.
@@ -1035,19 +1162,18 @@ char *s;
 **	There is no "all".  -P alone resets everything.
 */
 static flagent_t cplevtab[] = {
-	"kcc",	&clevkcc, 1,		/* Enable KCC extensions to C     */
-	"base",	&clevel, CLEV_BASE,	/* Allow only very portable code  */
-	"carm",	&clevel, CLEV_CARM,	/* Allow full CARM implementation */
-	"ansi",	&clevel, CLEV_ANSI,	/* Parse CARM+ANSI implementation */
-	"stdc",	&clevel, CLEV_STDC,	/* Parse full ANSI implementation */
-	"strict", &clevel, CLEV_STRICT, /* Unforgiving ANSI ("pedantic")  */
-	"nocpp", &clevnocpp, 1,         /* FW 2A(45) defeat C++ comments  */
-	NULL,	NULL,	0					// FW KCC-NT
+	{"kcc",	&clevkcc, 1},		/* Enable KCC extensions to C     */
+	{"base",	&clevel, CLEV_BASE},	/* Allow only very portable code  */
+	{"carm",	&clevel, CLEV_CARM},	/* Allow full CARM implementation */
+	{"ansi",	&clevel, CLEV_ANSI},	/* Parse CARM+ANSI implementation */
+	{"stdc",	&clevel, CLEV_STDC},	/* Parse full ANSI implementation */
+	{"strict", &clevel, CLEV_STRICT}, /* Unforgiving ANSI ("pedantic")  */
+	{"nocpp", &clevnocpp, 1},         /* FW 2A(45) defeat C++ comments  */
+	{NULL,	NULL,	0}					// FW KCC-NT
 };
 
 static void
-cportlev(s)
-char *s;
+cportlev(char * s)
 {
     parcswi(s, cplevtab, 1);	/* Reset switches and parse */
 }
@@ -1057,17 +1183,16 @@ char *s;
 **	-v alone is same as "all".
 */
 static flagent_t cverbtab[] = {
-	"all",	NULL,     0,	/* First element is special */
-	"fundef", &vrbfun, 1,		/* Print function names as we go */
-	"nostats", &vrbsta, 1,		/* Don't print statistics at end */
-	"args", &vrbarg,   1,		/* Print KCC command line args */
-	"load",	&vrbld,    1,		/* Print linking loader commands */
-	NULL,	NULL,0						// FW KCC-NT
+	{"all",	NULL,     0},	/* First element is special */
+	{"fundef", &vrbfun, 1},		/* Print function names as we go */
+	{"nostats", &vrbsta, 1},		/* Don't print statistics at end */
+	{"args", &vrbarg,   1},		/* Print KCC command line args */
+	{"load",	&vrbld,    1},		/* Print linking loader commands */
+	{NULL,	NULL,0}						// FW KCC-NT
 };
 
 static void
-cverbose(s)
-char *s;
+cverbose(char * s)
 {
     parcswi(s, cverbtab, 1);	/* Reset switches and parse */
 }
@@ -1114,7 +1239,7 @@ module_loop:
     save_fline = fline;
     save_tline = tline;
 
-    if (!prepf)
+    if (!prepf && !vrbsta)
 	{
 	fprintf (outmsgs, "KCC: %s\n", (module_pragma) ? title : inpfmodule);
 
@@ -1177,7 +1302,7 @@ module_loop:
 		warn ("Null source file");
 	    }
 
-	while (!eof)			/* Process each external definition */
+	while (!eof && token != T_EOF)	/* Process each external definition */
 	    {
 	    savelits = 0;		/* Reset string literal pool */
 	    nodeinit ();		/* Reset parse-tree node table */
@@ -1211,7 +1336,7 @@ module_loop:
 	    }
 
 	if ((mainflg = mainsymp ()) != 0) /* Is "main" defined in module? */
-	    strcpy (mainname, inpfmodule); /* Yes, save module name! */
+	    estrcpy (mainname, inpfmodule); /* Yes, save module name! */
 
 	switch (abs (debcsi))
 	    {
@@ -1276,7 +1401,7 @@ module_loop:
 static
 int
 mainsymp (void)
-    {
+{
     SYMBOL*	s;
 
 
@@ -1329,7 +1454,7 @@ files (char *fname)
     /* Now compose source filename with ".C" appended if necessary */
 
     if (cextf)
-	strcpy (cname, fname);	/* Found .C, just copy filename */
+	estrcpy (cname, fname);	/* Found .C, just copy filename */
     else
 	{
 #if __MSDOS__
@@ -1361,8 +1486,7 @@ files (char *fname)
 
     if (condccf)
 	{
-	strcpy (rname, inpfmodule);		/* Make the .REL filename */
-	strcat (rname, ".rel");
+	estrcpy (estrcpy (rname, inpfmodule), ".rel");	/* Make the .REL filename */
 
 	if (!needcomp (cname, rname))
 	    return 0;		/* Doesn't need to be compiled! */
@@ -1375,9 +1499,9 @@ files (char *fname)
      * one we constructed by adding .C.
      */
 
-    strcpy (inpfname, fname);		/* Try filename as given */
+    estrcpy (inpfname, fname);		/* Try filename as given */
 
-#if __MSDOS__				/* FW 2A(47) */
+#if __MSDOS__ || HOST_UNIX		/* FW 2A(47) */
     in = fopen (inpfname, "r");
 #else
     switch (sourcebytewidth)		/* FW 2A(47) */
@@ -1398,9 +1522,9 @@ files (char *fname)
     
     if (in == NULL)
 	{
-	strcpy (inpfname, cname);	/* then constructed filename */
+	estrcpy (inpfname, cname);	/* then constructed filename */
 
-#if __MSDOS__				/* FW 2A(47) */
+#if __MSDOS__ || HOST_UNIX		/* FW 2A(47) */
 	in = fopen (inpfname, "r");
 #else
 	switch (sourcebytewidth)	/* FW 2A(47) */
@@ -1431,8 +1555,7 @@ files (char *fname)
 
     if (debsym)
 	{
-	strcpy (symfname, inpfmodule);
-	strcat (symfname, ".cym");
+	estrcpy (estrcpy (symfname, inpfmodule), ".cym");
 
 	if ((fsym = fopen(symfname, "w")) == NULL)
 	    {
@@ -1453,30 +1576,30 @@ files (char *fname)
     ** filename we calculated above, in the current directory.
     */
 
-    cp = ".mac";
+    cp = (asmdialect == ASM_GAS) ? ".s" : ".mac";
 
     if (savofnam != NULL)
 	{
 	char *tfnam, *ptr;
 
-	tfnam = (char *) calloc (strlen (savofnam), sizeof(char *));
+	tfnam = (char *) calloc (strlen (savofnam) + 1, sizeof(char));
 	if (tfnam == NULL)
 	    jerr("Out of memory for .REL filenames\n");
-	strcpy (tfnam, savofnam);
+	estrcpy (tfnam, savofnam);
 	ptr = strchr(tfnam, '.');
 
 	if (ptr == NULL)
-	    strcat (strcpy(outfname, savofnam), cp);
+	    estrcpy (estrcpy (outfname, savofnam), cp);
 	else
 	    {
 	    *ptr = '\0';
-	    strcat (strcpy(outfname, tfnam), cp);
+	    estrcpy (estrcpy (outfname, tfnam), cp);
 	    }
 
 	free (tfnam);
 	}
     else
-	strcat(strcpy(outfname, inpfmodule), cp); /* Compose output filename */
+	estrcpy (estrcpy (outfname, inpfmodule), cp); /* Compose output filename */
 
     if ((out = fopen(outfname, "w")) == NULL)
 	{
@@ -1488,8 +1611,7 @@ files (char *fname)
 
     if (debpar)		/* debugging output goes here */
 	{
-	strcpy(debfname, inpfmodule);
-	strcat(debfname, ".deb");
+	estrcpy (estrcpy (debfname, inpfmodule), ".deb");
 	if ((fdeb = fopen(debfname, "w")) == NULL)
 	    {
 	    errfopen("parser debugging output", debfname);
@@ -1500,8 +1622,7 @@ files (char *fname)
 #if DEBUG_KCC		/* 5/91 KCC size */
     if (debpho)		/* Peephole debugging output goes here */
 	{
-	strcpy(phofname, inpfmodule);
-	strcat(phofname, ".pho");
+	estrcpy (estrcpy (phofname, inpfmodule), ".pho");
 	if ((fpho = fopen(phofname, "w")) == NULL)
 	    {
 	    errfopen("peephole debugging output", phofname);
@@ -1519,7 +1640,7 @@ files (char *fname)
  *	source needs compiling (is newer than binary).
  */
 
-#if __MSDOS__		/* 4/92 avoid non-ANSI stat() */
+#if __MSDOS__ || HOST_UNIX	/* 4/92 avoid non-ANSI stat() */
 #define stats stat	/* just use stat() */
 #else
 extern
@@ -1564,11 +1685,11 @@ getimestr (char* src_fname)
     stats (src_fname, &sbuf);
     curtime = time (NULL);
     tptr = ctime (ctptr);
-    strcpy (comptime, tptr);
+    estrcpy (comptime, tptr);
 
 #if 0
     tptr = ctime(&sbuf.st_mtime);
-    strcpy (creatime, tptr);
+    estrcpy (creatime, tptr);
 #endif
 
     strtok (comptime, "\n");
@@ -1590,14 +1711,14 @@ showcpu (clock_t otim)
 
     if (outmsgs == stdout)	/* 8/91 -s  PPS 4298 */
 	fprintf (outmsgs, "Processed %d lines in %.2f CPU seconds "
-		 "(%ld lines/min)\n", (int) tline, secs,
+		 "(%" INT_DFMT " lines/min)\n", (int) tline, secs,
 		 (INT)((tline*60.0)/secs));
 
-    fprintf (stderr,"Processed %d lines in %.2f CPU seconds (%ld lines/min)\n",
+    fprintf (stderr,"Processed %d lines in %.2f CPU seconds (%" INT_DFMT " lines/min)\n",
 	     (int) tline, secs, (INT)((tline*60.0)/secs));
     }
 
-#if !__MSDOS__
+#if !__MSDOS__ && !HOST_UNIX
 /*
  * KAR-8/92, added to check the current level KCC is running on
  * and use the leveled header file directories. (PPS 4516)
@@ -1619,3 +1740,4 @@ set_level (int level)
 	return STLEV_FAILURE;
     }
 #endif
+
