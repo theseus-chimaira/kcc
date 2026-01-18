@@ -511,8 +511,7 @@ convcast(struct type * t, struct node * n)
 	    }
 	    else if (tismaybitptr(n->Ntype) && st->Tspec == TS_VOID
 	      && tisinteg(dt) && tbitsize(dt) > 0
-	      && tbitsize(dt) < TGSIZ_WORD
-	      && !(tischar(dt) && tbitsize(dt) == TGSIZ_CHAR))
+	      && tbitsize(dt) < TGSIZ_WORD)
 		compatible = 1;
 	}
 
@@ -520,7 +519,8 @@ convcast(struct type * t, struct node * n)
 	    if (tismaybitptr(n->Ntype)
 	      && st != NULL && dt != NULL
 	      && ((tisinteg(st) && tisinteg(dt))
-	        || (subwordsrc && wordtarget)))
+	        || (subwordsrc && wordtarget)
+	        || (st->Tspec == TS_VOID && wordtarget)))
 		compatible = 1;
 	    else if (tismaybitptr(n->Ntype)
 	      && st != NULL && dt != NULL && dt->Tspec == TS_VOID) {
@@ -546,7 +546,8 @@ convcast(struct type * t, struct node * n)
 	** and KCC's S=1 form keep the containing word address in the RH, so the
 	** existing pointer cast code can discard the P+S half uniformly.
 	*/
-	if (tismaybitptr(n->Ntype) && subwordsrc && wordtarget)
+	if (tismaybitptr(n->Ntype) && wordtarget
+	  && (subwordsrc || (st != NULL && st->Tspec == TS_VOID)))
 	    return ndefcast(CAST_PT_PT, t, n);
 
 	flags = t->Tflag;

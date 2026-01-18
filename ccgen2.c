@@ -4645,6 +4645,22 @@ gcastptr(VREG *r, TYPE *tfrom, TYPE *tto)
         return r;
     }
 
+    /* Converting a representation-polymorphic pointer to an ordinary word
+    ** pointer discards byte/logical pointer metadata.  Every supported
+    ** representation keeps the containing word address in the RH, so this
+    ** is the same operation as the native byte-pointer-to-word conversion.
+    ** Opaque void * is handled above and deliberately retains the raw word.
+    */
+    if (tismaybitptr(tfrom) && tto != NULL && tto->Tspec == TS_PTR
+      && tto->Tsubt != NULL && tto->Tsubt->Tspec != TS_VOID
+      && !tisbytepointer(tto)) {
+        if (!r)
+            return (VREG *)-1;
+        code10(P_TDZ, r, (SYMBOL *)NULL, -1, 0);
+        r->Vrtype = tto;
+        return r;
+    }
+
     /* A function-boundary exact-width pointer may be either a native byte
     ** pointer or KCC's S=1 logical packed pointer.  Width-changing casts
     ** must rewrite only the native representation; the S=1 form already

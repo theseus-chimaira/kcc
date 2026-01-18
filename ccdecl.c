@@ -4213,14 +4213,12 @@ fnmaybitptrtarget(TYPE *t)
     if (t == NULL || !tisinteg(t))
         return 0;
     bits = tbitsize(t);
-    /* Ordinary C char pointers define the external byte-address ABI.
-    ** Do not make every char * parameter representation-polymorphic merely
-    ** because a packed object can contain a non-byte-aligned char member.
-    ** Such an extension pointer must remain local unless represented by an
-    ** explicitly non-native exact-width KCC byte type.
+    /* A sub-word pointer can cross a function boundary in either native
+    ** byte-pointer form or KCC's S=1 logical form.  This includes the
+    ** target's ordinary char width: an explicit conversion can start at a
+    ** bit position which has no equivalent native char pointer, so forcing
+    ** the native representation here would lose the address.
     */
-    if (tischar(t) && bits == TGSIZ_CHAR)
-        return 0;
     return bits > 0 && bits < TGSIZ_WORD;
 }
 
@@ -4228,7 +4226,7 @@ static TYPE *
 fnmaybitptrtype(TYPE *t)
 {
     if (t != NULL && t->Tspec == TS_PTR && t->Tsubt != NULL
-      && fnmaybitptrtarget(t->Tsubt))
+      && (t->Tsubt->Tspec == TS_VOID || fnmaybitptrtarget(t->Tsubt)))
         return findctype(TS_PTR, t->Tflag | TF_MAYBITPTR,
                          t->Tsize, t->Tsubt);
     return t;
