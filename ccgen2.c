@@ -1250,7 +1250,7 @@ gdimode_addsub(VREG *r1, VREG *r2, int is_sub)
         n = sprintf(buf,
             "\tSUB\t%o,%o\n"
             "\tJUMPGE\t%o,%%DISUB%d\n"
-            "\tADD\t%o,[400000000000]\n"
+            "\tADD\t%o,[0400000000000]\n"
             "\tSUBI\t%o,1\n"
             "%%DISUB%d:\n"
             "\tSUB\t%o,%o\n",
@@ -1263,7 +1263,7 @@ gdimode_addsub(VREG *r1, VREG *r2, int is_sub)
         n = sprintf(buf,
             "\tADD\t%o,%o\n"
             "\tJUMPGE\t%o,%%DIADD%d\n"
-            "\tAND\t%o,[377777777777]\n"
+            "\tAND\t%o,[0377777777777]\n"
             "\tADDI\t%o,1\n"
             "%%DIADD%d:\n"
             "\tADD\t%o,%o\n",
@@ -1530,7 +1530,7 @@ retry_alloc:
             "\tSKIPE\t%o\n"
             "\tSUBI\t%o,1\n"
             "\tMOVN\t%o,%o\n"
-            "\tAND\t%o,[377777777777]\n"
+            "\tAND\t%o,[0377777777777]\n"
             "%%DIDIV%dN:\n",
             sgn,
             sgn, nhi,
@@ -1555,7 +1555,7 @@ retry_alloc:
                 "\tSKIPE\t%o\n"
                 "\tSUBI\t%o,1\n"
                 "\tMOVN\t%o,%o\n"
-                "\tAND\t%o,[377777777777]\n"
+                "\tAND\t%o,[0377777777777]\n"
                 "%%DIDIV%dD:\n",
                 tmp2, dhi,
                 tmp2,
@@ -1578,7 +1578,7 @@ retry_alloc:
                 "\tSKIPE\t%o\n"
                 "\tSUBI\t%o,1\n"
                 "\tMOVN\t%o,%o\n"
-                "\tAND\t%o,[377777777777]\n"
+                "\tAND\t%o,[0377777777777]\n"
                 "%%DIDIV%dD:\n",
                 tmp2, dhi,
                 tmp2,
@@ -1596,8 +1596,8 @@ retry_alloc:
 
     if (wantmod)
         n = sprintf(buf,
-            "\tAND\t%o,[377777777777]\n"
-            "\tAND\t%o,[377777777777]\n"
+            "\tAND\t%o,[0377777777777]\n"
+            "\tAND\t%o,[0377777777777]\n"
             "\tSETZ\t%o,\n"
             "\tSETZ\t%o,\n"
             "\tMOVEI\t%o,107\n"
@@ -1610,7 +1610,7 @@ retry_alloc:
             "\tLSH\t%o,-42\n"
             "\tANDI\t%o,1\n"
             "\tLSH\t%o,1\n"
-            "\tAND\t%o,[377777777777]\n"
+            "\tAND\t%o,[0377777777777]\n"
             "\tLSH\t%o,1\n"
             "\tIOR\t%o,%o\n"
             "\tAND\t%o,[777777777777]\n"
@@ -1619,7 +1619,7 @@ retry_alloc:
             "\tLSH\t%o,-42\n"
             "\tANDI\t%o,1\n"
             "\tLSH\t%o,1\n"
-            "\tAND\t%o,[377777777777]\n"
+            "\tAND\t%o,[0377777777777]\n"
             "\tIOR\t%o,%o\n"
             "\tLSH\t%o,1\n"
             "\tIOR\t%o,%o\n"
@@ -1641,7 +1641,7 @@ retry_alloc:
             "%%DIDIV%dSUB:\n"
             "\tSUB\t%o,%o\n"
             "\tJUMPGE\t%o,%%DIDIV%dSB0\n"
-            "\tADD\t%o,[400000000000]\n"
+            "\tADD\t%o,[0400000000000]\n"
             "\tSUBI\t%o,1\n"
             "%%DIDIV%dSB0:\n"
             "\tSUB\t%o,%o\n"
@@ -1696,8 +1696,8 @@ retry_alloc:
     else
         {
         n = sprintf(buf,
-        "\tAND\t%o,[377777777777]\n"
-        "\tAND\t%o,[377777777777]\n"
+        "\tAND\t%o,[0377777777777]\n"
+        "\tAND\t%o,[0377777777777]\n"
         "\tSETZ\t%o,\n"
         "\tSETZ\t%o,\n"
         "\tSETZ\t%o,\n"
@@ -1709,7 +1709,7 @@ retry_alloc:
         "\tLSH\t%o,-42\n"
         "\tANDI\t%o,1\n"
         "\tLSH\t%o,1\n"
-        "\tAND\t%o,[377777777777]\n"
+        "\tAND\t%o,[0377777777777]\n"
         "\tLSH\t%o,1\n"
         "\tIOR\t%o,%o\n"
         "\tAND\t%o,[777777777777]\n"
@@ -1721,7 +1721,7 @@ retry_alloc:
         "\tLSH\t%o,-42\n"
         "\tANDI\t%o,1\n"
         "\tLSH\t%o,1\n"
-        "\tAND\t%o,[377777777777]\n"
+        "\tAND\t%o,[0377777777777]\n"
         "\tLSH\t%o,1\n"
         "\tIOR\t%o,%o\n"
         "\tAND\t%o,[777777777777]\n"
@@ -1730,7 +1730,7 @@ retry_alloc:
         "\tLSH\t%o,-42\n"
         "\tANDI\t%o,1\n"
         "\tLSH\t%o,1\n"
-        "\tAND\t%o,[377777777777]\n"
+        "\tAND\t%o,[0377777777777]\n"
         "\tIOR\t%o,%o\n"
         "\tLSH\t%o,1\n"
         "\tIOR\t%o,%o\n"
@@ -1752,7 +1752,7 @@ retry_alloc:
         "%%DIDIV%dSUB:\n"
         "\tSUB\t%o,%o\n"
         "\tJUMPGE\t%o,%%DIDIV%dSB0\n"
-        "\tADD\t%o,[400000000000]\n"
+        "\tADD\t%o,[0400000000000]\n"
         "\tSUBI\t%o,1\n"
         "%%DIDIV%dSB0:\n"
         "\tSUB\t%o,%o\n"
@@ -1828,7 +1828,7 @@ retry_alloc:
                 "\tSKIPE\t%o\n"
                 "\tSUBI\t%o,1\n"
                 "\tMOVN\t%o,%o\n"
-                "\tAND\t%o,[377777777777]\n"
+                "\tAND\t%o,[0377777777777]\n"
                 "%%DIDIV%dMR:\n",
                 sgn, lab,
                 rhi, rhi,
@@ -1847,7 +1847,7 @@ retry_alloc:
                 "\tSKIPE\t%o\n"
                 "\tSUBI\t%o,1\n"
                 "\tMOVN\t%o,%o\n"
-                "\tAND\t%o,[377777777777]\n"
+                "\tAND\t%o,[0377777777777]\n"
                 "%%DIDIV%dMQ:\n",
                 sgn, lab,
                 qhi, qhi,
@@ -3310,7 +3310,7 @@ gbinary(NODE *n)
             if (n->Nop == Q_DIV)
                 an = sprintf(abuf,
                     "\tLSHC\t%o,-%o\n"
-                    "\tAND\t%o,[377777777777]\n",
+                    "\tAND\t%o,[0377777777777]\n",
                     hi, sh, lo);
             else if (sh == 35)
                 an = sprintf(abuf, "\tSETZ\t%o,\n", hi);
@@ -3358,13 +3358,13 @@ gbinary(NODE *n)
             if (n->Nop == Q_DIV)
                 an = sprintf(abuf,
                     "\tJUMPGE\t%o,%%DIWP%d\n"
-                    "\tADD\t%o,[377777777777]\n"
+                    "\tADD\t%o,[0377777777777]\n"
                     "\tTLZE\t%o,400000\n"
                     "\t ADDI\t%o,1\n"
                     "\tADD\t%o,[%lo]\n"
                     "%%DIWP%d:\n"
                     "\tASHC\t%o,-%o\n"
-                    "\tAND\t%o,[377777777777]\n",
+                    "\tAND\t%o,[0377777777777]\n",
                     hi, lab,
                     lo,
                     lo,
@@ -3380,12 +3380,12 @@ gbinary(NODE *n)
                     "\tSKIPE\t%o\n"
                     "\t SUBI\t%o,1\n"
                     "\tMOVN\t%o,%o\n"
-                    "\tAND\t%o,[377777777777]\n"
+                    "\tAND\t%o,[0377777777777]\n"
                     "\tAND\t%o,[%lo]\n"
                     "\tSKIPE\t%o\n"
                     "\t SETO\t%o,\n"
                     "\tMOVN\t%o,%o\n"
-                    "\tAND\t%o,[377777777777]\n"
+                    "\tAND\t%o,[0377777777777]\n"
                     "\tJRST\t%%DIWM%dD\n"
                     "%%DIWM%dP:\n"
                     "\tAND\t%o,[%lo]\n"
@@ -3435,13 +3435,13 @@ gbinary(NODE *n)
                 "\tSKIPE\t%o\n"
                 "\t SUBI\t%o,1\n"
                 "\tMOVN\t%o,%o\n"
-                "\tAND\t%o,[377777777777]\n"
+                "\tAND\t%o,[0377777777777]\n"
                 "\tSETZ\t%o,\n"
                 "\tAND\t%o,[%lo]\n"
                 "\tSKIPE\t%o\n"
                 "\t SETO\t%o,\n"
                 "\tMOVN\t%o,%o\n"
-                "\tAND\t%o,[377777777777]\n"
+                "\tAND\t%o,[0377777777777]\n"
                 "\tJRST\t%%DIM2%dD\n"
                 "%%DIM2%dP:\n"
                 "\tSETZ\t%o,\n"
@@ -3494,7 +3494,7 @@ gbinary(NODE *n)
                     "\t ADDI\t%o,1\n"
                     "%%DIP2%d:\n"
                     "\tASHC\t%o,-%o\n"
-                    "\tAND\t%o,[377777777777]\n",
+                    "\tAND\t%o,[0377777777777]\n",
                     hi, lab,
                     lo, (long)(clo - 1),
                     lo,
@@ -5270,7 +5270,7 @@ gincdec(NODE *n, int inc, int pre)
 		len = sprintf(buf,
 		    "\tADDI\t%o,1\n"
 		    "\tJUMPGE\t%o,%%DIINC%d\n"
-		    "\tAND\t%o,[377777777777]\n"
+		    "\tAND\t%o,[0377777777777]\n"
 		    "\tADDI\t%o,1\n"
 		    "%%DIINC%d:\n",
 		    vrreal(VR2(r)), vrreal(VR2(r)), lab,
@@ -5279,7 +5279,7 @@ gincdec(NODE *n, int inc, int pre)
 		len = sprintf(buf,
 		    "\tSUBI\t%o,1\n"
 		    "\tJUMPGE\t%o,%%DIDEC%d\n"
-		    "\tADD\t%o,[400000000000]\n"
+		    "\tADD\t%o,[0400000000000]\n"
 		    "\tSUBI\t%o,1\n"
 		    "%%DIDEC%d:\n",
 		    vrreal(VR2(r)), vrreal(VR2(r)), lab,
