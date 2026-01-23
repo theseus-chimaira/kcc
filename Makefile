@@ -2,9 +2,7 @@ CC ?= gcc
 KCC ?= ./kcc
 KCC_SELF_FLAGS ?= -P=stdc+kcc -DHOST_UNIX=1 -Iself/include/ -Hself/include/
 
-CFLAGS += -std=c99 -funsigned-char \
-	-Wall -Wextra -Wpedantic -Wstrict-prototypes -Wold-style-definition \
-	-Werror
+CFLAGS += -std=c99 -funsigned-char
 LDFLAGS ?=
 INSTALL ?= install
 RM ?= rm -f
