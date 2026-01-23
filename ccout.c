@@ -804,7 +804,7 @@ PURGE IFE,IFN,IFG,IFGE,IFL,IFLE,IFDEF,IFNDEF,IFIDN,IFDIF\n\n");
 
     if ((asmhdr = calloc (1, size)) != NULL)  /* Now try to relocate it */
 	{
-	strcpy (asmhdr, beg);		/* Won, copy header to save it! */
+	memcpy (asmhdr, beg, size);	/* Copy complete NUL-terminated header. */
 	return asmhdr;
 	}
 

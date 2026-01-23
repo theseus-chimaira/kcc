@@ -794,29 +794,18 @@ genfunct (NODE* n)
         bltsave = !isr && n->Nreg == 4 && maxauto > 0;
 	if (bltsave)
 	    {
-	    char buf[128];
-	    char firstbuf[24];
-	    char lastbuf[24];
 	    int first = 1 - n->Nreg - maxauto;
 	    int last = -maxauto;
-	    int nbytes;
 
 	    code8(P_ADJSP, VR_SP, n->Nreg + maxauto);
 	    flushcode();
-	    if (first < 0)
-		sprintf(firstbuf, "-%o", -first);
-	    else
-		sprintf(firstbuf, "%o", first);
-	    if (last < 0)
-		sprintf(lastbuf, "-%o", -last);
-	    else
-		sprintf(lastbuf, "%o", last);
-	    nbytes = sprintf(buf,
-		"\tMOVEI\t0,%s(17)\n"
-		"\tHRLI\t0,%o\n"
-		"\tBLT\t0,%s(17)\n",
-		firstbuf, r_maxnopreserve + 1, lastbuf);
-	    codestr(buf, nbytes);
+	    outstr("\tMOVEI\t0,");
+	    outnum(first);
+	    outstr("(17)\n\tHRLI\t0,");
+	    outnum(r_maxnopreserve + 1);
+	    outstr("\n\tBLT\t0,");
+	    outnum(last);
+	    outstr("(17)\n");
 	    stackoffset += n->Nreg + maxauto;
 	    fnframesave += n->Nreg;
 	    }

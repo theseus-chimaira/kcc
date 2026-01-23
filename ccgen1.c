@@ -26,7 +26,7 @@ extern void codfallthrough(SYMBOL *);	/* CCCODE */
 extern SYMBOL *newlabel(void);	/* CCSYM */
 extern INT sizetype(TYPE *), sizeptobj(TYPE *);		/* CCSYM */
 extern TYPE *findtype(int, TYPE *);
-extern void outlab(SYMBOL *);		/* CCOUT */
+extern void outlab(SYMBOL *), outstr(char *), outnum(INT);	/* CCOUT */
 extern void relflush(VREG *), gboolean(NODE *, SYMBOL *, int), freelabel(SYMBOL *);
 extern INT istrue(NODE *, NODE *);		/* CCEVAL */
 extern NODE *evalexpr(NODE *);
@@ -1274,25 +1274,20 @@ genretepilog(int i)
 	*/
 	if (R_PRESERVE_COUNT >= i) {
 	    if (i == 4) {
-		char buf[96];
-		char offbuf[24];
 		int off = 1 + fnsavescr - stackoffset;
-		int n;
 
 		/* Four consecutive preserved ACs are cheaper to restore with
 		** one BLT than with four individual MOVEs.  AC0 is caller-
 		** clobbered and is free at a normal C return boundary.
 		*/
-		if (off < 0)
-		    sprintf(offbuf, "-%o", -off);
-		else
-		    sprintf(offbuf, "%o", off);
-		n = sprintf(buf,
-		    "\tMOVEI\t0,%o\n"
-		    "\tHRLI\t0,%s(17)\n"
-		    "\tBLT\t0,%o\n",
-		    r_maxnopreserve + 1, offbuf, r_maxnopreserve + i);
-		codestr(buf, n);
+		flushcode();
+		outstr("\tMOVEI\t0,");
+		outnum(r_maxnopreserve + 1);
+		outstr("\n\tHRLI\t0,");
+		outnum(off);
+		outstr("(17)\n\tBLT\t0,");
+		outnum(r_maxnopreserve + i);
+		outstr("\n");
 	    } else
 		for (j = 0; j < i; ++j) {
 		    codemdx(P_MOVE, j + r_maxnopreserve + 1, (SYMBOL *)NULL,
