@@ -12,6 +12,111 @@
 #include "cc.h"
 #include "ccgen.h"
 #include <string.h>
+#include <stdarg.h>
+
+/*
+** KCCFMT - bounded formatter for generated assembly fragments.
+**
+** ccgen2 only needs a deliberately small printf subset here.  Keeping the
+** formatter local avoids unbounded sprintf() calls and does not introduce a
+** C99 snprintf() dependency into this old host compiler.  Supported
+** conversions are %d, %o, %lo, %s, and %%.
+*/
+static void
+kccfmt_putc(char *buf, size_t size, size_t *used, int ch)
+{
+    if (*used + 1 >= size)
+        fatal("ccgen2: generated assembly buffer overflow");
+    buf[(*used)++] = (char)ch;
+}
+
+static void
+kccfmt_unsigned(char *buf, size_t size, size_t *used,
+                unsigned long value, unsigned int base)
+{
+    char digits[3 * sizeof(unsigned long) + 1];
+    size_t n;
+
+    n = 0;
+    do {
+        digits[n++] = (char)('0' + (value % base));
+        value /= base;
+    } while (value != 0);
+    while (n != 0)
+        kccfmt_putc(buf, size, used, digits[--n]);
+}
+
+static int
+kccfmt(char *buf, size_t size, const char *fmt, ...)
+{
+    va_list ap;
+    size_t used;
+    int ch;
+
+    if (size == 0)
+        fatal("ccgen2: zero-sized generated assembly buffer");
+
+    used = 0;
+    va_start(ap, fmt);
+    while ((ch = (unsigned char)*fmt++) != '\0') {
+        int islong;
+
+        if (ch != '%') {
+            kccfmt_putc(buf, size, &used, ch);
+            continue;
+        }
+        ch = (unsigned char)*fmt++;
+        if (ch == '%') {
+            kccfmt_putc(buf, size, &used, '%');
+            continue;
+        }
+
+        islong = 0;
+        if (ch == 'l') {
+            islong = 1;
+            ch = (unsigned char)*fmt++;
+        }
+
+        switch (ch) {
+        case 'd': {
+            long value;
+            unsigned long magnitude;
+
+            value = islong ? va_arg(ap, long) : (long)va_arg(ap, int);
+            if (value < 0) {
+                kccfmt_putc(buf, size, &used, '-');
+                magnitude = (unsigned long)(-(value + 1)) + 1;
+            } else
+                magnitude = (unsigned long)value;
+            kccfmt_unsigned(buf, size, &used, magnitude, 10);
+            break;
+        }
+        case 'o':
+            if (islong)
+                kccfmt_unsigned(buf, size, &used,
+                                va_arg(ap, unsigned long), 8);
+            else
+                kccfmt_unsigned(buf, size, &used,
+                                (unsigned long)va_arg(ap, unsigned int), 8);
+            break;
+        case 's': {
+            const char *str;
+
+            if (islong)
+                fatal("ccgen2: unsupported generated assembly format");
+            str = va_arg(ap, const char *);
+            while (*str != '\0')
+                kccfmt_putc(buf, size, &used, (unsigned char)*str++);
+            break;
+        }
+        default:
+            fatal("ccgen2: unsupported generated assembly format");
+        }
+    }
+    va_end(ap);
+    buf[used] = '\0';
+    return (int)used;
+}
 
 /* Imported functions */
 extern SYMBOL *newlabel(void);		/* CCSYM */
@@ -747,7 +852,7 @@ gdimemstore(VREG *reg, VREG *ra)
     reg->Vrflags = hflags;
     VR2(reg)->Vrflags = lflags;
     flushcode();
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
 	"\tMOVEM\t%o,0(%o)\n"
 	"\tMOVEM\t%o,1(%o)\n",
 	hi, ar, lo, ar);
@@ -795,7 +900,7 @@ gdimode_from_int(VREG *r, TYPE *tfrom, TYPE *tto, NODE *ln)
     (void) vrtoreal(r);
     hi = vrreal(q);
     lo = vrreal(VR2(q));
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
 	"\tMOVE\t%o,0%o\n"
 	"\tMOVE\t%o,0%o\n"
 	"\t%s\t%o,-043\n"
@@ -949,7 +1054,7 @@ gdimode_signed_relop_skip(VREG *r1, VREG *r2, int op)
 	    if ((f = gdimode_try_ac(a, na)) != 0)
 		{
 		lab = labno++;
-		n = sprintf(buf,
+		n = kccfmt(buf, sizeof(buf),
 		    "\tSETZ\t%o,\n"
 		    "\t%s\t%o,%o\n"
 		    "\tJRST\t%%DICMP%dH\n"
@@ -978,7 +1083,7 @@ gdimode_signed_relop_skip(VREG *r1, VREG *r2, int op)
 
     (void) vrstoreal(r1, VR2(r1));
     flushcode();
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
 	"\tPUSH\t17,%o\n"
 	"\tPUSH\t17,%o\n",
 	vrreal(r1), vrreal(VR2(r1)));
@@ -1000,7 +1105,7 @@ gdimode_signed_relop_skip(VREG *r1, VREG *r2, int op)
     flag = gdimode_pick_ac(avoid, navoid);
     lab = labno++;
 
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
 	"\tSETZ\t%o,\n"
 	"\tMOVE\t%o,-1(17)\n"
 	"\tMOVE\t%o,0(17)\n"
@@ -1102,7 +1207,7 @@ gdimode_unsigned_relop_skip(VREG *r1, VREG *r2, int op)
 	    if ((f = gdimode_try_ac(a, na)) != 0)
 		{
 		lab = labno++;
-		n = sprintf(buf,
+		n = kccfmt(buf, sizeof(buf),
 		    "\tTLC\t%o,400000\n"
 		    "\tTLC\t%o,400000\n"
 		    "\tSETZ\t%o,\n"
@@ -1133,7 +1238,7 @@ gdimode_unsigned_relop_skip(VREG *r1, VREG *r2, int op)
 
     (void) vrstoreal(r1, VR2(r1));
     flushcode();
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
 	"\tPUSH\t17,%o\n"
 	"\tPUSH\t17,%o\n",
 	vrreal(r1), vrreal(VR2(r1)));
@@ -1155,7 +1260,7 @@ gdimode_unsigned_relop_skip(VREG *r1, VREG *r2, int op)
     flag = gdimode_pick_ac(avoid, navoid);
     lab = labno++;
 
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
 	"\tSETZ\t%o,\n"
 	"\tMOVE\t%o,-1(17)\n"
 	"\tTLC\t%o,400000\n"
@@ -1247,7 +1352,7 @@ gdimode_addsub(VREG *r1, VREG *r2, int is_sub)
         {
         static int sublab;
         int lab = sublab++;
-        n = sprintf(buf,
+        n = kccfmt(buf, sizeof(buf),
             "\tSUB\t%o,%o\n"
             "\tJUMPGE\t%o,%%DISUB%d\n"
             "\tADD\t%o,[0400000000000]\n"
@@ -1260,7 +1365,7 @@ gdimode_addsub(VREG *r1, VREG *r2, int is_sub)
         {
         static int addlab;
         int lab = addlab++;
-        n = sprintf(buf,
+        n = kccfmt(buf, sizeof(buf),
             "\tADD\t%o,%o\n"
             "\tJUMPGE\t%o,%%DIADD%d\n"
             "\tAND\t%o,[0377777777777]\n"
@@ -1328,7 +1433,7 @@ gdimodemul(VREG *r1, VREG *r2)
     /* ACs are addressable as memory locations 0-17.  The operand
     ** snapshots can therefore feed MUL/IMUL directly; do not round-trip
     ** them through the stack merely to obtain a memory operand. */
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
 	"\tMOVE\t%o,0%o\n"
 	"\tMUL\t%o,0%o\n"
 	"\tAND\t%o,[0377777777777]\n",
@@ -1338,7 +1443,7 @@ gdimodemul(VREG *r1, VREG *r2)
     codestr(buf, n);
 
     /* Cross terms: ahi*blo and alo*bhi. */
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
 	"\tMOVE\t%o,0%o\n"
 	"\tIMUL\t%o,0%o\n"
 	"\tADD\t%o,0%o\n"
@@ -1354,7 +1459,7 @@ gdimodemul(VREG *r1, VREG *r2)
     ** the carry from alo*blo gives the correct high 36 bits for both
     ** signed and unsigned multiplication.  No separate sign correction
     ** is needed. */
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
 	"\tAND\t%o,[0377777777777]\n",
 	prodlo);
     codestr(buf, n);
@@ -1363,7 +1468,7 @@ gdimodemul(VREG *r1, VREG *r2)
     r1lo = vrreal(VR2(r1));
     /* prodhi/prodlo were allocated with both destination words in the
     ** avoid set, so the final copy has no overlap and needs no snapshots. */
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
 	"\tMOVE\t%o,0%o\n"
 	"\tMOVE\t%o,0%o\n",
 	r1hi, prodhi, r1lo, prodlo);
@@ -1520,7 +1625,7 @@ retry_alloc:
 
     if (is_signed)
         {
-        n = sprintf(buf,
+        n = kccfmt(buf, sizeof(buf),
             "\tSETZ\t%o,\n"
             "\tMOVE\t%o,%o\n"
             "\tLSH\t%o,-43\n"
@@ -1546,7 +1651,7 @@ retry_alloc:
         codestr(buf, n);
 
         if (wantmod)
-            n = sprintf(buf,
+            n = kccfmt(buf, sizeof(buf),
                 "\tMOVE\t%o,%o\n"
                 "\tLSH\t%o,-43\n"
                 "\tANDI\t%o,1\n"
@@ -1568,7 +1673,7 @@ retry_alloc:
                 dlo,
                 lab);
         else
-            n = sprintf(buf,
+            n = kccfmt(buf, sizeof(buf),
                 "\tMOVE\t%o,%o\n"
                 "\tLSH\t%o,-43\n"
                 "\tANDI\t%o,1\n"
@@ -1595,7 +1700,7 @@ retry_alloc:
         }
 
     if (wantmod)
-        n = sprintf(buf,
+        n = kccfmt(buf, sizeof(buf),
             "\tAND\t%o,[0377777777777]\n"
             "\tAND\t%o,[0377777777777]\n"
             "\tSETZ\t%o,\n"
@@ -1695,7 +1800,7 @@ retry_alloc:
             cnt, lab);
     else
         {
-        n = sprintf(buf,
+        n = kccfmt(buf, sizeof(buf),
         "\tAND\t%o,[0377777777777]\n"
         "\tAND\t%o,[0377777777777]\n"
         "\tSETZ\t%o,\n"
@@ -1822,7 +1927,7 @@ retry_alloc:
         {
         if (wantmod)
             {
-            n = sprintf(buf,
+            n = kccfmt(buf, sizeof(buf),
                 "\tJUMPE\t%o,%%DIDIV%dMR\n"
                 "\tMOVN\t%o,%o\n"
                 "\tSKIPE\t%o\n"
@@ -1841,7 +1946,7 @@ retry_alloc:
             }
         else
             {
-            n = sprintf(buf,
+            n = kccfmt(buf, sizeof(buf),
                 "\tJUMPE\t%o,%%DIDIV%dMQ\n"
                 "\tMOVN\t%o,%o\n"
                 "\tSKIPE\t%o\n"
@@ -1860,7 +1965,7 @@ retry_alloc:
             }
         }
 
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
         "\tMOVE\t%o,%o\n"
         "\tMOVE\t%o,%o\n",
         vrreal(r1), (wantmod ? rhi : qhi),
@@ -1886,7 +1991,7 @@ gdimodeneg(VREG *r)
     /* Negate high36:low35 in place.  The high word needs one extra
     ** decrement exactly when the low 35-bit word is nonzero.  Masking the
     ** negated low word supplies modulo-2^35 reduction without a scratch AC. */
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
 	"\tMOVN\t%o,%o\n"
 	"\tSKIPE\t%o\n"
 	"\tSUBI\t%o,1\n"
@@ -1961,7 +2066,7 @@ gdimodebitwise(int op, VREG *r1, VREG *r2)
 	    mn = "AND";
 	}
 
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
 	"\t%s\t%o,%o\n"
 	"\t%s\t%o,%o\n",
 	mn, r1hi, r2hi,
@@ -1985,7 +2090,7 @@ gdimodecompl(VREG *r)
     lo = vrreal(VR2(r));
     /* Both words carry the sign bit in the GCC ABI representation.
     ** Complement both complete words so ~(DImode)0 becomes (-1, -1). */
-    n = sprintf(buf,
+    n = kccfmt(buf, sizeof(buf),
         "\tSETCA\t%o,\n"
         "\tSETCA\t%o,\n",
         hi, lo);
@@ -2034,7 +2139,7 @@ gdimodeshift(int op, VREG *r1, VREG *r2, int ts)
     */
     if (!direct_ashc)
         {
-        n = sprintf(buf,
+        n = kccfmt(buf, sizeof(buf),
             "\tTLZ\t%o,0400000\n"
             "\tTRNE\t%o,1\n"
             "\t TLO\t%o,0400000\n"
@@ -2052,13 +2157,13 @@ gdimodeshift(int op, VREG *r1, VREG *r2, int ts)
     lo = vrreal(VR2(r1));
     if (direct_ashc)
         {
-        n = sprintf(buf,
+        n = kccfmt(buf, sizeof(buf),
             "\tAND\t%o,[0377777777777]\n",
             lo);
         }
     else
         {
-        n = sprintf(buf,
+        n = kccfmt(buf, sizeof(buf),
             "\tLSH\t%o,1\n"
             "\tJUMPGE\t%o,.+2\n"
             "\t TRO\t%o,1\n"
@@ -2498,7 +2603,7 @@ gboolop(NODE *n, int reverse)
 		avoid[navoid++] = lhi;
 		avoid[navoid++] = llo;
 		t1 = gdimode_pick_ac(avoid, navoid);
-		n = sprintf(buf,
+		n = kccfmt(buf, sizeof(buf),
 		    "\tMOVE\t%o,%o\n"
 		    "\tTLC\t%o,400000\n",
 		    t1, llo, t1);
@@ -2524,7 +2629,7 @@ gboolop(NODE *n, int reverse)
 		    avoid[navoid++] = th2;
 		    }
 		t2 = gdimode_pick_ac(avoid, navoid);
-		n = sprintf(buf,
+		n = kccfmt(buf, sizeof(buf),
 		    "\tMOVE\t%o,%o\n"
 		    "\tTLC\t%o,400000\n",
 		    t2, rlo, t2);
@@ -2532,7 +2637,7 @@ gboolop(NODE *n, int reverse)
 
 		if (usestk)
 		    {
-		    n = sprintf(buf,
+		    n = kccfmt(buf, sizeof(buf),
 			"\tMOVE\t%o,37777777777(17)\n"
 			"\tMOVE\t%o,0(17)\n",
 			th1, th2);
@@ -2874,13 +2979,13 @@ gassign(NODE *n)
 	    lo = vrreal(VR2(r2));
 	    flushcode();
 	    if (tgcpu >= TGCPU_KI)
-		nout = sprintf(buf,
+		nout = kccfmt(buf, sizeof(buf),
 		    "\tDMOVE\t%o,-1(17)\n"
 		    "\tSUB\t17,[2,,2]\n"
 		    "\tDMOVEM\t%o,0(%o)\n",
 		    hi, hi, ar);
 	    else
-		nout = sprintf(buf,
+		nout = kccfmt(buf, sizeof(buf),
 		    "\tMOVE\t%o,-1(17)\n"
 		    "\tMOVE\t%o,0(17)\n"
 		    "\tSUB\t17,[2,,2]\n"
@@ -3277,7 +3382,7 @@ gbinary(NODE *n)
                 (void) vrstoreal(r1, VR2(r1));
                 hi = vrreal(r1);
                 lo = vrreal(VR2(r1));
-                an = sprintf(abuf,
+                an = kccfmt(abuf, sizeof(abuf),
                     "\tSETZ\t%o,\n"
                     "\tAND\t%o,[%lo]\n",
                     hi, lo, (long)clo);
@@ -3308,16 +3413,16 @@ gbinary(NODE *n)
             hi = vrreal(r1);
             lo = vrreal(VR2(r1));
             if (n->Nop == Q_DIV)
-                an = sprintf(abuf,
+                an = kccfmt(abuf, sizeof(abuf),
                     "\tLSHC\t%o,-%o\n"
                     "\tAND\t%o,[0377777777777]\n",
                     hi, sh, lo);
             else if (sh == 35)
-                an = sprintf(abuf, "\tSETZ\t%o,\n", hi);
+                an = kccfmt(abuf, sizeof(abuf), "\tSETZ\t%o,\n", hi);
             else {
                 mask = (((INT)1 << (sh - 35)) - 1)
                      & dimode_hi36mask();
-                an = sprintf(abuf, "\tAND\t%o,[%lo]\n",
+                an = kccfmt(abuf, sizeof(abuf), "\tAND\t%o,[%lo]\n",
                     hi, (long)mask);
             }
             codestr(abuf, an);
@@ -3356,7 +3461,7 @@ gbinary(NODE *n)
             lo = vrreal(VR2(r1));
             lab = n->Nop == Q_DIV ? p2lab++ : p2modlab++;
             if (n->Nop == Q_DIV)
-                an = sprintf(abuf,
+                an = kccfmt(abuf, sizeof(abuf),
                     "\tJUMPGE\t%o,%%DIWP%d\n"
                     "\tADD\t%o,[0377777777777]\n"
                     "\tTLZE\t%o,400000\n"
@@ -3374,7 +3479,7 @@ gbinary(NODE *n)
                     hi, sh,
                     lo);
             else
-                an = sprintf(abuf,
+                an = kccfmt(abuf, sizeof(abuf),
                     "\tJUMPGE\t%o,%%DIWM%dP\n"
                     "\tMOVN\t%o,%o\n"
                     "\tSKIPE\t%o\n"
@@ -3429,7 +3534,7 @@ gbinary(NODE *n)
             hi = vrreal(r1);
             lo = vrreal(VR2(r1));
             lab = p2modlab++;
-            an = sprintf(abuf,
+            an = kccfmt(abuf, sizeof(abuf),
                 "\tJUMPGE\t%o,%%DIM2%dP\n"
                 "\tMOVN\t%o,%o\n"
                 "\tSKIPE\t%o\n"
@@ -3487,7 +3592,7 @@ gbinary(NODE *n)
                 hi = vrreal(r1);
                 lo = vrreal(VR2(r1));
                 lab = p2lab++;
-                an = sprintf(abuf,
+                an = kccfmt(abuf, sizeof(abuf),
                     "\tJUMPGE\t%o,%%DIP2%d\n"
                     "\tADD\t%o,[%lo]\n"
                     "\tTLZE\t%o,400000\n"
@@ -5267,7 +5372,7 @@ gincdec(NODE *n, int inc, int pre)
 	    (void) vrstoreal(r, VR2(r));
 	    lab = dimodeinclab++;
 	    if (inc > 0)
-		len = sprintf(buf,
+		len = kccfmt(buf, sizeof(buf),
 		    "\tADDI\t%o,1\n"
 		    "\tJUMPGE\t%o,%%DIINC%d\n"
 		    "\tAND\t%o,[0377777777777]\n"
@@ -5276,7 +5381,7 @@ gincdec(NODE *n, int inc, int pre)
 		    vrreal(VR2(r)), vrreal(VR2(r)), lab,
 		    vrreal(VR2(r)), vrreal(r), lab);
 	    else
-		len = sprintf(buf,
+		len = kccfmt(buf, sizeof(buf),
 		    "\tSUBI\t%o,1\n"
 		    "\tJUMPGE\t%o,%%DIDEC%d\n"
 		    "\tADD\t%o,[0400000000000]\n"
