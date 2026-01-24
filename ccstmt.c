@@ -69,6 +69,7 @@ static NODE *bin_asm(void), *bin_offsetof(void), *bin_muuo(void),
 	*bin_jffo(void);
 static int cmpatype(TYPE *, TYPE *);
 static int stmtpackedagg(INT);
+static void stmtintname(char *, char *, unsigned int);
 static INT stmtpackedbit(INT);
 static INT stmtpackedencode(TYPE *, INT);
 static SYMBOL *stmtlocalaggroot(NODE *);
@@ -92,6 +93,31 @@ static NODE *ptrapply(), *chkadd(), *parglist();
 static NODE *bin_asm(), *bin_offsetof(), *bin_muuo(), *bin_jffo();
 #endif
 
+
+/* Build a hidden compiler-generated identifier without stdio formatting.
+** The destination buffers used below are large enough for their fixed stem
+** plus every decimal value representable by unsigned int.
+*/
+static void
+stmtintname(char *dst, char *stem, unsigned int value)
+{
+    char digits[3 * sizeof(unsigned int) + 1];
+    int n;
+
+    *dst++ = SPC_IAUTO;
+    while (*stem != '\0')
+	*dst++ = *stem++;
+
+    n = 0;
+    do {
+	digits[n++] = (char)('0' + (value % 10));
+	value /= 10;
+    } while (value != 0);
+
+    while (--n >= 0)
+	*dst++ = digits[n];
+    *dst = '\0';
+}
 
 /* Return the automatic aggregate object at the root of a direct member
 ** selection.  Indirect Q_MEMBER accesses are deliberately excluded because
@@ -1580,7 +1606,7 @@ castexpr(void)
 	    NODE *iz, *id, *data;
 	    INT oldsz, newsz;
 
-	    sprintf(temp, "%cclit%d", SPC_IAUTO, ++clcntr);
+	    stmtintname(temp, "clit", (unsigned int)++clcntr);
 	    oldsz = sizetype(t);
 	    if (lsymhead == NULL)
 		s = defstatic(temp, t);
@@ -2172,7 +2198,7 @@ posttail(NODE *n)
 		    char temp[20];
 		    if (n->Ntype->Tspec != TS_STRUCT && n->Ntype->Tspec != TS_UNION)
 			int_error("postexpr: Fn retval too large");
-		    sprintf(temp,"%cstruct%d", SPC_IAUTO, ++cntr);
+		    stmtintname(temp, "struct", (unsigned int)++cntr);
 		    n->Nretstruct = defauto(temp, n->Ntype);
 		    }
 		else
