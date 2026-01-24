@@ -41,7 +41,7 @@ static int makprefile (void); /* KAR-2/92, create ENTRY list in side .MAC */
 
 /* Internal Functions */
 static void outrj6 (unsigned INT);
-static char *ahmacs (void);
+static char *ahmacs (void), *octcpy (char *, unsigned INT);
 static void simptrcnv (PCODE *), simsmove (PCODE *),
 	simufltr (PCODE *), simfltr (PCODE *), simfix (PCODE *),
 	simdsngl (PCODE *),
@@ -281,7 +281,6 @@ outfile (void)
 {
     int		i = 0;
     int		slen = strlen (inpfname);
-    char	tmp[4] = {0};
     char	*tfname = inpfname;
 
 
@@ -294,8 +293,7 @@ outfile (void)
 	else
 	    outstr (", ");
 
-	sprintf (tmp, "%o", *tfname);
-	outstr (tmp);
+	outnum ((unsigned char)*tfname);
 	tfname++;
 	i++;
 	}
@@ -312,21 +310,20 @@ static
 void
 outnpd (PCODE *p)
     {
-    char	line[20] = {0};
-    char	label[6] = {0};
+    int	label;
     static int	lbl_num = 0;
 
 
-    sprintf (label, "$N%o", lbl_num++);
+    label = lbl_num++;
     outstr ("SKIPE\t");
     outaddress (p);
     outnl ();
-    outstr ("\t JRST\t");
-    outstr (label);
+    outstr ("\t JRST\t$N");
+    outrawnum ((unsigned INT)label);
     outnl ();
     outstr ("\tPUSH\t17,[");
-    sprintf (line, "%o]\n", p->p_im.p_chnl); /* used chnl to store line # */
-    outstr (line);
+    outnum (p->p_im.p_chnl);	/* used chnl to store line # */
+    outstr ("]\n");
 
 #ifdef	MULTI_SECTION /* FW 2A (51) */
     outstr ("\tPUSH\t17,[$$BP90+$$SECT,,$NPDFN]\n");
@@ -336,7 +333,8 @@ outnpd (PCODE *p)
 
     outstr ("\tPUSHJ\t17,$CFNP\n");
     outadjsp (-2);
-    outstr (label);
+    outstr ("$N");
+    outrawnum ((unsigned INT)label);
     outstr ("==.");
 
     if (mlist)
@@ -694,6 +692,30 @@ static char segsp[] = "\
 	RELOC	0	\n\
 	RELOC	400000	\n";
 
+/* OCTCPY - Append an unsigned octal constant to an in-memory string.
+** Values larger than one octal digit get a leading zero so DAS, whose
+** expression grammar defaults to decimal, interprets the value as octal.
+*/
+static char *
+octcpy (char *cp, unsigned INT n)
+{
+    char buf[(sizeof (unsigned INT) * 3) + 2];
+    char *bp = buf + sizeof (buf);
+
+    *--bp = '\0';
+    do
+	{
+	*--bp = (char)('0' + (n & 07));
+	n >>= 3;
+	}
+    while (n != 0);
+
+    if ((buf + sizeof (buf) - bp) > 2)
+	*--bp = '0';
+
+    return estrcpy (cp, bp);
+}
+
 static char *
 ahmacs (void)
 {
@@ -740,10 +762,11 @@ ahmacs (void)
 
     cp = estrcpy (fstrcpy (estrcpy (cp, "\t.REQUEST "), libpath, "c"), "\n");
 
-    sprintf (cp,"\t$$CVER==:<%o,,%o>\n",
-	    cvercode, cverlib);
-
-    cp += strlen (cp);			/* Sigh, update ptr */
+    cp = estrcpy (cp, "\t$$CVER==:<");
+    cp = octcpy (cp, (unsigned INT)cvercode);
+    cp = estrcpy (cp, ",,");
+    cp = octcpy (cp, (unsigned INT)cverlib);
+    cp = estrcpy (cp, ">\n");
 
     /* Add machine-dependent macro definitions */
 
