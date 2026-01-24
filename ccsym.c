@@ -86,6 +86,7 @@ static void smapinit(void);
 static int smapmatch(INT);
 static void aryerr(char *);
 static void realfreelabel(SYMBOL *);
+static void labname(char *, unsigned int);
 
 extern	char	mainname[];
 
@@ -1444,6 +1445,33 @@ labinit(void)
 	*/
 }
 
+/* LABNAME - Build an internal label name without stdio formatting.
+** Internal labels are a dollar sign followed by an unsigned decimal number.
+** IDENTSIZE is fixed and comfortably larger than any unsigned int spelling,
+** but keep the bound explicit so a future type-size change cannot overflow it.
+*/
+static void
+labname(char *dst, unsigned int value)
+{
+    char digits[3 * sizeof(unsigned int) + 1];
+    int n, pos;
+
+    n = 0;
+    do {
+	digits[n++] = (char)('0' + (value % 10));
+	value /= 10;
+    } while (value != 0);
+
+    if (n + 1 >= IDENTSIZE)
+	efatal("Internal label number too large");
+
+    pos = 0;
+    dst[pos++] = '$';
+    while (--n >= 0)
+	dst[pos++] = digits[n];
+    dst[pos] = '\0';
+}
+
 /*
 ** Get a new label to play with.
 **
@@ -1469,7 +1497,7 @@ newlabel(void)
 
     /* fill it out */
     lab->Sclass = SC_ILABEL;		/* this is an internal label */
-    sprintf(lab->Sname, "$%d", ++maxlabel); /* give it a name */
+    labname(lab->Sname, (unsigned int)++maxlabel); /* give it a name */
     lab->Svalue = 0;			/* no uses yet */
     return lab;
 }
@@ -1544,7 +1572,7 @@ SYMBOL *table;
 char *name;
 {
     int u;
-    char *str, *c, tmpstr[50];
+    char *str, *c;
     SYMBOL *s;
 
     fprintf(fsym, "\n-- Symbols for %s --\n\n", name);
@@ -1622,11 +1650,13 @@ char *name;
 		str = "undefined goto label";
 		break;
 	    default:
-		sprintf(tmpstr, "ILLEGAL symbol class %d", u);
-		str = tmpstr;
+		str = NULL;
 	    }
 	c = s->Sname;
-	fprintf(fsym, "%-10s: %s", c, str);
+	if (str != NULL)
+	    fprintf(fsym, "%-10s: %s", c, str);
+	else
+	    fprintf(fsym, "%-10s: ILLEGAL symbol class %d", c, u);
 	if (s->Sflags)
 	    fprintf(fsym," (%lo)", (INT) s->Sflags);
 	fprintf(fsym,", refs %d", (int) s->Srefs);
