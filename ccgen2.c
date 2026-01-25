@@ -1208,8 +1208,8 @@ gdimode_unsigned_relop_skip(VREG *r1, VREG *r2, int op)
 		{
 		lab = labno++;
 		n = kccfmt(buf, sizeof(buf),
-		    "\tTLC\t%o,400000\n"
-		    "\tTLC\t%o,400000\n"
+		    "\tTLC\t%o,0400000\n"
+		    "\tTLC\t%o,0400000\n"
 		    "\tSETZ\t%o,\n"
 		    "\t%s\t%o,%o\n"
 		    "\tJRST\t%%DIUCMP%dH\n"
@@ -1263,10 +1263,10 @@ gdimode_unsigned_relop_skip(VREG *r1, VREG *r2, int op)
     n = kccfmt(buf, sizeof(buf),
 	"\tSETZ\t%o,\n"
 	"\tMOVE\t%o,-1(17)\n"
-	"\tTLC\t%o,400000\n"
+	"\tTLC\t%o,0400000\n"
 	"\tMOVE\t%o,0(17)\n"
-	"\tTLC\t%o,400000\n"
-	"\tTLC\t%o,400000\n"
+	"\tTLC\t%o,0400000\n"
+	"\tTLC\t%o,0400000\n"
 	"\t%s\t%o,%o\n"
 	"\tJRST\t%%DIUCMP%dH\n"
 	"\tJRST\t%%DIUCMP%dT\n"
@@ -1627,14 +1627,14 @@ retry_alloc:
         {
         n = kccfmt(buf, sizeof(buf),
             "\tSETZ\t%o,\n"
-            "\tMOVE\t%o,%o\n"
-            "\tLSH\t%o,-43\n"
+            "\tMOVE\t%o,0%o\n"
+            "\tLSH\t%o,-043\n"
             "\tANDI\t%o,1\n"
             "\tJUMPE\t%o,%%DIDIV%dN\n"
-            "\tMOVN\t%o,%o\n"
+            "\tMOVN\t%o,0%o\n"
             "\tSKIPE\t%o\n"
             "\tSUBI\t%o,1\n"
-            "\tMOVN\t%o,%o\n"
+            "\tMOVN\t%o,0%o\n"
             "\tAND\t%o,[0377777777777]\n"
             "%%DIDIV%dN:\n",
             sgn,
@@ -1652,14 +1652,14 @@ retry_alloc:
 
         if (wantmod)
             n = kccfmt(buf, sizeof(buf),
-                "\tMOVE\t%o,%o\n"
-                "\tLSH\t%o,-43\n"
+                "\tMOVE\t%o,0%o\n"
+                "\tLSH\t%o,-043\n"
                 "\tANDI\t%o,1\n"
                 "\tJUMPE\t%o,%%DIDIV%dD\n"
-                "\tMOVN\t%o,%o\n"
+                "\tMOVN\t%o,0%o\n"
                 "\tSKIPE\t%o\n"
                 "\tSUBI\t%o,1\n"
-                "\tMOVN\t%o,%o\n"
+                "\tMOVN\t%o,0%o\n"
                 "\tAND\t%o,[0377777777777]\n"
                 "%%DIDIV%dD:\n",
                 tmp2, dhi,
@@ -1674,15 +1674,15 @@ retry_alloc:
                 lab);
         else
             n = kccfmt(buf, sizeof(buf),
-                "\tMOVE\t%o,%o\n"
-                "\tLSH\t%o,-43\n"
+                "\tMOVE\t%o,0%o\n"
+                "\tLSH\t%o,-043\n"
                 "\tANDI\t%o,1\n"
-                "\tXOR\t%o,%o\n"
+                "\tXOR\t%o,0%o\n"
                 "\tJUMPE\t%o,%%DIDIV%dD\n"
-                "\tMOVN\t%o,%o\n"
+                "\tMOVN\t%o,0%o\n"
                 "\tSKIPE\t%o\n"
                 "\tSUBI\t%o,1\n"
-                "\tMOVN\t%o,%o\n"
+                "\tMOVN\t%o,0%o\n"
                 "\tAND\t%o,[0377777777777]\n"
                 "%%DIDIV%dD:\n",
                 tmp2, dhi,
@@ -1705,51 +1705,51 @@ retry_alloc:
             "\tAND\t%o,[0377777777777]\n"
             "\tSETZ\t%o,\n"
             "\tSETZ\t%o,\n"
-            "\tMOVEI\t%o,107\n"
+            "\tMOVEI\t%o,0107\n"
             "%%DIDIV%dL:\n"
             /* bit = top bit of numerator; numerator <<= 1 */
-            "\tMOVE\t%o,%o\n"
-            "\tLSH\t%o,-43\n"
+            "\tMOVE\t%o,0%o\n"
+            "\tLSH\t%o,-043\n"
             "\tANDI\t%o,1\n"
-            "\tMOVE\t%o,%o\n"
-            "\tLSH\t%o,-42\n"
+            "\tMOVE\t%o,0%o\n"
+            "\tLSH\t%o,-042\n"
             "\tANDI\t%o,1\n"
             "\tLSH\t%o,1\n"
             "\tAND\t%o,[0377777777777]\n"
             "\tLSH\t%o,1\n"
-            "\tIOR\t%o,%o\n"
-            "\tAND\t%o,[777777777777]\n"
+            "\tIOR\t%o,0%o\n"
+            "\tAND\t%o,[0777777777777]\n"
             /* rem = (rem << 1) | bit */
-            "\tMOVE\t%o,%o\n"
-            "\tLSH\t%o,-42\n"
+            "\tMOVE\t%o,0%o\n"
+            "\tLSH\t%o,-042\n"
             "\tANDI\t%o,1\n"
             "\tLSH\t%o,1\n"
             "\tAND\t%o,[0377777777777]\n"
-            "\tIOR\t%o,%o\n"
+            "\tIOR\t%o,0%o\n"
             "\tLSH\t%o,1\n"
-            "\tIOR\t%o,%o\n"
-            "\tAND\t%o,[777777777777]\n"
+            "\tIOR\t%o,0%o\n"
+            "\tAND\t%o,[0777777777777]\n"
             /* if rem < den, do not subtract */
-            "\tMOVE\t%o,%o\n"
-            "\tTLC\t%o,400000\n"
-            "\tMOVE\t%o,%o\n"
-            "\tTLC\t%o,400000\n"
-            "\tCAML\t%o,%o\n"
+            "\tMOVE\t%o,0%o\n"
+            "\tTLC\t%o,0400000\n"
+            "\tMOVE\t%o,0%o\n"
+            "\tTLC\t%o,0400000\n"
+            "\tCAML\t%o,0%o\n"
             "\t JRST\t%%DIDIV%dHC\n"
             "\tJRST\t%%DIDIV%dNS\n"
             "%%DIDIV%dHC:\n"
-            "\tCAME\t%o,%o\n"
+            "\tCAME\t%o,0%o\n"
             "\t JRST\t%%DIDIV%dSUB\n"
-            "\tCAML\t%o,%o\n"
+            "\tCAML\t%o,0%o\n"
             "\t JRST\t%%DIDIV%dSUB\n"
             "\tJRST\t%%DIDIV%dNS\n"
             "%%DIDIV%dSUB:\n"
-            "\tSUB\t%o,%o\n"
+            "\tSUB\t%o,0%o\n"
             "\tJUMPGE\t%o,%%DIDIV%dSB0\n"
             "\tADD\t%o,[0400000000000]\n"
             "\tSUBI\t%o,1\n"
             "%%DIDIV%dSB0:\n"
-            "\tSUB\t%o,%o\n"
+            "\tSUB\t%o,0%o\n"
             "%%DIDIV%dNS:\n"
             "\tSOJG\t%o,%%DIDIV%dL\n",
             nlo, dlo,
@@ -1807,60 +1807,60 @@ retry_alloc:
         "\tSETZ\t%o,\n"
         "\tSETZ\t%o,\n"
         "\tSETZ\t%o,\n"
-        "\tMOVEI\t%o,107\n"
+        "\tMOVEI\t%o,0107\n"
         "%%DIDIV%dL:\n"
         /* q <<= 1 */
-        "\tMOVE\t%o,%o\n"
-        "\tLSH\t%o,-42\n"
+        "\tMOVE\t%o,0%o\n"
+        "\tLSH\t%o,-042\n"
         "\tANDI\t%o,1\n"
         "\tLSH\t%o,1\n"
         "\tAND\t%o,[0377777777777]\n"
         "\tLSH\t%o,1\n"
-        "\tIOR\t%o,%o\n"
-        "\tAND\t%o,[777777777777]\n"
+        "\tIOR\t%o,0%o\n"
+        "\tAND\t%o,[0777777777777]\n"
         /* bit = top bit of numerator; numerator <<= 1 */
-        "\tMOVE\t%o,%o\n"
-        "\tLSH\t%o,-43\n"
+        "\tMOVE\t%o,0%o\n"
+        "\tLSH\t%o,-043\n"
         "\tANDI\t%o,1\n"
-        "\tMOVE\t%o,%o\n"
-        "\tLSH\t%o,-42\n"
+        "\tMOVE\t%o,0%o\n"
+        "\tLSH\t%o,-042\n"
         "\tANDI\t%o,1\n"
         "\tLSH\t%o,1\n"
         "\tAND\t%o,[0377777777777]\n"
         "\tLSH\t%o,1\n"
-        "\tIOR\t%o,%o\n"
-        "\tAND\t%o,[777777777777]\n"
+        "\tIOR\t%o,0%o\n"
+        "\tAND\t%o,[0777777777777]\n"
         /* rem = (rem << 1) | bit */
-        "\tMOVE\t%o,%o\n"
-        "\tLSH\t%o,-42\n"
+        "\tMOVE\t%o,0%o\n"
+        "\tLSH\t%o,-042\n"
         "\tANDI\t%o,1\n"
         "\tLSH\t%o,1\n"
         "\tAND\t%o,[0377777777777]\n"
-        "\tIOR\t%o,%o\n"
+        "\tIOR\t%o,0%o\n"
         "\tLSH\t%o,1\n"
-        "\tIOR\t%o,%o\n"
-        "\tAND\t%o,[777777777777]\n"
+        "\tIOR\t%o,0%o\n"
+        "\tAND\t%o,[0777777777777]\n"
         /* if rem < den, do not subtract */
-        "\tMOVE\t%o,%o\n"
-        "\tTLC\t%o,400000\n"
-        "\tMOVE\t%o,%o\n"
-        "\tTLC\t%o,400000\n"
-        "\tCAML\t%o,%o\n"
+        "\tMOVE\t%o,0%o\n"
+        "\tTLC\t%o,0400000\n"
+        "\tMOVE\t%o,0%o\n"
+        "\tTLC\t%o,0400000\n"
+        "\tCAML\t%o,0%o\n"
         "\t JRST\t%%DIDIV%dHC\n"
         "\tJRST\t%%DIDIV%dNS\n"
         "%%DIDIV%dHC:\n"
-        "\tCAME\t%o,%o\n"
+        "\tCAME\t%o,0%o\n"
         "\t JRST\t%%DIDIV%dSUB\n"
-        "\tCAML\t%o,%o\n"
+        "\tCAML\t%o,0%o\n"
         "\t JRST\t%%DIDIV%dSUB\n"
         "\tJRST\t%%DIDIV%dNS\n"
         "%%DIDIV%dSUB:\n"
-        "\tSUB\t%o,%o\n"
+        "\tSUB\t%o,0%o\n"
         "\tJUMPGE\t%o,%%DIDIV%dSB0\n"
         "\tADD\t%o,[0400000000000]\n"
         "\tSUBI\t%o,1\n"
         "%%DIDIV%dSB0:\n"
-        "\tSUB\t%o,%o\n"
+        "\tSUB\t%o,0%o\n"
         "\tIORI\t%o,1\n"
         "%%DIDIV%dNS:\n"
         "\tSOJG\t%o,%%DIDIV%dL\n",
@@ -1929,10 +1929,10 @@ retry_alloc:
             {
             n = kccfmt(buf, sizeof(buf),
                 "\tJUMPE\t%o,%%DIDIV%dMR\n"
-                "\tMOVN\t%o,%o\n"
+                "\tMOVN\t%o,0%o\n"
                 "\tSKIPE\t%o\n"
                 "\tSUBI\t%o,1\n"
-                "\tMOVN\t%o,%o\n"
+                "\tMOVN\t%o,0%o\n"
                 "\tAND\t%o,[0377777777777]\n"
                 "%%DIDIV%dMR:\n",
                 sgn, lab,
@@ -1948,10 +1948,10 @@ retry_alloc:
             {
             n = kccfmt(buf, sizeof(buf),
                 "\tJUMPE\t%o,%%DIDIV%dMQ\n"
-                "\tMOVN\t%o,%o\n"
+                "\tMOVN\t%o,0%o\n"
                 "\tSKIPE\t%o\n"
                 "\tSUBI\t%o,1\n"
-                "\tMOVN\t%o,%o\n"
+                "\tMOVN\t%o,0%o\n"
                 "\tAND\t%o,[0377777777777]\n"
                 "%%DIDIV%dMQ:\n",
                 sgn, lab,
@@ -1966,8 +1966,8 @@ retry_alloc:
         }
 
     n = kccfmt(buf, sizeof(buf),
-        "\tMOVE\t%o,%o\n"
-        "\tMOVE\t%o,%o\n",
+        "\tMOVE\t%o,0%o\n"
+        "\tMOVE\t%o,0%o\n",
         vrreal(r1), (wantmod ? rhi : qhi),
         vrreal(VR2(r1)), (wantmod ? rlo : qlo));
     codestr(buf, n);
@@ -2605,7 +2605,7 @@ gboolop(NODE *n, int reverse)
 		t1 = gdimode_pick_ac(avoid, navoid);
 		n = kccfmt(buf, sizeof(buf),
 		    "\tMOVE\t%o,%o\n"
-		    "\tTLC\t%o,400000\n",
+		    "\tTLC\t%o,0400000\n",
 		    t1, llo, t1);
 		codestr(buf, n);
 
@@ -2631,7 +2631,7 @@ gboolop(NODE *n, int reverse)
 		t2 = gdimode_pick_ac(avoid, navoid);
 		n = kccfmt(buf, sizeof(buf),
 		    "\tMOVE\t%o,%o\n"
-		    "\tTLC\t%o,400000\n",
+		    "\tTLC\t%o,0400000\n",
 		    t2, rlo, t2);
 		codestr(buf, n);
 
