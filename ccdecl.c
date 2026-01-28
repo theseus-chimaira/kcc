@@ -2153,7 +2153,8 @@ plcmpold(SYMBOL *s, TYPE *nt, TYPE *ot)
 
     /* Prototypes don't match, try to give clever error msg */
     for (; s; s = s->Spmnext, nt = nt->Tproto, ot = ot->Tproto)
-        if (!nt || !ot || nt->Tspec != ot->Tspec || nt->Tsubt != ot->Tsubt)
+        if (!nt || !ot || nt->Tspec != ot->Tspec
+          || (nt->Tspec == TS_PARAM && !cmputype(nt->Tsubt, ot->Tsubt)))
             {
             error("Type of parameter \"%s\" conflicts with prior prototype",
                      s->Sname);
@@ -2161,8 +2162,6 @@ plcmpold(SYMBOL *s, TYPE *nt, TYPE *ot)
             }
     if (nt || ot)
         error("Number of params conflicts with prior prototype");
-    else
-        int_warn("plcmpold: proto mismatch not found");
 }
 
 /* PLCHECK - Check a prototype parameter list to ensure that all types

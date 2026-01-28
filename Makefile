@@ -39,6 +39,15 @@ RUNTIME_SPLIT = \
 
 all: kcc runtime
 
+test: kcc
+	@set -e; \
+	./kcc -S tests/oldstyle-proto-compat.c -o tests/oldstyle-proto-compat.s; \
+	if ./kcc -S tests/oldstyle-proto-conflict.c -o tests/oldstyle-proto-conflict.s >/dev/null 2>&1; then \
+		echo "KCC regression: incompatible old-style prototype accepted" >&2; \
+		exit 1; \
+	fi; \
+	rm -f oldstyle-proto-compat.s oldstyle-proto-conflict.s
+
 .DELETE_ON_ERROR:
 
 kcc: $(OBJS)
@@ -78,4 +87,4 @@ DISTNAME ?= kcc-source
 source-tar: distclean
 	git archive --format=tar --prefix=$(DISTNAME)/ HEAD | gzip -9 > $(DISTNAME).tar.gz
 
-.PHONY: all asm self-asm runtime install install-runtime uninstall clean distclean source-tar
+.PHONY: all test asm self-asm runtime install install-runtime uninstall clean distclean source-tar

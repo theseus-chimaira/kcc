@@ -1952,7 +1952,8 @@ cmputype(struct type * t, struct type * u)
     if (t == u)
 	return 1;
     if (t->Tspec == u->Tspec
-      && (t->Tflag&(~TF_QUALS))	== (u->Tflag&(~TF_QUALS)))
+      && (t->Tflag&(~(TF_QUALS | TF_MAYBITPTR)))
+          == (u->Tflag&(~(TF_QUALS | TF_MAYBITPTR))))
 	{
 	switch (t->Tspec)
 	    {
