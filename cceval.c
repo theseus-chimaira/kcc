@@ -1754,10 +1754,18 @@ evalcast(NODE *e)
 	** produce different results, so we have to do it at run time.
 	*/
 	case CAST_PT_PT:	/* Pointer type to pointer type */
-	    if (tisbytepointer(tfrom) && !tisbytepointer(tto))
+	    if (tisbytepointer(tfrom) && !tisbytepointer(tto)) {
+#ifdef __COMPILER_KCC__
 		    cn->Niconst = (INT)(INT *)(char *)(cn->Niconst);
-	    else return e;
-	    break;
+		    break;
+#else
+		    /* Native KCC pointer casts encode the target PDP-10 address.
+		    ** A hosted compiler's pointer representation is unrelated, so
+		    ** leave this conversion for generated target code. */
+		    return e;
+#endif
+	    }
+	    return e;
 
 	case CAST_IT_PT:	/* Integer type to pointer type */
 	    cn->Nop = N_PCONST;

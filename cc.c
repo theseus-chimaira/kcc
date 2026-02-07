@@ -1211,7 +1211,7 @@ cfile (char *arg)
     {
     int		mainflg;		/* Set if module contains "main" */
     int		asmdflg = -2;		/* Set to result of assembly attempt */
-    clock_t	startime;
+    clock_t	startime = (clock_t)0;
     extern
     int		nsert_file (char *f, int insert_flag);
     int		save_fline;
@@ -1740,4 +1740,3 @@ set_level (int level)
 	return STLEV_FAILURE;
     }
 #endif
-

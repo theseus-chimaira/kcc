@@ -53,6 +53,8 @@ void mapintsym(SYMBOL *);
 TYPE *findtype(int, TYPE *), *findctype(int, INT, unsigned INT, TYPE *),
 	*findftype(TYPE *, TYPE *), *findutype(TYPE *),
 	*findqtype(TYPE *, INT), *findptype(int, TYPE *, TYPE *);
+static TYPE *findctypeproto(int, TYPE *, TYPE *);
+static TYPE *findctype1(int, INT, unsigned INT, TYPE *, TYPE *, int);
 TYPE *tcomposite(TYPE *, TYPE *);
 INT sizetype(TYPE *);		/* For CCDECL, CCSTMT, CCGEN* */
 INT sizeptobj(TYPE *);	/* For CCGEN2 */
@@ -1859,9 +1861,7 @@ findqtype(struct type * t, INT quals)
 TYPE *
 findftype(struct type * rtyp, struct type * plist)
 {
-    return findctype(TS_FUNCT, 0,	/* Always function, no qualifiers */
-		    (unsigned INT) plist,			/* Param list - note type punning! */
-		    rtyp);			/* Return type */
+    return findctypeproto(TS_FUNCT, plist, rtyp);
 }
 
 /* FINDPTYPE - Find or create a prototype-list "type".
@@ -1871,8 +1871,7 @@ findftype(struct type * rtyp, struct type * plist)
 TYPE *
 findptype(int tsp, struct type * plist, struct type * t)
 {
-    return findctype(tsp, 0,	/* Never any flags or qualifiers */
-	(unsigned INT) plist,			/* Param list - note type punning! */
+    return findctypeproto(tsp, plist,
 	((!t || !(t->Tflag&(TF_CONST|TF_VOLATILE)))	/* Parameter type */
 		? t			/* Type is OK as is */
 		: findctype(t->Tspec,	/* Ugh, use unqualified version */
@@ -1888,17 +1887,32 @@ findptype(int tsp, struct type * plist, struct type * t)
 TYPE *
 findctype(int tsp, INT flags, unsigned INT siz, struct type * subt)
 {
+    return findctype1(tsp, flags, siz, NULL, subt, 0);
+}
+
+static TYPE *
+findctypeproto(int tsp, struct type *proto, struct type *subt)
+{
+    return findctype1(tsp, 0, 0, proto, subt, 1);
+}
+
+static TYPE *
+findctype1(int tsp, INT flags, unsigned INT siz, struct type *proto,
+    struct type *subt, int isproto)
+{
     TYPE *t;
     int hash;
 
     flags |= tfltab[tsp];	/* Ensure usual flags are added in */
 
     /* Hash up attributes of this type and look up in table */
-    hash = (int) ((((unsigned INT) subt) + (tsp * 43) + (siz * 101)) %
+    hash = (int) ((((HOST_PTRINT)subt) + (tsp * 43)
+	    + ((isproto ? (HOST_PTRINT)proto : siz) * 101)) %
 	    THASHSIZE);
     for (t = ttable[hash]; t != NULL; t = t->Tnhash)
 	if (t->Tspec == tsp && t->Tflag == flags
-		&& t->Tsize == siz && t->Tsubt == subt)
+		&& (isproto ? t->Tproto == proto : t->Tsize == siz)
+		&& t->Tsubt == subt)
 	    return t;		/* Found identical existing type! */
 
     /* Not found, have to make up a new one */
@@ -1927,7 +1941,10 @@ findctype(int tsp, INT flags, unsigned INT siz, struct type * subt)
 	efatal("Type table overflow");
     t->Tspec = tsp;			/* Store type specifications */
     t->Tflag = flags;
-    t->Tsize = siz;
+    if (isproto)
+	t->Tproto = proto;
+    else
+	t->Tsize = siz;
     t->Tsubt = subt;
     t->Tnhash = ttable[hash];		/* link old types with same hash */
     ttable[hash] = t;			/* add this one in to hash table */
@@ -2485,20 +2502,23 @@ writesym (FILE *f, SYMBOL *s)		/* auxiliary for savesymtab */
 	{
 	mapextsym(s->Ssym);
 	fprintf(f, "%d %d %" INT_DFMT " %d %" INT_DFMT " ", nchars, s->Sclass,
-		s->Ssym->Svalue, (int) s->Sflags, (INT) (s->Stype));
+		s->Ssym->Svalue, (int) s->Sflags,
+		(INT)(HOST_PTRINT)s->Stype);
 	}
     else if (s->Sclass == SC_AUTO || s->Sclass == SC_RAUTO)
     /*  compute (positive) runtime stack offset  */
 	fprintf(f, "%d %d %" INT_DFMT " %d %" INT_DFMT " ", nchars, s->Sclass,
-		(s->Svalue + 1) - maxauto, (int) s->Sflags, (INT) (s->Stype));
+		(s->Svalue + 1) - maxauto, (int) s->Sflags,
+		(INT)(HOST_PTRINT)s->Stype);
     else if (s->Sclass == SC_ARG || s->Sclass == SC_RARG)
     /*  compute (negative) runtime stack offset  */
 	fprintf(f, "%d %d %" INT_DFMT " %d %" INT_DFMT " ", nchars, s->Sclass,
-		- s->Svalue - maxauto, (int) s->Sflags, (INT) (s->Stype));
+		- s->Svalue - maxauto, (int) s->Sflags,
+		(INT)(HOST_PTRINT)s->Stype);
     else 
     /*  normal global or static variable  */
 	fprintf(f, "%d %d %" INT_DFMT " %d %" INT_DFMT " ", nchars, s->Sclass,
-		s->Svalue, (int) s->Sflags, (INT) (s->Stype));
+		s->Svalue, (int) s->Sflags, (INT)(HOST_PTRINT)s->Stype);
 	
     /*
      * Now copy symbol name into temp buffer;
@@ -2847,7 +2867,7 @@ outsymtab (void)
 
 	fprintf(out, "\tBYTE (14) %d (4) %d", sname, scmap[sclass]);
 
-	switch (((TYPE *)stype)->Tspec) /* ptr into type table */
+	switch (((TYPE *)(HOST_PTRINT)stype)->Tspec) /* ptr into type table */
 	    {
 	    case TS_FUNCT:
 	    case TS_PARAM:
@@ -2859,7 +2879,8 @@ outsymtab (void)
 
 	    default:
 		fprintf(out, " (18) $$$$$3 + "); /* ptr to type entry */
-		fprintf(out, "%ld ", (long) ((((TYPE *) stype)->Tsize >> 18) * 2));
+		fprintf(out, "%ld ",
+			(long)((((TYPE *)(HOST_PTRINT)stype)->Tsize >> 18) * 2));
 		break;
 	    }
 

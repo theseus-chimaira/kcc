@@ -21,12 +21,15 @@
 #ifdef __COMPILER_KCC__
  #define __MSDOS__  0		/* Turbo C and C++ define __MSDOS__ */
  #define _char7	   _KCCtype_char7
+ #define HOST_PTRINT unsigned int
  #define INT	   int
  #define INT_DFMT  "d"
  #define INT_OFMT  "o"
  #define INT_UFMT  "u"
 #else
  #include <limits.h>
+ #include <stdint.h>
+ #define HOST_PTRINT uintptr_t
  #define _char7     char
  /*
   * INT is KCC's representation of one PDP-10 word while KCC itself is

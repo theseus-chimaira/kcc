@@ -71,8 +71,8 @@ static NODE *funcdef(SYMBOL *, SYMBOL *, SYMBOL *),
             *datadef(SYMBOL *, SYMBOL *, SYMBOL *);
 static void pdecllist(void), sdeclenum(SYMBOL *), packstruct(TYPE *),
             decllist(SYMBOL *,SYMBOL *,SYMBOL *,SYMBOL *,NODE **,NODE **);
-static INT  sdeclstruct(SYMBOL *, int), fldsize(int, INT *, int *),
-            pbase(SYMBOL *);
+static INT  sdeclstruct(SYMBOL *, int), fldsize(int, INT *, int *);
+static TYPE *pbase(SYMBOL *);
 static TYPE *qualarray (TYPE *type, int flags, int *oldflags);
 static void staticassertdecl(void);
 static TYPE *typeofspec(void);
@@ -2571,12 +2571,12 @@ typeofspec(void)
 #define PF_LONG         040
 #define PF_DOUBLE       0100
 
-static INT
+static TYPE *
 pbase(SYMBOL *symp)
 {
     static char *errmsg = "Illegal combination of type-specifiers";
     int savnsdefs = nsdefs;             /* Remember # side-eff defs so far */
-    TYPE *t = NULL, *nt;
+    TYPE *t = NULL, *nt = NULL;
     INT nflag, qflags = 0, tflags = 0;
     int chrsiz = 0, intsiz = 0, longcnt = 0;
 
@@ -3054,7 +3054,7 @@ pbase(SYMBOL *symp)
             packstruct(t);
         }
 
-    return (INT) t;
+    return t;
     }
 
 static
@@ -5758,4 +5758,3 @@ Set_Register (SYMBOL *s, int rarg, int arg)
             }
         }
     }
-

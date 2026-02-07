@@ -1497,7 +1497,7 @@ gizlist(NODE *n, TYPE *t, SYMBOL *s)	/* N_IZLIST to initialize from */
 	savloc = locctr;		/* Remember current loc ctr */
 	for (; n && sm; n = n->Nright, sm = sm->Ssmnext) {
 	    INT w, o, woff;
-	    int p, s, gap;
+	    int p = 0, s = 0, gap;
 
 	    /* First ensure ready to emit right word for this object */
 	    if ((o = sm->Ssmoff) < 0) {	/* Byte or bitf object? */
