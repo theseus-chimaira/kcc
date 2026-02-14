@@ -20,22 +20,16 @@ SRCS = \
 OBJS = $(SRCS:.c=.o)
 ASMS = $(SRCS:.c=.s)
 
-RUNTIME_NAMES = pdp6rt.s ka10rt.s ks10rt.s
-RUNTIME_SPLIT_NAMES = \
-	pdp6rt-adjbp.s pdp6rt-kdfad.s pdp6rt-kdfsb.s pdp6rt-kdfmp.s pdp6rt-kdfdv.s \
-	ka10rt-adjbp.s ka10rt-kdfad.s ka10rt-kdfsb.s ka10rt-kdfmp.s ka10rt-kdfdv.s \
-	ks10rt-adjbp.s ks10rt-kdfad.s ks10rt-kdfsb.s ks10rt-kdfmp.s ks10rt-kdfdv.s \
-	kccrt-zero.s kccrt-dimode-div.s
 RUNTIME = \
-	runtime/pdp6rt.s runtime/ka10rt.s runtime/ks10rt.s
-RUNTIME_SPLIT = \
-	runtime/pdp6rt-adjbp.s runtime/pdp6rt-kdfad.s runtime/pdp6rt-kdfsb.s \
-	runtime/pdp6rt-kdfmp.s runtime/pdp6rt-kdfdv.s \
-	runtime/ka10rt-adjbp.s runtime/ka10rt-kdfad.s runtime/ka10rt-kdfsb.s \
-	runtime/ka10rt-kdfmp.s runtime/ka10rt-kdfdv.s \
-	runtime/ks10rt-adjbp.s runtime/ks10rt-kdfad.s runtime/ks10rt-kdfsb.s \
-	runtime/ks10rt-kdfmp.s runtime/ks10rt-kdfdv.s \
-	runtime/kccrt-zero.s runtime/kccrt-dimode-div.s
+	$(RUNTIMEDIR)/pdp6rt-adjbp.s $(RUNTIMEDIR)/pdp6rt-kdfad.s \
+	$(RUNTIMEDIR)/pdp6rt-kdfsb.s $(RUNTIMEDIR)/pdp6rt-kdfmp.s \
+	$(RUNTIMEDIR)/pdp6rt-kdfdv.s $(RUNTIMEDIR)/ka10rt-adjbp.s \
+	$(RUNTIMEDIR)/ka10rt-kdfad.s $(RUNTIMEDIR)/ka10rt-kdfsb.s \
+	$(RUNTIMEDIR)/ka10rt-kdfmp.s $(RUNTIMEDIR)/ka10rt-kdfdv.s \
+	$(RUNTIMEDIR)/ks10rt-adjbp.s $(RUNTIMEDIR)/ks10rt-kdfad.s \
+	$(RUNTIMEDIR)/ks10rt-kdfsb.s $(RUNTIMEDIR)/ks10rt-kdfmp.s \
+	$(RUNTIMEDIR)/ks10rt-kdfdv.s $(RUNTIMEDIR)/kccrt-zero.s \
+	$(RUNTIMEDIR)/kccrt-dimode-div.s
 
 all: kcc runtime
 
@@ -48,7 +42,7 @@ ccgen.o ccgen1.o ccgen2.o: cc.h ccgen.h
 
 asm self-asm: $(ASMS)
 
-runtime: $(RUNTIME) $(RUNTIME_SPLIT)
+runtime: $(RUNTIME)
 
 install: kcc install-runtime
 	$(INSTALL) -d $(DESTDIR)$(BINDIR)
@@ -56,12 +50,12 @@ install: kcc install-runtime
 
 install-runtime: runtime
 	$(INSTALL) -d $(DESTDIR)$(KCCLIBDIR)
-	$(INSTALL) -m 644 $(RUNTIME) $(RUNTIME_SPLIT) $(DESTDIR)$(KCCLIBDIR)/
+	$(INSTALL) -m 644 $(RUNTIME) $(DESTDIR)$(KCCLIBDIR)/
 
 uninstall:
 	$(RM) $(DESTDIR)$(BINDIR)/kcc
-	@for f in $(RUNTIME_NAMES) $(RUNTIME_SPLIT_NAMES); do \
-		$(RM) "$(DESTDIR)$(KCCLIBDIR)/$$f"; \
+	@for f in $(RUNTIME); do \
+		$(RM) "$(DESTDIR)$(KCCLIBDIR)/$${f##*/}"; \
 	done
 
 .SUFFIXES: .c .s
