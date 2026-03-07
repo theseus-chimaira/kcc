@@ -961,6 +961,86 @@ trfltcon(void)
 	return dzerotok();
 	}
 	
+    /* C99 hexadecimal floating constants use a binary exponent. */
+    if (c == '0' && (cp[1] == 'x' || cp[1] == 'X'))
+	{
+	int ndig = 0;
+
+	cp += 2;
+	c = *cp;
+	while (isxdigit(c))
+	    {
+	    value = value * 16.0 + toint((char)c);
+	    ++ndig;
+	    c = *++cp;
+	    }
+	if (c == '.')
+	    {
+	    divisor = 1.0;
+	    while (isxdigit(c = *++cp))
+		{
+		value += toint((char)c) / (divisor *= 16.0);
+		++ndig;
+		}
+	    }
+	if (!ndig)
+	    {
+	    error("Bad hexadecimal floating constant");
+	    return dzerotok();
+	    }
+	if (c != 'p' && c != 'P')
+	    {
+	    error("Hexadecimal floating constant requires binary exponent");
+	    return dzerotok();
+	    }
+	expsign = (c = *++cp);
+	if (c == '-' || c == '+')
+	    c = *++cp;
+	if (!isdigit(c))
+	    {
+	    error("Bad floating constant exponent");
+	    return dzerotok();
+	    }
+	exponent = c - '0';
+	while (isdigit(c = *++cp))
+	    {
+	    if (exponent > 10000)
+		ovfl = 1;
+	    else
+		exponent = exponent * 10 + (c - '0');
+	    }
+	if (value == 0.0)
+	    {
+	    ovfl = 0;
+	    exponent = 0;
+	    }
+	if (!ovfl)
+	    {
+	    double pv;
+	    if (expsign == '-')
+		while (--exponent >= 0)
+		    {
+		    pv = value;
+		    value /= 2.0;
+		    if (pv != 0.0 && value == 0.0)
+			{ ovfl = 1; break; }
+		    }
+	    else
+		while (--exponent >= 0)
+		    {
+		    pv = value;
+		    if (value > MAXPOSDOUBLE / 2.0)
+			{ ovfl = 1; value = 1.0; break; }
+		    value *= 2.0;
+		    if (value != 0.0 && value < pv)
+			{ ovfl = 1; value = 1.0; break; }
+		    }
+	    }
+	else
+	    value = (expsign == '-') ? 0.0 : 1.0;
+	goto fltdone;
+	}
+
     /* First do whole-number part.  We use floating arithmetic to avoid
     ** the real possibility of integer overflow.  Slower, but safer.
     */
@@ -1029,6 +1109,7 @@ trfltcon(void)
 	    }
 	}
 
+fltdone:
     /* See whether we overflowed or not, and fix up. */
     if (ovfl)
 	{

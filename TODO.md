@@ -3,13 +3,13 @@
 ## Language implementation
 
 - [ ] Variable length arrays.
-- [ ] Hexadecimal floating constants.
-- [ ] `_Noreturn`.
+- [x] Hexadecimal floating constants.
+- [x] `_Noreturn`.
 - [ ] `_Generic`.
 - [ ] `_Alignof`.
 - [ ] `_Alignas`.
 - [ ] Anonymous structs and unions.
-- [ ] Preprocessor `#elifdef`, `#elifndef`, and `#warning`.
+- [x] Preprocessor `#elifdef`, `#elifndef`, and `#warning`.
 - [ ] `__VA_OPT__`.
 
 ## Language audit

@@ -70,7 +70,7 @@ static
 void directive(void);
 static
 int d_define(void), d_undef(void), d_asm(void), d_endasm(void),
-	d_ifdef(int), d_if(void), d_else(void), d_elif(void), d_endif(void),
+	d_ifdef(int), d_if(void), d_else(void), d_elif(void), d_elifdef(int), d_endif(void),
 	d_include(void), d_line(void), d_error(void), d_warning(void),
 	d_pragma(void);
 static
@@ -2384,7 +2384,7 @@ static
 int
 ppnconst(int ch1)
 {
-    static int hexconst;
+    int hexconst;
     size_t off;
 
 
@@ -2413,14 +2413,21 @@ ppnconst(int ch1)
 	    case 'E':
 	    case 'e':			/* 'E' means float const, */
 		if (!hexconst)		/* unless already hex const! */
+		    rawpp = T_FCONST;
+		continue;
+	    case 'P':
+	    case 'p':
+		if (hexconst)
+		    rawpp = T_FCONST;	/* Hexadecimal float exponent */
+		continue;
 	    case '.':
 		rawpp = T_FCONST;	/* Remember float const */
-	    continue;
+		continue;
 	    case '\'':
 		continue;
 	    case '-':
-	    case '+':		/* If prev char not 'E' or 'e', stop now */
-		if (toupper(ppclast()) != 'E')
+	    case '+':		/* Only exponent signs belong to pp-number */
+		if (toupper(ppclast()) != 'E' && toupper(ppclast()) != 'P')
 		    break;
 		continue;
 	    default:
@@ -4187,6 +4194,12 @@ break;
 	    res = flushing ? PPR_FLUSH : d_include();
 	else if (!strcmp(rawval.cp,"warning"))
 	    res = flushing ? PPR_FLUSH : d_warning();
+	else if (!strcmp(rawval.cp,"elifdef"))
+	    res = d_elifdef(1);
+	break;
+    case 8:
+	if (!strcmp(rawval.cp,"elifndef"))
+	    res = d_elifdef(0);
 	break;
     default:
 	int_error ("directive: invalid preprocessor length %d", len);
@@ -5002,6 +5015,57 @@ d_elif(void)
     return PPR_ATEOL;
 }
 
+
+/* D_ELIFDEF() - Process #elifdef and #elifndef directives.
+**
+** These are C23 shorthand for #elif defined(name) and
+** #elif !defined(name).  Keep the same conditional-state rules as d_elif().
+*/
+static int
+d_elifdef(int cond)
+{
+    int isdef;
+
+    if (iftype[iflevel] == IN_ELSE)
+	{
+	error("#%s without preceding #if, treating as #if",
+	    cond ? "elifdef" : "elifndef");
+	return d_ifdef(cond);
+	}
+
+    if (iffile[iflevel] > 0)
+	iffwarn(cond ? "elifdef" : "elifndef");
+
+    if (flushing == iflevel && iftype[iflevel] == IN_IF)
+	{
+	if (nextrawpp() != T_WSP || nextrawpp() != T_IDENT)
+	    {
+	    error("Macro name expected");
+	    return PPR_FLUSH;
+	    }
+	isdef = (findmacsym(rawval.cp) != NULL);
+	if (cond == isdef)
+	    {
+	    checkeol();
+	    flushing = 0;
+	    iftype[iflevel] = IN_ELIF;
+	    iffile[iflevel] = 0;
+	    ifline[iflevel] = fline;
+	    return PPR_ATEOL;
+	    }
+	checkeol();
+	return PPR_ATEOL;
+	}
+
+    iftype[iflevel] = IN_ELIF;
+    iffile[iflevel] = 0;
+    ifline[iflevel] = fline;
+    if (flushing)
+	return PPR_FLUSH;
+    flushtoeol();
+    flushcond();
+    return PPR_ATEOL;
+}
 
 /* D_ELSE() - Process #else directive
 */
