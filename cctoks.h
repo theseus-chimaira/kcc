@@ -152,6 +152,7 @@ tokdef(N_POSTDEC, 0,	TKTY_UNOP,	15)	/* ()--	Postfix decrement */
 tokdef(N_PREINC, 0,	TKTY_UNOP,	14)	/* ++()	Prefix increment */
 tokdef(N_PREDEC, 0,	TKTY_UNOP,	14)	/* --()	Prefix decrement */
 tokdef(T_SIZEOF,"sizeof",TKTY_RWOP,	14)	/* sizeof	Size */
+tokdef(T_ALIGNOF,"_Alignof",TKTY_RWOP,	14)	/* C11 _Alignof */
 tokdef(N_CAST,	0,	TKTY_UNOP,	14)	/* (type)	Cast */
 tokdef(Q_COMPL,	"~",	TKTY_UNOP,	14)	/* ~	Bitwise not */
 /* 50 */

@@ -25,7 +25,7 @@ extern SYMBOL *newlabel(void);	/* CCSYM */
 extern SYMBOL *symqcreat(SYMBOL *);	/* CCSYM */
 extern SYMBOL *symflabel(SYMBOL *), *symfmember(SYMBOL *, SYMBOL *);/* CCSYM */
 extern void freesym(SYMBOL *);			/* CCSYM */
-extern INT sizetype(TYPE *);
+extern INT sizetype(TYPE *), alignoftype_v1(TYPE *);
 extern int cmputype(TYPE *, TYPE *), mapextsym(SYMBOL *);	/* CCSYM */
 extern NODE *evalexpr(NODE *), *evaldiscard(NODE *);		/* CCEVAL */
 extern NODE *convcast(TYPE *, NODE *), *convarrfn(NODE *),
@@ -62,6 +62,7 @@ static NODE *evalifok(NODE *), *ediscifok(NODE *);
 static NODE *expression(void),
 	*condexpr(void), *binary(int), *unary(void), *primary(void),
 	*castexpr(void), *postexpr(void), *posttail(NODE *), *sizeexpr(void),
+	*alignexpr_v1(void),
 	*pincdec(NODE *, int);
 static NODE *ptrapply(NODE *), *chkadd(int, NODE *),
 	    *parglist(SYMBOL *, TYPE *);
@@ -1730,6 +1731,8 @@ unary(void)
 	    return postexpr();	/* Parse <postfix-expr> */
 	case T_SIZEOF:
 	    return sizeexpr();	/* Parse <sizeof-expr> */
+	case T_ALIGNOF:
+	    return alignexpr_v1();	/* Parse C11 <_Alignof-expr> */
 
 	case T_EXTENSION:
 	    nextoken();
@@ -1962,6 +1965,76 @@ packedarraybytes(TYPE *t)
         t = t->Tsubt;
         }
     return (t != NULL && tispacked(t)) ? n * t->Tbytes : 0;
+}
+
+
+/* ALIGNEXPR_V1 - Handle the C11 "_Alignof ( type-name )" operator.
+**
+** _Alignof is an integer constant expression of type size_t.  KCC reports
+** the alignment required by its existing target ABI in 9-bit C address
+** units.  Unlike GNU __alignof__, C11 _Alignof accepts a type-name only.
+*/
+static NODE *
+alignexpr_v1(void)
+{
+    TYPE *t;
+    NODE *n;
+    INT a;
+
+    n = ndeft(N_ICONST, siztype);
+    n->Niconst = 0;
+
+    nextoken();
+    if (token != T_LPAREN)
+        {
+        error("Expected '(' after _Alignof");
+        return n;
+        }
+    nextoken();
+    if (!(csymbol && (tok[token].tktype == TKTY_RWTYPE
+                   || csymbol->Sclass == SC_TYPEDEF)))
+        {
+        error("Type name expected in _Alignof");
+        while (token != T_EOF && token != T_RPAREN)
+            nextoken();
+        if (token == T_RPAREN)
+            nextoken();
+        return n;
+        }
+
+    t = typename();
+    expect(T_RPAREN);
+
+    if (t->Tspec == TS_VOID)
+        {
+        error("Operand of _Alignof has void type");
+        return n;
+        }
+    if (t->Tspec == TS_FUNCT)
+        {
+        error("Operand of _Alignof has function type");
+        return n;
+        }
+    if (t->Tspec == TS_ARRAY && t->Tsize == 0)
+        {
+        error("Operand of _Alignof has incomplete array type");
+        return n;
+        }
+    if ((t->Tspec == TS_STRUCT || t->Tspec == TS_UNION)
+      && (t->Tsmtag == NULL || t->Tsmtag->Sclass != SC_TAG))
+        {
+        error("Operand of _Alignof has incomplete aggregate type");
+        return n;
+        }
+
+    a = alignoftype_v1(t);
+    if (a <= 0)
+        {
+        error("Invalid type for _Alignof");
+        return n;
+        }
+    n->Niconst = a;
+    return n;
 }
 
 /* SIZEEXPR - Handle "sizeof" operator.

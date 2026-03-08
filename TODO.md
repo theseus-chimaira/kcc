@@ -6,7 +6,7 @@
 - [x] Hexadecimal floating constants.
 - [x] `_Noreturn`.
 - [ ] `_Generic`.
-- [ ] `_Alignof`.
+- [x] `_Alignof`.
 - [ ] `_Alignas`.
 - [ ] Anonymous structs and unions.
 - [x] Preprocessor `#elifdef`, `#elifndef`, and `#warning`.

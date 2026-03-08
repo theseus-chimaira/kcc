@@ -57,6 +57,7 @@ static TYPE *findctypeproto(int, TYPE *, TYPE *);
 static TYPE *findctype1(int, INT, unsigned INT, TYPE *, TYPE *, int);
 TYPE *tcomposite(TYPE *, TYPE *);
 INT sizetype(TYPE *);		/* For CCDECL, CCSTMT, CCGEN* */
+INT alignoftype_v1(TYPE *);	/* For C11 _Alignof */
 INT sizeptobj(TYPE *);	/* For CCGEN2 */
 INT sizearray(TYPE *);	/* For CCGEN, CCSTMT */
 int elembsize(TYPE *);	/* ditto */
@@ -2099,6 +2100,52 @@ tcomproto(struct type * t1, struct type * t2)
     return findptype(TS_PARAM, t2, t);
 }
 
+/* ALIGNOFTYPE_V1 - Return KCC object alignment in C address units.
+**
+** This reports the alignment already imposed by KCC's object/member layout;
+** it does not alter that historical ABI.  One C address unit is 9 bits.
+** Ordinary arrays and aggregates are word aligned by KCC.  GNU packed
+** aggregates are byte aligned.  Scalars smaller than a word use the natural
+** byte/halfword boundary, while word-sized and larger scalars are word
+** aligned.
+*/
+INT
+alignoftype_v1(TYPE *t)
+{
+    INT bits;
+
+    if (t == NULL)
+        {
+        int_error("alignoftype_v1: null type");
+        return 0;
+        }
+
+    if (t->Tspec == TS_ARRAY)
+        return 4;
+
+    if (t->Tspec == TS_STRUCT || t->Tspec == TS_UNION)
+        {
+        if (t->Tsmtag == NULL || t->Tsmtag->Sclass != SC_TAG)
+            return 0;
+        return tispacked(t) ? 1 : 4;
+        }
+
+    if (t->Tspec == TS_VOID || t->Tspec == TS_FUNCT)
+        return 0;
+
+    if (!tisscalar(t))
+        return 0;
+
+    bits = tbitsize(t);
+    if (bits <= 0)
+        return 0;
+    if (bits <= TGSIZ_CHAR)
+        return 1;
+    if (bits <= TGSIZ_HALFWD)
+        return 2;
+    return 4;
+}
+
 /* SIZETYPE - Find size of type, in words.
 **	Note this is words, not bytes such as "sizeof" evaluates to!
 ** The only "funny" value is that for "char" which is simply 1 (no smaller
