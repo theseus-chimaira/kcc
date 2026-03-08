@@ -5,7 +5,7 @@
 - [ ] Variable length arrays.
 - [x] Hexadecimal floating constants.
 - [x] `_Noreturn`.
-- [ ] `_Generic`.
+- [x] `_Generic`.
 - [x] `_Alignof`.
 - [ ] `_Alignas`.
 - [ ] Anonymous structs and unions.

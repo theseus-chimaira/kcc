@@ -19,14 +19,15 @@ extern SYMBOL *defauto(char *, TYPE *), *defstatic(char *, TYPE *); /* CCDECL */
 extern NODE *pizer(SYMBOL *);		/* CCDECL */
 extern SYMBOL *funchk(int, int, SYMBOL *, SYMBOL *);	/* CCDECL */
 extern TYPE *findtype(int, TYPE *), *findftype(TYPE *, TYPE *),	/* CCSYM */
-	*findqtype(TYPE *, INT), *findctype(int, INT, unsigned INT, TYPE *);
+	*findqtype(TYPE *, INT), *findutype(TYPE *),
+	*findctype(int, INT, unsigned INT, TYPE *);
 extern INT sizearray(TYPE *), sizeptobj(TYPE *);	/* CCSYM */
 extern SYMBOL *newlabel(void);	/* CCSYM */
 extern SYMBOL *symqcreat(SYMBOL *);	/* CCSYM */
 extern SYMBOL *symflabel(SYMBOL *), *symfmember(SYMBOL *, SYMBOL *);/* CCSYM */
 extern void freesym(SYMBOL *);			/* CCSYM */
 extern INT sizetype(TYPE *), alignoftype_v1(TYPE *);
-extern int cmputype(TYPE *, TYPE *), mapextsym(SYMBOL *);	/* CCSYM */
+extern int cmptype(TYPE *, TYPE *), cmputype(TYPE *, TYPE *), mapextsym(SYMBOL *);	/* CCSYM */
 extern NODE *evalexpr(NODE *), *evaldiscard(NODE *);		/* CCEVAL */
 extern NODE *convcast(TYPE *, NODE *), *convarrfn(NODE *),
 	*convbinary(NODE *),	/* CCTYPE */
@@ -62,7 +63,7 @@ static NODE *evalifok(NODE *), *ediscifok(NODE *);
 static NODE *expression(void),
 	*condexpr(void), *binary(int), *unary(void), *primary(void),
 	*castexpr(void), *postexpr(void), *posttail(NODE *), *sizeexpr(void),
-	*alignexpr_v1(void),
+	*alignexpr_v1(void), *genericexpr_v4(void),
 	*pincdec(NODE *, int);
 static NODE *ptrapply(NODE *), *chkadd(int, NODE *),
 	    *parglist(SYMBOL *, TYPE *);
@@ -2637,6 +2638,9 @@ primary(void)
 
     switch (token)
 	{
+	case T_GENERIC:
+	    return genericexpr_v4();
+
 	case Q_IDENT:
 	/*
 	** Parse <ident>
@@ -2765,6 +2769,127 @@ primary(void)
     return n;
 }
 
+
+/* GENERICEXPR_V4 - Parse a C11 generic selection.
+**
+** The controlling expression and unselected associations are parsed for
+** diagnostics but are deliberately not linked into the returned tree, so
+** they cannot be evaluated by code generation.  Matching uses the C11
+** controlling-expression conversions relevant here: arrays/functions decay
+** to pointers and top-level qualifiers on scalar/object expressions are
+** removed, but integer promotions are not performed.
+*/
+static NODE *
+genericexpr_v4(void)
+{
+    NODE *control, *assoclist, *a, *q, *selected, *defexpr;
+    TYPE *ct, *at;
+    int have_default, matches, duplicate;
+
+    if (nextoken() != T_LPAREN)
+        {
+        error("Expected '(' after _Generic");
+        return ndeft(N_UNDEF, deftype);
+        }
+
+    nextoken();
+    control = asgnexpr();
+    ct = control->Ntype;
+    if (ct->Tspec == TS_ARRAY)
+        ct = findtype(TS_PTR, ct->Tsubt);
+    else if (ct->Tspec == TS_FUNCT)
+        ct = findtype(TS_PTR, ct);
+    else if (tisqualif(ct))
+        ct = findutype(ct);
+
+    if (token != T_COMMA)
+        {
+        error("Expected ',' after _Generic controlling expression");
+        return ndeft(N_UNDEF, deftype);
+        }
+    nextoken();
+
+    assoclist = NULL;
+    selected = NULL;
+    defexpr = NULL;
+    have_default = 0;
+    matches = 0;
+
+    for (;;)
+        {
+        at = NULL;
+        duplicate = 0;
+        if (token == Q_DEFAULT)
+            {
+            if (have_default)
+                error("Duplicate default association in _Generic");
+            have_default = 1;
+            nextoken();
+            }
+        else
+            {
+            if (!(csymbol && (tok[token].tktype == TKTY_RWTYPE
+                           || csymbol->Sclass == SC_TYPEDEF)))
+                {
+                error("Type name or default expected in _Generic");
+                return ndeft(N_UNDEF, deftype);
+                }
+            at = typename();
+
+            if (at->Tspec == TS_VOID || at->Tspec == TS_FUNCT
+              || (at->Tspec == TS_ARRAY && at->Tsize == 0)
+              || ((at->Tspec == TS_STRUCT || at->Tspec == TS_UNION)
+                  && (at->Tsmtag == NULL || at->Tsmtag->Sclass != SC_TAG)))
+                error("Generic association requires a complete object type");
+
+            for (q = assoclist; q != NULL; q = q->Nleft)
+                if (cmptype(at, q->Ntype))
+                    {
+                    error("Duplicate compatible type in _Generic association list");
+                    duplicate = 1;
+                    break;
+                    }
+            }
+
+        if (token != T_COLON)
+            {
+            error("Expected ':' in _Generic association");
+            return ndeft(N_UNDEF, deftype);
+            }
+        nextoken();
+        a = asgnexpr();
+
+        if (at == NULL)
+            defexpr = a;
+        else if (!duplicate)
+            {
+            assoclist = ndef(N_EXPRLIST, at, 0, assoclist, a);
+            if (cmptype(ct, at))
+                {
+                ++matches;
+                if (selected == NULL)
+                    selected = a;
+                }
+            }
+
+        if (token != T_COMMA)
+            break;
+        nextoken();
+        }
+
+    expect(T_RPAREN);
+
+    if (matches > 1)
+        error("Controlling type matches multiple _Generic associations");
+    if (selected != NULL)
+        return selected;
+    if (defexpr != NULL)
+        return defexpr;
+
+    error("No matching association in _Generic selection");
+    return ndeft(N_UNDEF, deftype);
+}
+
 /* Parsing for various built-in expressions */
 
 /* "asm" - handle built-in for assembly code inclusion

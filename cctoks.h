@@ -140,6 +140,7 @@ tokdef(N_PCONST,0,TKTY_PRIMARY,	16)	/* Pointer-type constant */
 tokdef(N_VCONST,0,TKTY_PRIMARY,	16)	/* Void-type "constant" expr */
 tokdef(N_ECONST,0,TKTY_PRIMARY,	16)	/* Enum-type constant */
 tokdef(N_ACONST,0,TKTY_PRIMARY,	16)	/* GNU label address (&&label) */
+tokdef(T_GENERIC,"_Generic",TKTY_RWOP,RWF_ANSI+16) /* C11 generic selection */
 /* 40 */
 /* no special op for subscript */	/* [k]	subscripting */
 tokdef(N_FNCALL,0,TKTY_PRIMARY,	16)	/* f()	function call */
