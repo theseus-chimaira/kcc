@@ -99,6 +99,8 @@ tokdef(T_MACSTR,0,	TKTY_NULL, 0)	/* Stringize arg (in macro body) */
 tokdef(T_MACINS,0,	TKTY_NULL, 0)	/* Insert arg (in macro body) */
 tokdef(T_MACCAT,0,	TKTY_NULL, 0)	/* Concatenate op (in macro body) */
 tokdef(T_MACEMP,0,	TKTY_NULL, 0)	/* Empty ## argument placemarker */
+tokdef(T_MACVABEG,0, TKTY_NULL, 0)	/* __VA_OPT__ conditional body start */
+tokdef(T_MACVAEND,0, TKTY_NULL, 0)	/* __VA_OPT__ conditional body end */
 /* 10 */
 tokdef(T_MACEOF,0,	TKTY_NULL, 0)	/* Macro EOF reached */
 tokdef(T_ICONST,0,	TKTY_NULL, 0)	/* PP-number integer const */
@@ -154,6 +156,7 @@ tokdef(N_PREINC, 0,	TKTY_UNOP,	14)	/* ++()	Prefix increment */
 tokdef(N_PREDEC, 0,	TKTY_UNOP,	14)	/* --()	Prefix decrement */
 tokdef(T_SIZEOF,"sizeof",TKTY_RWOP,	14)	/* sizeof	Size */
 tokdef(T_ALIGNOF,"_Alignof",TKTY_RWOP,	14)	/* C11 _Alignof */
+tokdef(T_ALIGNAS,"_Alignas",TKTY_RWOP,	0)	/* C11 alignment specifier */
 tokdef(N_CAST,	0,	TKTY_UNOP,	14)	/* (type)	Cast */
 tokdef(Q_COMPL,	"~",	TKTY_UNOP,	14)	/* ~	Bitwise not */
 /* 50 */

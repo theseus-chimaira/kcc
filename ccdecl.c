@@ -34,7 +34,7 @@ extern TYPE *findctype(int, INT, unsigned INT, TYPE *),
         *findptype(int, TYPE *, TYPE *);                        /* CCSYM */
 extern TYPE *tcomposite(TYPE *, TYPE *);                /* CCSYM */
 extern int  cmptype(TYPE *, TYPE *), cmputype(TYPE *, TYPE *);  /* CCSYM */
-extern INT  sizetype(TYPE *);                   /* CCSYM */
+extern INT  sizetype(TYPE *), alignoftype_v1(TYPE *); /* CCSYM */
 extern void copysym(SYMBOL *, SYMBOL *), ridlsym(SYMBOL *);     /* CCSYM */
 extern void mapintsym(SYMBOL *);                /* CCSYM */
 extern int  mapextsym(SYMBOL *);                /* CCSYM */
@@ -73,6 +73,8 @@ static void pdecllist(void), sdeclenum(SYMBOL *), packstruct(TYPE *),
             decllist(SYMBOL *,SYMBOL *,SYMBOL *,SYMBOL *,NODE **,NODE **);
 static INT  sdeclstruct(SYMBOL *, int), fldsize(int, INT *, int *);
 static TYPE *pbase(SYMBOL *);
+static void palignas_v5(SYMBOL *);
+static INT symalign_v5(long);
 static TYPE *qualarray (TYPE *type, int flags, int *oldflags);
 static void staticassertdecl(void);
 static TYPE *typeofspec(void);
@@ -2480,7 +2482,8 @@ decllist(SYMBOL *base, SYMBOL *defbase, SYMBOL *d, SYMBOL *s,
 int
 isdecl(void)
 {
-    return ((token == T_STATIC_ASSERT || token == T_STATIC_ASSERT2)
+    return ((token == T_STATIC_ASSERT || token == T_STATIC_ASSERT2
+        || token == T_ALIGNAS)
         || (csymbol != NULL && (
         (tok[token].tktype == TKTY_RWSC || tok[token].tktype == TKTY_RWTYPE)
         || (csymbol->Sclass == SC_TYPEDEF)
@@ -2544,6 +2547,77 @@ typeofspec(void)
     return t;
 }
 
+/* SYMALIGN_V5 - Decode an explicit alignment request from symbol flags. */
+static INT
+symalign_v5(long flags)
+{
+    if (flags & SF_ALIGN4)
+        return 4;
+    if (flags & SF_ALIGN2)
+        return 2;
+    if (flags & SF_ALIGN1)
+        return 1;
+    return 0;
+}
+
+/* PALIGNAS_V5 - Parse one C11 _Alignas alignment-specifier.
+**
+** KCC's PDP-10 object ABI has useful C-address-unit alignments 1, 2 and 4
+** (9, 18 and 36 bits).  _Alignas(0) has no effect.  The type-name form uses
+** the same canonical alignment calculation as _Alignof so declaration and
+** query semantics cannot drift apart.
+*/
+static void
+palignas_v5(SYMBOL *symp)
+{
+    TYPE *t;
+    INT a, old;
+
+    nextoken();
+    if (token != T_LPAREN)
+        {
+        error("Expected '(' after _Alignas");
+        return;
+        }
+    nextoken();
+
+    if (csymbol && (tok[token].tktype == TKTY_RWTYPE
+        || csymbol->Sclass == SC_TYPEDEF))
+        {
+        t = typename();
+        a = alignoftype_v1(t);
+        if (a == 0)
+            error("Invalid type in _Alignas");
+        }
+    else
+        a = pconst();
+
+    expect(T_RPAREN);
+    if (!symp)
+        {
+        error("_Alignas not allowed in type-name");
+        return;
+        }
+    if (a == 0)
+        return;
+    if (a != 1 && a != 2 && a != 4)
+        {
+        error("Unsupported _Alignas value %ld", (INT)a);
+        return;
+        }
+
+    old = symalign_v5(symp->Sflags);
+    if (a <= old)
+        return;
+    symp->Sflags &= ~(SF_ALIGN1 | SF_ALIGN2 | SF_ALIGN4);
+    if (a == 1)
+        symp->Sflags |= SF_ALIGN1;
+    else if (a == 2)
+        symp->Sflags |= SF_ALIGN2;
+    else
+        symp->Sflags |= SF_ALIGN4;
+}
+
 /* PBASE(&sym) - Parse base of declaration (stg class & type)
 **      Handles either <decl-specs>, if a symbol pointer is given,
 **   or <spec-qual-list>, if no pointer is given.
@@ -2594,6 +2668,11 @@ pbase(SYMBOL *symp)
     */
     for ( ; ; )
         {
+        if (token == T_ALIGNAS)
+            {
+            palignas_v5(symp);
+            continue;
+            }
         if (tok[token].tktype == TKTY_RWTYPE)
             {
             /* Look for reserved word type-qualifiers or type-specifiers */
@@ -2862,6 +2941,7 @@ pbase(SYMBOL *symp)
                         symp->Sclass = SC_EXTREF;
                         break;
                     case T_REGISTER:
+                        symp->Sflags |= SF_REGSPEC;
 
         /* Later, have debugger routines in ccsym.c not depend on reg
          * values being on the stack. Then remove the debcsi < 1 in if().
@@ -3047,6 +3127,9 @@ pbase(SYMBOL *symp)
         INT aflags;
 
         symp->Stype = t;
+        if (symalign_v5(symp->Sflags) != 0 && t != NULL
+          && alignoftype_v1(t) > symalign_v5(symp->Sflags))
+            error("_Alignas specifies alignment weaker than natural alignment");
         aflags = lex_take_gnuattrs();
         symp->Sflags |= aflags;
         if ((aflags & SF_PACKED) && t != NULL
@@ -3565,6 +3648,9 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
 
             if (token == T_COLON)
                 {
+
+                if (tempsym.Sflags & (SF_ALIGN1 | SF_ALIGN2 | SF_ALIGN4))
+                    error("Alignment specifier not allowed on bit-field");
 
                 /* Handle bitfield */
                 if (tag->Stype->Tspec == TS_UNION
@@ -4109,6 +4195,8 @@ paramlist(struct protostate
         }
 
     pbase(&(ps->decl));                 /* First get <decl-specs> */
+    if (ps->decl.Sflags & (SF_ALIGN1 | SF_ALIGN2 | SF_ALIGN4))
+        error("_Alignas not allowed on parameter declaration");
     switch (ps->decl.Sclass)
         {
         case SC_AUTO:
@@ -4212,12 +4300,15 @@ fnmaybitptrtarget(TYPE *t)
     if (t == NULL || !tisinteg(t))
         return 0;
     bits = tbitsize(t);
-    /* A sub-word pointer can cross a function boundary in either native
-    ** byte-pointer form or KCC's S=1 logical form.  This includes the
-    ** target's ordinary char width: an explicit conversion can start at a
-    ** bit position which has no equivalent native char pointer, so forcing
-    ** the native representation here would lose the address.
+    /* Ordinary C char pointers define KCC's external byte-address ABI and
+    ** always use the native character-pointer representation at function
+    ** boundaries.  Representation-polymorphic function values are required
+    ** only for explicitly non-native exact-width sub-word pointer types.
+    ** This keeps normal char * calls assignable to ordinary objects while
+    ** preserving S=1 logical pointers for KCC exact-width extensions.
     */
+    if (tischar(t) && bits == TGSIZ_CHAR)
+        return 0;
     return bits > 0 && bits < TGSIZ_WORD;
 }
 
@@ -4225,7 +4316,7 @@ static TYPE *
 fnmaybitptrtype(TYPE *t)
 {
     if (t != NULL && t->Tspec == TS_PTR && t->Tsubt != NULL
-      && (t->Tsubt->Tspec == TS_VOID || fnmaybitptrtarget(t->Tsubt)))
+      && fnmaybitptrtarget(t->Tsubt))
         return findctype(TS_PTR, t->Tflag | TF_MAYBITPTR,
                          t->Tsize, t->Tsubt);
     return t;
@@ -4352,6 +4443,16 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
     TYPE   *nt;
     NODE   *z;
 
+    if (d->Sflags & (SF_ALIGN1 | SF_ALIGN2 | SF_ALIGN4))
+        {
+        if (d->Stype->Tspec == TS_FUNCT)
+            error("_Alignas not allowed on function declaration");
+        if (d->Sclass == SC_TYPEDEF)
+            error("_Alignas not allowed on typedef declaration");
+        if (d->Sflags & SF_REGSPEC)
+            error("_Alignas not allowed on register object");
+        }
+
     /* Symbol table entry will always exist, because the lexer will 
     ** have created it if necessary as a global symbol wit symbol class 
     ** SC_UNDEF. If the new symbol actually should be a local one then 
@@ -4433,6 +4534,7 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
             s = uniqsym(s);             /* Always make local cell */
             s->Sclass = d->Sclass;      /* Fill in necessary parts of sym */
             s->Stype = d->Stype;
+            s->Sflags |= d->Sflags & (SF_ALIGN1 | SF_ALIGN2 | SF_ALIGN4);
             Set_Register(s, SC_RAUTO, SC_AUTO);
 
             break;                      /* Go check for izer */
@@ -4650,6 +4752,7 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
                 s->Ssym = newlabel();   /* create internal handle on object */
             s->Sclass = d->Sclass;
             s->Stype = d->Stype;
+            s->Sflags |= d->Sflags & (SF_ALIGN1 | SF_ALIGN2 | SF_ALIGN4);
             break;
 
         default:

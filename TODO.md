@@ -7,10 +7,10 @@
 - [x] `_Noreturn`.
 - [x] `_Generic`.
 - [x] `_Alignof`.
-- [ ] `_Alignas`.
+- [x] `_Alignas`.
 - [ ] Anonymous structs and unions.
 - [x] Preprocessor `#elifdef`, `#elifndef`, and `#warning`.
-- [ ] `__VA_OPT__`.
+- [x] `__VA_OPT__`.
 
 ## Language audit
 

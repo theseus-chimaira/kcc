@@ -400,11 +400,13 @@ enum symbolspec {
 #define SF_NORETURN	0100000	/* Function is declared not to return */
 #define SF_NOINLINE	0200000	/* Function must not be inlined */
 #define SF_INLINE	0400000	/* Function was declared inline */
-#define SF_ALIGN2	01000000	/* GNU aligned(2): halfword alignment */
-#define SF_ALIGN4	02000000	/* GNU aligned(4+) or aligned: word alignment */
+#define SF_ALIGN1	040000000	/* C11 _Alignas(1): byte alignment request */
+#define SF_ALIGN2	01000000	/* GNU/C11 halfword alignment */
+#define SF_ALIGN4	02000000	/* GNU/C11 word alignment */
 #define SF_PACKED	04000000	/* GNU packed aggregate/member */
 #define SF_MAYBITMEM	010000000	/* Auto aggregate may retain TF_MAYBITPTR */
 #define SF_MACVAR	020000000	/* SC_MACRO only: C99 variadic macro */
+#define SF_REGSPEC	0100000000	/* Declaration explicitly used register */
 #define SF_OVCLS (SF_MACRO|SF_MEMBER|SF_TAG|SF_LABEL)	/* All ov classes */
 
 

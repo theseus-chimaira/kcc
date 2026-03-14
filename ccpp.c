@@ -602,7 +602,7 @@ int     hspush(SYMBOL *, int), tkhide(PPTOK *, int),
 	      mishid(SYMBOL *, int);
 static
 int mdefinp(struct macframe
-*mf);
+*mf, int variadic);
 
 #if DEBUG_PP
 static
@@ -2894,6 +2894,8 @@ tltomac(tlist_t tl, char * cp)
 		case T_MACINS:		/* Value is param # */
 		    *cp++ = p->pt_val.i + MAC_ARGOFF;
 		case T_MACCAT:
+		case T_MACVABEG:
+		case T_MACVAEND:
 		    break;
 		default:		/* Assume rest of string is token */
 		    cp = estrcpy(cp, p->pt_val.cp);
@@ -3763,16 +3765,31 @@ msubst(struct macframe
     PPTOK pptok;
     PPTOK *p, *prev, *next;
     int ncats = 0;		/* # of concat ops seen */
+    int vaempty = 1, vaskip = 0;
 
 #if DEBUG_PP
     if (debpp) pmacframe("msubst", mf);
 #endif
     tlzinit(tl);		/* Init list to zero */
+    if ((mf->mf_sym->Sflags & SF_MACVAR) && mf->mf_nargs > 0)
+        vaempty = (mf->mf_argtl[mf->mf_nargs-1].tl_head == NULL);
     if ((cp = mf->mf_body) != NULL) while ((typ = *cp++) != 0)
 	{
 	if (typ < 0 || typ >= NTOKDEFS)
 	    int_error("msubst: illegal token %d in body of macro %S",
 				typ, mf->mf_sym);
+	if (typ == T_MACVABEG)
+	    {
+	    if (vaempty) ++vaskip;
+	    continue;
+	    }
+	if (typ == T_MACVAEND)
+	    {
+	    if (vaskip) --vaskip;
+	    continue;
+	    }
+	if (vaskip)
+	    continue;
 	switch (typ)
 	    {
 	    case T_MACSTR:		/* Stringize argument */
@@ -4370,7 +4387,7 @@ d_define (void)
     
     /* Arguments read, now read rest of line into a tokenlist. */
 
-    if (!mdefinp(&m))			/* If failed somehow, */
+    if (!mdefinp(&m, variadic))			/* If failed somehow, */
 	{
 	free(name);
 	return PPR_FLUSH;		/* just flush rest of line */
@@ -4421,13 +4438,14 @@ return PPR_CHECKEOL;
 static
 int
 mdefinp(struct macframe
-*mf)
+*mf, int variadic)
 {
     register int i;
     register char *cp;
     static PPTOK sptok = { T_WSP, 0, NULL, { 0 } };
 	tlist_t tl;
 	int wspf;
+	int vaopt = 0, vaparen = 0;
 
     /* Current token is the first token of the macro body. */
 	tlzinit(tl);		/* Init tokenlist */
@@ -4437,10 +4455,32 @@ mdefinp(struct macframe
 	    nextrawpp();
 	while (wspf >= 0)
 	{
+	if (vaopt && rawpp == T_RPAREN && vaparen == 0)
+	    {
+	    PPTOK mtok = sptok;
+	    mtok.pt_typ = T_MACVAEND;
+	    mtok.pt_val.cp = NULL;
+	    if (wspf) tltadd(tl, sptok), mf->mf_len++;
+	    tltadd(tl, mtok);
+	    mf->mf_len++;
+	    vaopt = 0;
+	    wspf = 0;
+	    nextrawpp();
+	    continue;
+	    }
+	if (vaopt)
+	    {
+	    if (rawpp == T_LPAREN)
+	        ++vaparen;
+	    else if (rawpp == T_RPAREN && vaparen > 0)
+	        --vaparen;
+	    }
 	switch (rawpp)
 	    {
 	    case T_EOF:
 	    case T_EOL:
+	    if (vaopt)
+	        error("Missing ')' in __VA_OPT__");
 	    /* Done, ignore any trailing whitespace */
 		if (tl.tl_tail && tl.tl_tail->pt_typ == T_MACCAT)
 		    {
@@ -4458,6 +4498,36 @@ mdefinp(struct macframe
 		continue;
 
 	    case T_IDENT:
+		if (!strcmp(rawval.cp, "__VA_OPT__"))
+		    {
+		    PPTOK mtok = sptok;
+		    if (!variadic)
+		        error("__VA_OPT__ may only appear in a variadic macro");
+		    else if (vaopt)
+		        error("Nested __VA_OPT__ is not allowed");
+		    else
+		        {
+		        if (tskipwsp() != T_LPAREN)
+		            {
+		            error("Expected '(' after __VA_OPT__");
+		            continue;
+		            }
+		        /* Do not materialize whitespace before the marker.  The
+		        ** marker is transparent, and preserving such whitespace
+		        ** would incorrectly separate a leading ## in the VA_OPT
+		        ** body from its left operand.
+		        */
+		        mtok.pt_typ = T_MACVABEG;
+		        mtok.pt_val.cp = NULL;
+		        tltadd(tl, mtok);
+		        mf->mf_len++;
+		        wspf = 0;
+		        vaopt = 1;
+		        vaparen = 0;
+		        nextrawpp();
+		        continue;
+		        }
+		    }
 		for (i = 0; i < mf->mf_nargs; i++)	/* Scan to see if a param */
 		    if (!strcmp(mf->mf_parcp[i], rawval.cp))
 			break;
@@ -4586,7 +4656,7 @@ mdefstr(char * name, int mactyp, char * body)
 	ppcsave(savppc);
 	sinbeg(body);		/* Redirect input to come from string */
 	nextmacpp();		/* Set up first token */
-	mdefinp(&m);		/* Gobble body from input, fill macframe */
+	mdefinp(&m, 0);		/* Gobble body from input, fill macframe */
 	sinend();		/* Stop input, check for gobbling all! */
 	ppcrest(savppc);	/* Flush all strings & pptoks used */
 	if (savppt == NULL)
