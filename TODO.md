@@ -8,7 +8,7 @@
 - [x] `_Generic`.
 - [x] `_Alignof`.
 - [x] `_Alignas`.
-- [ ] Anonymous structs and unions.
+- [x] Anonymous structs and unions.
 - [x] Preprocessor `#elifdef`, `#elifndef`, and `#warning`.
 - [x] `__VA_OPT__`.
 

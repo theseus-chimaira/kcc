@@ -93,13 +93,21 @@ static TYPE *addpp(TYPE *, TYPE *), *pushsztype(int, INT, INT, TYPE *),
             *fnmaybitptrtype(TYPE *), *tagspec(int);
 static int fnmaybitptrtarget(TYPE *);
 static SYMBOL *sdeclaration(SYMBOL *, SYMBOL *, INT *, int *, int *);
+static SYMBOL *sdeclanon_v7(SYMBOL *, SYMBOL *, TYPE *, INT *, int *, int *);
+static void anonpromote_v7(SYMBOL *, SYMBOL *, INT);
+static INT anonoffadd_v7(INT, INT);
+static int anoncontains_v7(TYPE *, SYMBOL *);
+static SYMBOL *anonroot_v7(TYPE *, SYMBOL *);
+static NODE *pizanon_v7(TYPE *, SYMBOL *);
 NODE *pizer(SYMBOL *);
 static void errtwotyp(SYMBOL *, SYMBOL *), errdupsym(SYMBOL *);
 static TYPE *mkprox(SYMBOL *);
 static int nsetjmps(void);
 static NODE *piztype(TYPE *, int), *chkarith(TYPE *, NODE *, int),
             *pizstruct(TYPE *, int, int), *pizarray(TYPE *, int),
-        *pexizer(int), *pizlist(void);
+            *pizdesigvalue(TYPE *), *pizanon_v7(TYPE *, SYMBOL *),
+            *pizmergeanon_v7(NODE *, NODE *, TYPE *),
+            *pexizer(int), *pizlist(void);
 static void pizflush(int);
 static int isauto(SYMBOL *), nisconst(NODE *);
 static char *declputd(char *, int);
@@ -153,6 +161,7 @@ static int nsdefs;      /* # of enum/struct/union side effect definitions seen.
 static int itags;       /* # of internal tags defined.  This is used only
                         ** to create unique names for internal tags. 
                         */
+static int ianonmem_v7; /* # of hidden C11 anonymous aggregate members. */
 static int tntcnt;      /* # of tentative defs output.  Only used to initialize
                         ** tntdef(), by setting to -1.
                         */
@@ -186,6 +195,7 @@ initpar(void)
     nodeinit();                 /* No parse-tree nodes used */
     curfn = NULL;               /* Not in any function yet */
     itags = 0;                  /* Reset internal tag count for gensyms */
+    ianonmem_v7 = 0;             /* Reset anonymous-member gensym count */
     nsdefs = 0;                 /* Reset side-effect def count for neatness */
     tntcnt = -1;                /* Reset tntdef() */
 }
@@ -3550,6 +3560,146 @@ sdeclstruct(SYMBOL *tag, int typ)
     return maxsize;
 }
 
+/* ANONOFFADD_V7 - Add a physical anonymous-member offset to a child
+** member offset.  Anonymous aggregates are word-aligned by the normal KCC
+** layout rules, so OUTER is non-negative here.  Negative child offsets use
+** KCC's encoded byte/bit-field representation, whose word component advances
+** in units of 010000 (64*64).
+*/
+static INT
+anonoffadd_v7(INT outer, INT inner)
+{
+    if (outer < 0) {
+        int_error("anonymous aggregate has non-word physical offset");
+        return inner;
+    }
+    return (inner >= 0) ? outer + inner : inner - outer * 010000L;
+}
+
+/* ANONPROMOTE_V7 - Install lookup-only aliases for the visible named members
+** of an anonymous struct/union.  These aliases deliberately do not appear on
+** the physical Ssmnext member chain, so sizeof/layout and positional
+** initialization continue to see exactly one anonymous aggregate member.
+** Ssmnext on an alias is instead used as a private pointer to the original
+** named member for designated-initializer path reconstruction.
+*/
+static void
+anonpromote_v7(SYMBOL *outertag, SYMBOL *sourcetag, INT baseoff)
+{
+    SYMBOL *m, *old, *a;
+
+    for (m = sourcetag->Ssmnext; m != NULL; m = m->Ssmnext) {
+        if (m->Sflags & SF_ANONMEM) {
+            if (m->Stype != NULL && m->Stype->Tsmtag != NULL)
+                anonpromote_v7(outertag, m->Stype->Tsmtag,
+                               anonoffadd_v7(baseoff, m->Ssmoff));
+            continue;
+        }
+
+        old = symfmember(m, outertag);
+        if (old != NULL) {
+            error("Duplicate struct member declaration through anonymous aggregate: %S", m);
+            continue;
+        }
+
+        a = creatsym(m->Sname);
+        a->Sflags |= SF_MEMBER | SF_ANONALIAS;
+        a->Sclass = SC_MEMBER;
+        a->Ssmoff = anonoffadd_v7(baseoff, m->Ssmoff);
+        a->Stype = m->Stype;
+        a->Ssmtag = outertag;
+        a->Ssmnext = m;
+    }
+}
+
+/* ANONCONTAINS_V7 / ANONROOT_V7 - Find the first physical anonymous member
+** on the path from aggregate T to TARGETTAG.  This avoids persistent path
+** objects: nested anonymous paths are recovered from the physical member
+** chains only when a designated initializer needs them.
+*/
+static int
+anoncontains_v7(TYPE *t, SYMBOL *targettag)
+{
+    SYMBOL *m;
+
+    if (t == NULL || t->Tsmtag == NULL)
+        return 0;
+    if (t->Tsmtag == targettag)
+        return 1;
+    for (m = t->Tsmtag->Ssmnext; m != NULL; m = m->Ssmnext)
+        if ((m->Sflags & SF_ANONMEM) && anoncontains_v7(m->Stype, targettag))
+            return 1;
+    return 0;
+}
+
+static SYMBOL *
+anonroot_v7(TYPE *t, SYMBOL *leaf)
+{
+    SYMBOL *m;
+
+    if (t == NULL || t->Tsmtag == NULL || leaf == NULL)
+        return NULL;
+    for (m = t->Tsmtag->Ssmnext; m != NULL; m = m->Ssmnext)
+        if ((m->Sflags & SF_ANONMEM)
+          && anoncontains_v7(m->Stype, leaf->Ssmtag))
+            return m;
+    return NULL;
+}
+
+/* SDECLANON_V7 - Add one physical anonymous aggregate member and promote its
+** visible names into the containing aggregate's member namespace.
+*/
+static SYMBOL *
+sdeclanon_v7(SYMBOL *tag, SYMBOL *prevsmem, TYPE *type, INT *offset,
+             int *boffset, int *inbitf)
+{
+    SYMBOL *u;
+    char name[IDENTSIZE];
+    char *cp;
+    INT offcode;
+
+    if (type == NULL || (type->Tspec != TS_STRUCT && type->Tspec != TS_UNION)
+      || type->Tsmtag == NULL || type->Tsmtag->Sclass != SC_TAG) {
+        error("Anonymous member must have complete struct or union type");
+        return prevsmem;
+    }
+
+    /* Anonymous members are aggregate objects and therefore enter normal
+    ** word mode before placement.
+    */
+    if (*boffset) {
+        *boffset = 0;
+        (*offset)++;
+    }
+    *inbitf = 0;
+    offcode = *offset;
+    *offset += sizetype(type);
+
+    cp = name;
+    *cp++ = '%';
+    *cp++ = 'A';
+    (void)declputd(cp, ++ianonmem_v7);
+    u = creatsym(name);
+    u->Sflags |= SF_MEMBER | SF_ANONMEM;
+    u->Sclass = SC_MEMBER;
+    u->Ssmoff = offcode;
+    u->Stype = type;
+    u->Ssmtag = tag;
+    u->Ssmnext = NULL;
+    prevsmem->Ssmnext = u;
+    prevsmem = u;
+
+    if (type->Tflag & (TF_QUALS | TF_SIQUALS)) {
+        if (type->Tflag & (TF_CONST | TF_SICONST))
+            tag->Stype->Tflag |= TF_SICONST;
+        if (type->Tflag & (TF_VOLATILE | TF_SIVOLAT))
+            tag->Stype->Tflag |= TF_SIVOLAT;
+    }
+
+    anonpromote_v7(tag, type->Tsmtag, offcode);
+    return prevsmem;
+}
+
 /* SDECLARATION - declare members of a struct or union
 */
 static SYMBOL *
@@ -3569,6 +3719,19 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
     if (base.Sclass != SC_UNDEF)
         error("Storage class illegal for struct member");
     base.Sclass = SC_MEMBER;
+
+    /* C11 anonymous struct/union member.  The type specifier itself must be
+    ** an unnamed struct/union definition; a tagged declaration such as
+    ** `struct tag;` remains a declaration with no member.
+    */
+    if (token == T_SCOLON && base.Stype != NULL
+      && (base.Stype->Tspec == TS_STRUCT || base.Stype->Tspec == TS_UNION)
+      && base.Stype->Tsmtag != NULL
+      && base.Stype->Tsmtag->Sname[0] == SPC_TAG) {
+        prevsmem = sdeclanon_v7(tag, prevsmem, base.Stype, offset, boffset, inbitf);
+        nextoken();
+        return prevsmem;
+    }
 
     while (1)
         {
@@ -5081,14 +5244,29 @@ izlistslot(NODE **rootp, TYPE *t, INT index)
 ** Returns NULL for an unknown member.
 */
 static SYMBOL *
-izmember(TYPE *t, SYMBOL *name, INT *indexp)
+izmember(TYPE *t, SYMBOL *name, INT *indexp, SYMBOL **promotedp)
 {
-    SYMBOL *m;
+    SYMBOL *m, *alias;
     INT i;
 
-    m = symfmember(name, t->Tsmtag);
+    alias = m = symfmember(name, t->Tsmtag);
     if (m == NULL)
         return NULL;
+    if (m->Sflags & SF_ANONALIAS) {
+        if (m->Ssmnext == NULL) {
+            int_error("anonymous member alias has no source member");
+            return NULL;
+        }
+        m = anonroot_v7(t, m->Ssmnext);
+        if (m == NULL) {
+            int_error("anonymous member alias has no physical root");
+            return NULL;
+        }
+        if (promotedp != NULL)
+            *promotedp = alias;
+    } else if (promotedp != NULL)
+        *promotedp = NULL;
+
     i = 0;
     for (name = t->Tsmtag->Ssmnext; name != NULL;
          name = name->Ssmnext, ++i) {
@@ -5101,6 +5279,126 @@ izmember(TYPE *t, SYMBOL *name, INT *indexp)
     }
     int_error("izmember: member not on tag chain");
     return NULL;
+}
+
+/* PIZMERGEANON_V7 - Merge a later anonymous-member designated initializer
+** into an existing positional initializer subtree.  Repeated promoted
+** designators commonly select different leaves of the same physical
+** anonymous aggregate; replacing Nleft would discard the earlier leaf.
+*/
+static NODE *
+pizmergeanon_v7(NODE *dst, NODE *src, TYPE *t)
+{
+    NODE *d, *sp, *prev;
+    SYMBOL *m;
+
+    if (dst == NULL)
+        return src;
+    if (src == NULL)
+        return dst;
+    if (t == NULL || (t->Tspec != TS_STRUCT && t->Tspec != TS_UNION))
+        return src;
+
+    if (t->Tspec == TS_UNION) {
+        m = src->Nizmem;
+        if (m != NULL && dst->Nizmem == m
+          && m->Stype != NULL
+          && (m->Stype->Tspec == TS_STRUCT || m->Stype->Tspec == TS_UNION)
+          && dst->Nleft != NULL && src->Nleft != NULL
+          && dst->Nleft->Nop == N_IZLIST && src->Nleft->Nop == N_IZLIST)
+            dst->Nleft = pizmergeanon_v7(dst->Nleft, src->Nleft, m->Stype);
+        else {
+            dst->Nizmem = src->Nizmem;
+            dst->Nleft = src->Nleft;
+        }
+        return dst;
+    }
+
+    d = dst;
+    prev = NULL;
+    sp = src;
+    m = t->Tsmtag->Ssmnext;
+    while (sp != NULL && m != NULL) {
+        if (d == NULL) {
+            d = ndefl(N_IZLIST, NULL);
+            if (prev != NULL)
+                prev->Nright = d;
+        }
+        if (sp->Nleft != NULL) {
+            if (d->Nleft != NULL
+              && m->Stype != NULL
+              && (m->Stype->Tspec == TS_STRUCT || m->Stype->Tspec == TS_UNION)
+              && d->Nleft->Nop == N_IZLIST && sp->Nleft->Nop == N_IZLIST)
+                d->Nleft = pizmergeanon_v7(d->Nleft, sp->Nleft, m->Stype);
+            else
+                d->Nleft = sp->Nleft;
+        }
+        prev = d;
+        d = d->Nright;
+        sp = sp->Nright;
+        m = m->Ssmnext;
+    }
+    return dst;
+}
+
+/* PIZANON_V7 - Build the positional initializer subtree needed to reach a
+** named member promoted through one or more anonymous aggregates.  TOKEN is
+** already positioned after the promoted member name.
+*/
+static NODE *
+pizanon_v7(TYPE *t, SYMBOL *leaf)
+{
+    SYMBOL *m;
+    NODE *root, *slot, *v;
+    INT idx;
+
+    if (t == NULL || leaf == NULL)
+        return NULL;
+
+    if (leaf->Ssmtag == t->Tsmtag) {
+        idx = 0;
+        for (m = t->Tsmtag->Ssmnext; m != NULL; m = m->Ssmnext, ++idx)
+            if (m == leaf)
+                break;
+        if (m == NULL) {
+            int_error("anonymous initializer leaf not on member chain");
+            return NULL;
+        }
+        v = pizdesigvalue(leaf->Stype);
+        if (t->Tspec == TS_UNION) {
+            root = ndeftl(N_IZLIST, t, v);
+            root->Nizmem = leaf;
+            return root;
+        }
+        root = NULL;
+        slot = izlistslot(&root, t, idx);
+        slot->Nleft = v;
+        return root;
+    }
+
+    m = anonroot_v7(t, leaf);
+    if (m == NULL) {
+        int_error("anonymous initializer path not found");
+        return NULL;
+    }
+    v = pizanon_v7(m->Stype, leaf);
+    if (t->Tspec == TS_UNION) {
+        root = ndeftl(N_IZLIST, t, v);
+        root->Nizmem = m;
+        return root;
+    }
+    idx = 0;
+    for (slot = NULL, m = t->Tsmtag->Ssmnext; m != NULL; m = m->Ssmnext, ++idx)
+        if ((m->Sflags & SF_ANONMEM) && anoncontains_v7(m->Stype, leaf->Ssmtag))
+            break;
+    if (m == NULL) {
+        int_error("anonymous initializer root not on member chain");
+        return NULL;
+    }
+    root = NULL;
+    slot = izlistslot(&root, t, idx);
+    slot->Nleft = v;
+    return root;
 }
 
 /* PIZDESIGVALUE - Parse the tail of a C99 designator chain.
@@ -5134,8 +5432,10 @@ pizdesigvalue(TYPE *t)
             pizflush(1);
             return NULL;
         }
+        {
+        SYMBOL *promoted = NULL;
         idx = 0;
-        m = izmember(t, csymbol, &idx);
+        m = izmember(t, csymbol, &idx, &promoted);
         if (csymbol->Sclass == SC_UNDEF)
             freesym(csymbol);
         if (m == NULL) {
@@ -5144,7 +5444,10 @@ pizdesigvalue(TYPE *t)
             return NULL;
         }
         nextoken();
-        v = pizdesigvalue(m->Stype);
+        if (promoted != NULL)
+            v = pizanon_v7(m->Stype, promoted->Ssmnext);
+        else
+            v = pizdesigvalue(m->Stype);
         if (t->Tspec == TS_UNION) {
             root = ndeftl(N_IZLIST, t, v);
             root->Nizmem = m;
@@ -5154,6 +5457,7 @@ pizdesigvalue(TYPE *t)
             slot->Nleft = v;
         }
         return root;
+        }
     }
 
     if (token == T_LBRACK) {
@@ -5199,7 +5503,7 @@ pizdesigvalue(TYPE *t)
 static NODE *
 pizstruct(TYPE *t, int lev, int isunion)
 {
-    SYMBOL *first, *smem, *found;
+    SYMBOL *first, *smem, *found, *promoted;
     NODE *e, *root, *slot;
     INT curidx, desidx;
     int braces, haveitem, designated;
@@ -5260,7 +5564,8 @@ pizstruct(TYPE *t, int lev, int isunion)
                 break;
             }
             desidx = 0;
-            found = izmember(t, csymbol, &desidx);
+            promoted = NULL;
+            found = izmember(t, csymbol, &desidx, &promoted);
             if (csymbol->Sclass == SC_UNDEF)
                 freesym(csymbol);
             if (found == NULL) {
@@ -5288,8 +5593,15 @@ pizstruct(TYPE *t, int lev, int isunion)
             root->Nizmem = smem;
         } else
             slot = izlistslot(&root, t, curidx);
-        slot->Nleft = designated ? pizdesigvalue(smem->Stype)
-                                 : piztype(smem->Stype, 1);
+        if (designated && promoted != NULL) {
+            NODE *av = pizanon_v7(smem->Stype, promoted->Ssmnext);
+            if (slot->Nleft != NULL)
+                slot->Nleft = pizmergeanon_v7(slot->Nleft, av, smem->Stype);
+            else
+                slot->Nleft = av;
+        } else
+            slot->Nleft = designated ? pizdesigvalue(smem->Stype)
+                                     : piztype(smem->Stype, 1);
         haveitem = 1;
 
         if (!isunion) {

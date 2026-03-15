@@ -1586,7 +1586,22 @@ files (char *fname)
 	if (tfnam == NULL)
 	    jerr("Out of memory for .REL filenames\n");
 	estrcpy (tfnam, savofnam);
-	ptr = strchr(tfnam, '.');
+	/* Only a dot in the final pathname component denotes an extension.
+	** The historical strchr() spelling treated the dot in a Unix ../
+	** prefix (or a dotted directory) as the output extension and could
+	** therefore collapse -R=../dir/name to the file ".s".  Use the
+	** last dot, and ignore it when it precedes the last path separator.
+	*/
+	{
+	char *slash = strrchr(tfnam, '/');
+	char *bslash = strrchr(tfnam, '\\');
+	char *sep = slash;
+	if (bslash != NULL && (sep == NULL || bslash > sep))
+	    sep = bslash;
+	ptr = strrchr(tfnam, '.');
+	if (ptr != NULL && sep != NULL && ptr < sep)
+	    ptr = NULL;
+	}
 
 	if (ptr == NULL)
 	    estrcpy (estrcpy (outfname, savofnam), cp);

@@ -407,6 +407,8 @@ enum symbolspec {
 #define SF_MAYBITMEM	010000000	/* Auto aggregate may retain TF_MAYBITPTR */
 #define SF_MACVAR	020000000	/* SC_MACRO only: C99 variadic macro */
 #define SF_REGSPEC	0100000000	/* Declaration explicitly used register */
+#define SF_ANONMEM	0200000000	/* Physical C11 anonymous aggregate member */
+#define SF_ANONALIAS	0400000000	/* Promoted name from anonymous aggregate */
 #define SF_OVCLS (SF_MACRO|SF_MEMBER|SF_TAG|SF_LABEL)	/* All ov classes */
 
 
