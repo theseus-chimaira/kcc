@@ -14,6 +14,7 @@
 
 /* Imported functions */
 extern void vrfree(VREG *);
+extern int vrtoreal(VREG *);
 extern VREG *vrget(void);		/* CCREG */
 extern void code_debugcall(NODE *);	/* CCDBUG */
 extern NODE *ndeflr(int op, NODE *l, NODE *r);		/* CCSTMT */
@@ -30,9 +31,17 @@ extern void outlab(SYMBOL *), outstr(char *), outnum(INT);	/* CCOUT */
 extern void relflush(VREG *), gboolean(NODE *, SYMBOL *, int), freelabel(SYMBOL *);
 extern INT istrue(NODE *, NODE *);		/* CCEVAL */
 extern NODE *evalexpr(NODE *);
+extern NODE *convbinary(NODE *), *convasgn(TYPE *, NODE *);
 extern int sideffp(NODE *);
 extern int deadjump(void);		/* CCJSKP */
 extern void killstack(void);	/* CCOPT */
+extern void codemdx(int, int, SYMBOL *, INT, int), code00(int, int, int),
+    code4(int, VREG *, VREG *);
+extern SYMBOL *vlabase_v11(SYMBOL *), *vlaboundsym_v11(TYPE *),
+    *vlaobjmarkget_v12(SYMBOL *); /* CCDECL */
+extern NODE *vlaboundexpr_v11(TYPE *);
+extern int vlaboundcaptured_v12(TYPE *);
+extern void vlaboundsetcaptured_v12(TYPE *);
 
 extern void outepilog(SYMBOL *);	/* CCOUT */
 extern VREG *gmuuo(NODE *);	/* CCGEN2 for imuuo key word; KAR 1/91 */
@@ -73,8 +82,11 @@ static int cbifkeep(NODE *, struct constbind *, int);
 static int dsedeadonce(NODE *);
 static SYMBOL *retlabel;
 static NODE *retfall;
+static INT autooff1_v11(SYMBOL *);
+static int frameindex1_v11(void);
 #if 0
 static void genadata();
+static void genvla_v11(SYMBOL *);
 static void gdo(), gfor(), gif(), gwhile(), greturn();
 static SYMBOL *gtoplab();
 static int labchk();
@@ -457,7 +469,16 @@ genstmt(NODE *n)
 	genstmt(n->Nleft);		/* finish rest of body */
 	break;
 
-    case Q_BREAK:	code6(P_JRST, NULL, brklabel);	break;
+    case N_VLARST:
+        if (n->Nid != NULL) {
+            INT off = autooff1_v11(n->Nid);
+            codemdx(P_MOVE, R_SP, (SYMBOL *)NULL, off, frameindex1_v11());
+            flushcode();
+        }
+        break;
+    case Q_BREAK:
+        code6(P_JRST, NULL, brklabel);
+        break;
     case Q_GOTO:
 	if (n->Nleft)			/* computed goto *expr */
 	    {
@@ -469,7 +490,9 @@ genstmt(NODE *n)
 	else
 	    code6(P_JRST, NULL, n->Nxfsym);
 	break;
-    case Q_CONTINUE:	code6(P_JRST, NULL, looplabel);	break;
+    case Q_CONTINUE:
+        code6(P_JRST, NULL, looplabel);
+        break;
     case Q_DO:		gdo(n);		break;
     case Q_FOR:		gfor(n);	break;
     case Q_IF:		gif(n);		break;
@@ -502,6 +525,167 @@ laststmt(struct node * n)
 	return(n);
 }
 
+static INT
+autooff1_v11(SYMBOL *s)
+{
+    return fnvla_v11 ? (s->Svalue + 1 - maxauto)
+                     : ((s->Svalue + 1) + fnframesave - stackoffset);
+}
+
+static int
+frameindex1_v11(void)
+{
+    return fnvla_v11 ? R_MAXREG : R_SP;
+}
+
+static NODE *
+vla_bin_v11(int op, NODE *l, NODE *r)
+{
+    NODE *n = ndeflr(op, l, r);
+    return convbinary(n);
+}
+
+static INT
+vla_basebytes_v11(TYPE *t)
+{
+    INT bits;
+
+    if (t == NULL)
+        return 0;
+    if (tispacked(t))
+        return t->Tbytes;
+    switch (t->Tspec) {
+    case TS_CHAR:
+    case TS_UCHAR:
+        return 1;
+    case TS_STRUCT:
+    case TS_UNION:
+        return sizetype(t) * (TGSIZ_WORD / TGSIZ_CHAR);
+    default:
+        if (tisscalar(t)) {
+            bits = tbitsize(t);
+            return (bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR;
+        }
+        return sizetype(t) * (TGSIZ_WORD / TGSIZ_CHAR);
+    }
+}
+
+static NODE *
+vla_bytesexpr_v11(TYPE *t)
+{
+    NODE *count, *sub;
+    SYMBOL *bs;
+
+    if (t == NULL)
+        return ndeficonst(0);
+    if (t->Tspec != TS_ARRAY)
+        return ndeficonst(vla_basebytes_v11(t));
+
+    if (tisvla(t)) {
+        bs = vlaboundsym_v11(t);
+        if (bs == NULL) {
+            int_error("vla_bytesexpr_v11: unbound VLA dimension");
+            count = ndeficonst(1);
+        } else
+            count = ndefident(bs);
+    } else
+        count = ndeficonst(t->Tsize);
+
+    sub = vla_bytesexpr_v11(t->Tsubt);
+    return vla_bin_v11(Q_MPLY, count, sub);
+}
+
+static void
+vla_evalbounds_v11(TYPE *t)
+{
+    NODE *as, *rhs;
+    SYMBOL *bs;
+
+    if (t == NULL || t->Tspec != TS_ARRAY)
+        return;
+    if (tisvla(t)) {
+        bs = vlaboundsym_v11(t);
+        rhs = vlaboundexpr_v11(t);
+        if (bs == NULL || rhs == NULL) {
+            int_error("vla_evalbounds_v11: missing bound state");
+            return;
+        }
+        if (!vlaboundcaptured_v12(t)) {
+            rhs = convasgn(bs->Stype, rhs);
+            as = ndeflr(Q_ASGN, ndefident(bs), rhs);
+            as->Ntype = bs->Stype;
+            genxrelease(as);
+            vlaboundsetcaptured_v12(t);
+        }
+    }
+    vla_evalbounds_v11(t->Tsubt);
+}
+
+static void
+genvla_v11(SYMBOL *s)
+{
+    SYMBOL *base;
+    NODE *bytes, *words;
+    VREG *rb, *rw;
+    INT off;
+
+    base = vlabase_v11(s);
+    if (base == NULL) {
+        TYPE *pt = s->Stype;
+        if (s->Sclass == SC_TYPEDEF) {
+            vla_evalbounds_v11(s->Stype);
+            return;
+        }
+        /* Parameter array declarators have already adjusted the outermost
+        ** array to a pointer.  Capture any remaining variably-modified row
+        ** bounds at function entry; no dynamic object is allocated here. */
+        if ((s->Sclass == SC_ARG || s->Sclass == SC_RARG)
+          && pt != NULL && pt->Tspec == TS_PTR) {
+            vla_evalbounds_v11(pt->Tsubt);
+            return;
+        }
+        int_error("genvla_v11: missing base symbol");
+        return;
+    }
+
+    {
+        SYMBOL *mark = vlaobjmarkget_v12(s);
+        if (mark != NULL) {
+            INT moff = autooff1_v11(mark);
+            codemdx(P_MOVEM, R_SP, (SYMBOL *)NULL, moff, frameindex1_v11());
+            flushcode();
+        }
+    }
+
+    /* Each variably-modified dimension is evaluated exactly once at the
+    ** declaration point and retained in a hidden fixed-frame local. */
+    vla_evalbounds_v11(s->Stype);
+
+    bytes = vla_bytesexpr_v11(s->Stype);
+    bytes = vla_bin_v11(Q_PLUS, bytes, ndeficonst(
+                        (TGSIZ_WORD / TGSIZ_CHAR) - 1));
+    words = vla_bin_v11(Q_RSHFT, bytes, ndeficonst(2));
+
+    /* Form the address of the first newly allocated word before ADJSP. */
+    rb = vrget();
+    codemdx(P_MOVEI, vrtoreal(rb), (SYMBOL *)NULL, 1, R_SP);
+    rw = genexpr(words);
+    if (rw == NULL) {
+        vrfree(rb);
+        int_error("genvla_v11: null runtime size");
+        return;
+    }
+    {
+    int sr = vrtoreal(rw);
+    codemdx(P_ADJSP, R_SP, (SYMBOL *)NULL, 0, sr);
+    vrfree(rw);
+    }
+
+    off = autooff1_v11(base);
+    codemdx(P_MOVEM, vrtoreal(rb), (SYMBOL *)NULL, off, frameindex1_v11());
+    vrfree(rb);
+}
+
 /* GENADATA - Generate auto data initializations
 **	Should be called only for N_DATA nodes.
 **
@@ -553,7 +737,11 @@ genaggcopy(SYMBOL *s, NODE *l)
     ra = vrget();
     code3(P_MOVE, r, litnodes->Nendlab);
     r = getmem(r, t, 0, 0);
-    code13(P_MOVE, ra, (s->Svalue+1)+fnframesave-stackoffset);
+    if (fnvla_v11)
+        codemdx(P_MOVEI, vrtoreal(ra), (SYMBOL *)NULL,
+                autooff1_v11(s), R_MAXREG);
+    else
+        code13(P_MOVE, ra, autooff1_v11(s));
     r = stomem(r, ra, sizetype(t), 0);
     relflush(r);
 }
@@ -642,6 +830,10 @@ genadata(struct node * n)
 #endif
     for (; n && n->Nop == N_DATA; n = n->Nright) {
         if (n->Nleft != NULL && n->Nleft->Nright != NULL) {
+            if (n->Nleft->Nright->Nop == N_VLA) {
+                genvla_v11(n->Nleft->Nleft->Nid);
+                continue;
+            }
             if (n->Nleft->Nright->Nop == N_IZLIST) {
                 SYMBOL *s = n->Nleft->Nleft->Nid;
                 NODE *l = n->Nleft->Nright;
@@ -1266,6 +1458,13 @@ genretepilog(int i)
 
     if (!isr)
 	{
+        if (fnvla_v11)
+            {
+            /* Discard all dynamic VLA storage before touching fixed save
+            ** slots.  AC14 points at the top of the fixed frame. */
+            code00(P_MOVE, R_SP, R_MAXREG);
+            flushcode();
+            }
 	/* Restore allocated call-preserved registers directly from their
 	** fixed save slots before dropping the frame.  The old epilogue first
 	** discarded the frame and then POPed these registers, which read from
@@ -1274,7 +1473,7 @@ genretepilog(int i)
 	*/
 	if (R_PRESERVE_COUNT >= i) {
 	    if (i == 4) {
-		int off = 1 + fnsavescr - stackoffset;
+		int off = 1 + fnsavescr + (fnvla_v11 ? 1 : 0) - stackoffset;
 
 		/* Four consecutive preserved ACs are cheaper to restore with
 		** one BLT than with four individual MOVEs.  AC0 is caller-
@@ -1291,7 +1490,7 @@ genretepilog(int i)
 	    } else
 		for (j = 0; j < i; ++j) {
 		    codemdx(P_MOVE, j + r_maxnopreserve + 1, (SYMBOL *)NULL,
-			    1 + fnsavescr + j - stackoffset, R_SP);
+			    1 + fnsavescr + (fnvla_v11 ? 1 : 0) + j - stackoffset, R_SP);
 		    flushcode();
 		}
 	}
@@ -1303,6 +1502,12 @@ genretepilog(int i)
 		    1 - stackoffset, R_SP);
 	    flushcode();
 	    }
+        if (fnvla_v11)
+            {
+            codemdx(P_MOVE, R_MAXREG, (SYMBOL *)NULL,
+                    1 + fnsavescr - stackoffset, R_SP);
+            flushcode();
+            }
 	}
 
     code8 (P_ADJSP, VR_SP, -stackoffset); /* flush local vars from stk */

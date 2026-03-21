@@ -302,6 +302,8 @@ tokdef(N_IZLIST,0,	TKTY_NULL, 0)	/* Initializer list (under N_IZ) */
 tokdef(N_LITIZ,0,	TKTY_NULL, 0)	/* Literal izer list */
 tokdef(N_COMPLIT,0, TKTY_PRIMARY, 0) /* C99 compound literal */
 tokdef(N_STMTEXPR,0,TKTY_PRIMARY, 0) /* GNU ({ statements; expr; }) */
+tokdef(N_VLA,   0, TKTY_NULL, 0) /* Runtime VLA allocation declaration */
+tokdef(N_VLARST, 0, TKTY_NULL, 0) /* Restore dynamic VLA stack mark */
 tokdef(N_NODE,	0,	TKTY_NULL, 0)	/* Random substructure node op */
 tokdef(N_ERROR,	0,	TKTY_NULL, 0)	/* Error placeholder (stmt or expr) */
 

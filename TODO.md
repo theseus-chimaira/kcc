@@ -2,7 +2,7 @@
 
 ## Language implementation
 
-- [ ] Variable length arrays.
+- [x] Variable length arrays.
 - [x] Hexadecimal floating constants.
 - [x] `_Noreturn`.
 - [x] `_Generic`.

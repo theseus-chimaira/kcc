@@ -11,10 +11,13 @@
 #include "cc.h"
 #include "cclex.h"	/* For reference to "constant" structure */
 #include <string.h>
+#include <stdlib.h>
 
 /* Imported functions */
 extern NODE *debug_node(NODE *, int, int, int);	/* CCDBUG */
 extern TYPE *typename(void);	/* CCDECL */
+extern NODE *vlaboundexpr_v11(TYPE *);	/* CCDECL */
+extern SYMBOL *vlaboundsym_v11(TYPE *);	/* CCDECL */
 extern SYMBOL *defauto(char *, TYPE *), *defstatic(char *, TYPE *); /* CCDECL */
 extern NODE *pizer(SYMBOL *);		/* CCDECL */
 extern SYMBOL *funchk(int, int, SYMBOL *, SYMBOL *);	/* CCDECL */
@@ -217,6 +220,48 @@ static int contlevel,		/* Current nesting depth for continue (loop) */
 	constexpr,		/* flag for parsing constant expression */
 	stmt_number;		/* used by external debugger/profiler */
 
+/* VLA scope tracking.  Each storage-allocating VLA declaration owns a
+** saved-SP mark so a backward jump can discard only later VLAs while keeping
+** earlier declarations in the same block alive.  Region nodes also enforce
+** the C constraint against entering a variably modified declaration scope.
+*/
+struct vlaregion_v12 {
+    struct vlaregion_v12 *parent;
+    struct vlaregion_v12 *allnext;
+    SYMBOL *mark;
+};
+struct vlablock_v12 {
+    struct vlablock_v12 *parent;
+    struct vlaregion_v12 *entry;
+    SYMBOL *mark;
+};
+struct vlactl_v12 {
+    struct vlactl_v12 *prev;
+    struct vlaregion_v12 *target;
+};
+struct vlagoto_v12 {
+    struct vlagoto_v12 *next;
+    NODE *restore;
+    SYMBOL *label;
+    struct vlaregion_v12 *source;
+};
+struct vlalabel_v12 {
+    struct vlalabel_v12 *next;
+    SYMBOL *label;
+    struct vlaregion_v12 *region;
+};
+
+static struct vlaregion_v12 *vlaregion_cur_v12, *vlaallregions_v12;
+static struct vlablock_v12 *vlablock_cur_v12;
+static struct vlactl_v12 *vlabreak_v12, *vlacont_v12, *vlacase_v13;
+static struct vlagoto_v12 *vlagotos_v12;
+static struct vlalabel_v12 *vlalabels_v12;
+static unsigned int vlamark_counter_v12;
+static int vlacomputedgoto_v12;
+
+static SYMBOL *vla_cleanupmark_v12(struct vlaregion_v12 *, struct vlaregion_v12 *, int *);
+static void vla_resolve_goto_v12(struct vlagoto_v12 *, struct vlaregion_v12 *);
+
 /* Variables pushed/restored by each switch, global during a switch level */
 static struct sw		/* Structure for easier push/pop */
     {
@@ -233,6 +278,173 @@ extern char ra_expr;		/* KAR-11/91, usage before init. flag */
 #define fline_off(c)	\
     (debcsi > 0 && (c) != '\n' && (c) != '\r' && (c) != '\v')
 
+static SYMBOL *
+vla_newmark_v12(void)
+{
+    char name[32];
+    sprintf(name, "%cvlm%u", SPC_IAUTO, ++vlamark_counter_v12);
+    return defauto(name, inttype);
+}
+
+/* Return the saved-SP mark needed when transferring from SRC to TARGET.
+** If TARGET enters one or more VLA declaration regions, set *ILLEGAL.
+*/
+static SYMBOL *
+vla_cleanupmark_v12(struct vlaregion_v12 *src,
+                    struct vlaregion_v12 *target, int *illegal)
+{
+    struct vlaregion_v12 *a, *b, *lca;
+    SYMBOL *mark = NULL;
+    int da = 0, db = 0;
+
+    *illegal = 0;
+    for (a = src; a != NULL; a = a->parent) ++da;
+    for (b = target; b != NULL; b = b->parent) ++db;
+    a = src; b = target;
+    while (da > db) { if (a->mark) mark = a->mark; a = a->parent; --da; }
+    while (db > da) { b = b->parent; --db; }
+    while (a != b) {
+        if (a && a->mark) mark = a->mark;
+        a = a ? a->parent : NULL;
+        b = b ? b->parent : NULL;
+    }
+    lca = a;
+
+    /* Any target-side declaration region below the common ancestor means
+    ** the jump enters the scope of a VLA declaration and is forbidden. */
+    for (b = target; b != lca; b = b->parent) {
+        *illegal = 1;
+        break;
+    }
+    return mark;
+}
+
+static struct vlalabel_v12 *
+vla_findlabel_v12(SYMBOL *lab)
+{
+    struct vlalabel_v12 *p;
+    for (p = vlalabels_v12; p != NULL; p = p->next)
+        if (p->label == lab) return p;
+    return NULL;
+}
+
+static void
+vla_resolve_goto_v12(struct vlagoto_v12 *g, struct vlaregion_v12 *target)
+{
+    int illegal;
+    SYMBOL *m = vla_cleanupmark_v12(g->source, target, &illegal);
+    if (illegal)
+        error("Goto enters scope of variable length array");
+    else
+        g->restore->Nid = m;
+}
+
+void
+vla_labeldef_v12(SYMBOL *lab)
+{
+    struct vlalabel_v12 *l;
+    struct vlagoto_v12 *g;
+
+    l = vla_findlabel_v12(lab);
+    if (l == NULL) {
+        l = (struct vlalabel_v12 *)calloc(1, sizeof(*l));
+        if (l == NULL) jerr("Out of memory for VLA label metadata\n");
+        l->label = lab;
+        l->next = vlalabels_v12;
+        vlalabels_v12 = l;
+    }
+    l->region = vlaregion_cur_v12;
+    for (g = vlagotos_v12; g != NULL; g = g->next)
+        if (g->label == lab)
+            vla_resolve_goto_v12(g, l->region);
+}
+
+void
+vla_gotoref_v12(NODE *restore, SYMBOL *lab)
+{
+    struct vlagoto_v12 *g;
+    struct vlalabel_v12 *l;
+
+    g = (struct vlagoto_v12 *)calloc(1, sizeof(*g));
+    if (g == NULL) jerr("Out of memory for VLA goto metadata\n");
+    g->restore = restore;
+    g->label = lab;
+    g->source = vlaregion_cur_v12;
+    g->next = vlagotos_v12;
+    vlagotos_v12 = g;
+    l = vla_findlabel_v12(lab);
+    if (l != NULL && l->region != NULL)
+        vla_resolve_goto_v12(g, l->region);
+}
+
+/* Called by CCDECL at each block-scope storage-allocating VLA declaration.
+** Every declaration gets its own saved-SP slot and declaration region.  The
+** block separately remembers its first mark for ordinary fall-through cleanup.
+*/
+static void
+vla_regionpush_v12(SYMBOL *mark)
+{
+    struct vlaregion_v12 *r;
+
+    r = (struct vlaregion_v12 *)calloc(1, sizeof(*r));
+    if (r == NULL) jerr("Out of memory for VLA region metadata\n");
+    r->parent = vlaregion_cur_v12;
+    r->allnext = vlaallregions_v12;
+    vlaallregions_v12 = r;
+    r->mark = mark;
+    vlaregion_cur_v12 = r;
+}
+
+SYMBOL *
+vla_declscope_v12(void)
+{
+    SYMBOL *save;
+
+    if (vlablock_cur_v12 == NULL) {
+        int_error("vla_declscope_v12: no current block");
+        return NULL;
+    }
+    save = vla_newmark_v12();
+    if (vlablock_cur_v12->mark == NULL)
+        vlablock_cur_v12->mark = save;
+    vla_regionpush_v12(save);
+    return save;
+}
+
+void
+vla_declregion_v12(void)
+{
+    if (vlablock_cur_v12 == NULL) {
+        int_error("vla_declregion_v12: no current block");
+        return;
+    }
+    vla_regionpush_v12(NULL);
+}
+
+static void
+vla_parseclear_v12(void)
+{
+    struct vlagoto_v12 *g, *gn;
+    struct vlalabel_v12 *l, *ln;
+    struct vlaregion_v12 *r, *rn;
+
+    for (g = vlagotos_v12; g != NULL; g = gn) {
+        gn = g->next;
+        free(g);
+    }
+    for (l = vlalabels_v12; l != NULL; l = ln) {
+        ln = l->next;
+        free(l);
+    }
+    for (r = vlaallregions_v12; r != NULL; r = rn) {
+        rn = r->allnext;
+        free(r);
+    }
+    vlagotos_v12 = NULL;
+    vlalabels_v12 = NULL;
+    vlaallregions_v12 = vlaregion_cur_v12 = NULL;
+}
+
 /*
 ** FUNSTMT - Parse function statement.
 **	Main entry to statement parser from CCDECL.
@@ -254,10 +466,19 @@ funstmt(void)
 
     /* Initialize local vars */
     contlevel = caselevel = breaklevel = 0;
+    vlaregion_cur_v12 = NULL;
+    vlaallregions_v12 = NULL;
+    vlablock_cur_v12 = NULL;
+    vlabreak_v12 = vlacont_v12 = NULL;
+    vlagotos_v12 = NULL;
+    vlalabels_v12 = NULL;
+    vlacomputedgoto_v12 = 0;
 
 
     f = ndefl(N_STATEMENT, debug_node(compoundstmt(1),fline- 1, stmt_number++,
 	    FN_ENTRY));
+    if (fnvla_v11 && vlacomputedgoto_v12)
+        error("Computed goto is not supported in a function containing VLAs");
     nreg = ndefop(Q_RETURN);
     nreg->Nreg = _reg_count;
     offset = !fline_off(_ch_cpy);
@@ -267,6 +488,7 @@ funstmt(void)
     if (vrbfun)
 	fprintf(outmsgs,"Compiled function %s: ", curfn->Sname);
 
+    vla_parseclear_v12();
     return f;
 #if 0
     return ndeflr(N_STATEMENT,
@@ -349,6 +571,7 @@ statement(void)
 		stmt_number--;
 		nextoken();			/* skip over lab: */
 		nlabel = plabel(sym, 1);	/* get label symbol number */
+                vla_labeldef_v12(nlabel);
 		s = ndefl(N_LABEL, statement());	/* make label node */
 		s->Nxfsym = nlabel;
 		return(s);			/* make no stmt label! */
@@ -410,8 +633,16 @@ compoundstmt(int toplev)
     SYMBOL *prevlsym;
     NODE *u, *beg, *n, *nr = NULL;
 
+    struct vlablock_v12 vb;
+    struct vlaregion_v12 *saved_region;
+
     prevlsym = toplev ? NULL	/* At top level, block is already set up */
 		: beglsym();	/* else start a new symbol block! */
+    saved_region = vlaregion_cur_v12;
+    memset(&vb, 0, sizeof(vb));
+    vb.parent = vlablock_cur_v12;
+    vb.entry = saved_region;
+    vlablock_cur_v12 = &vb;
 
     expect(T_LBRACE);		/* Now get next token after left-brace */
 
@@ -433,6 +664,21 @@ compoundstmt(int toplev)
     else
 	u = beg;		/* No declarations, just code */
 
+    if (vb.mark != NULL) {
+        NODE *rst = ndefop(N_VLARST);
+        NODE *tail = ndefl(N_STATEMENT, rst);
+        rst->Nid = vb.mark;
+        if (u == NULL)
+            u = tail;
+        else {
+            NODE *q = u;
+            while (q->Nright != NULL) q = q->Nright;
+            q->Nright = tail;
+        }
+    }
+    vlaregion_cur_v12 = saved_region;
+    vlablock_cur_v12 = vb.parent;
+
     endlsym(prevlsym);		/* End local sym block - deactivate syms */
 				/* Important that this be done BEFORE reading
 				** the next token after the right brace!
@@ -450,11 +696,17 @@ dostmt(void)
     NODE *cond, *stmt;
 
     nextoken();
+    {
+    struct vlactl_v12 bc, cc;
+    bc.prev = vlabreak_v12; bc.target = vlaregion_cur_v12; vlabreak_v12 = &bc;
+    cc.prev = vlacont_v12; cc.target = vlaregion_cur_v12; vlacont_v12 = &cc;
     contlevel++;
     breaklevel++;
     stmt = statement();
     breaklevel--;
     contlevel--;
+    vlabreak_v12 = bc.prev; vlacont_v12 = cc.prev;
+    }
     expect(Q_WHILE);
     expect(T_LPAREN);
     cond = exprcntrl();
@@ -476,12 +728,29 @@ whilestmt(void)
     expect(T_LPAREN);
     cond = exprcntrl();
     expect(T_RPAREN);
+    {
+    struct vlactl_v12 bc, cc;
+    bc.prev = vlabreak_v12; bc.target = vlaregion_cur_v12; vlabreak_v12 = &bc;
+    cc.prev = vlacont_v12; cc.target = vlaregion_cur_v12; vlacont_v12 = &cc;
     breaklevel++;
     contlevel++;
     stmt = statement();
     breaklevel--;
     contlevel--;
+    vlabreak_v12 = bc.prev; vlacont_v12 = cc.prev;
+    }
     return ndeflr(Q_WHILE, cond, stmt);
+}
+
+static NODE *
+vla_transfer_v12(NODE *xfer, SYMBOL *mark, NODE **restorep)
+{
+    NODE *rst, *tail;
+    rst = ndefop(N_VLARST);
+    rst->Nid = mark;
+    if (restorep != NULL) *restorep = rst;
+    tail = ndefl(N_STATEMENT, xfer);
+    return ndeflr(N_STATEMENT, rst, tail);
 }
 
 /* CONTINUESTMT - Parse CONTINUE statement
@@ -495,7 +764,14 @@ continuestmt(void)
 	error("Continue must be within loop");
     nextoken();
     expect(T_SCOLON);		/* it's followed by a semicolon */
-    return ndefop(Q_CONTINUE);
+    {
+    NODE *n = ndefop(Q_CONTINUE);
+    int illegal;
+    SYMBOL *m = NULL;
+    if (vlacont_v12 != NULL)
+        m = vla_cleanupmark_v12(vlaregion_cur_v12, vlacont_v12->target, &illegal);
+    return m ? vla_transfer_v12(n, m, NULL) : n;
+    }
 }
 
 /* BREAKSTMT - Parse BREAK statement
@@ -509,7 +785,14 @@ breakstmt(void)
 	error("Break must be within loop or switch");
     nextoken();
     expect(T_SCOLON);		/* it's followed by a semicolon */
-    return ndefop(Q_BREAK);
+    {
+    NODE *n = ndefop(Q_BREAK);
+    int illegal;
+    SYMBOL *m = NULL;
+    if (vlabreak_v12 != NULL)
+        m = vla_cleanupmark_v12(vlaregion_cur_v12, vlabreak_v12->target, &illegal);
+    return m ? vla_transfer_v12(n, m, NULL) : n;
+    }
 }
 
 /* FORSTMT - Parse FOR iterative statement
@@ -542,11 +825,17 @@ forstmt(void)
     if (token != T_RPAREN)		/* Get incrementation expr if one */
 	e3 = ediscifok(evalifok(expression()));
     expect(T_RPAREN);
+    {
+    struct vlactl_v12 bc, cc;
+    bc.prev = vlabreak_v12; bc.target = vlaregion_cur_v12; vlabreak_v12 = &bc;
+    cc.prev = vlacont_v12; cc.target = vlaregion_cur_v12; vlacont_v12 = &cc;
     contlevel++;
     breaklevel++;
     s = statement();
     breaklevel--;
     contlevel--;
+    vlabreak_v12 = bc.prev; vlacont_v12 = cc.prev;
+    }
     preamble = ndeflr(N_NODE, e1, e2);
     preamble = ndeflr(N_NODE, preamble, ndefl(N_NODE, e3));
     return ndeflr(Q_FOR, preamble, s);
@@ -593,14 +882,20 @@ gotostmt(void)
 	n = ndefop(Q_GOTO);
 	n->Nleft = convcast(voidptrtype, expression());
 	expect(T_SCOLON);
+        vlacomputedgoto_v12 = 1;
 	return n;
 	}
     s = csymbol;
     expect(Q_IDENT);			/* goto lab */
     n = ndefop(Q_GOTO);
     n->Nxfsym = plabel(s, 0);
+    {
+    NODE *rst, *wrap;
+    wrap = vla_transfer_v12(n, NULL, &rst);
+    vla_gotoref_v12(rst, n->Nxfsym);
     expect(T_SCOLON);			/* goto lab; */
-    return n;
+    return wrap;
+    }
 }
 
 
@@ -666,6 +961,14 @@ switchstmt(void)
     else				/* Apply usual unary conversions */
 	cond = evalifok(convunary(cond));
 
+    {
+    struct vlactl_v12 bc, cc;
+    bc.prev = vlabreak_v12;
+    bc.target = vlaregion_cur_v12;
+    vlabreak_v12 = &bc;
+    cc.prev = vlacase_v13;
+    cc.target = vlaregion_cur_v12;
+    vlacase_v13 = &cc;
     caselevel++;
     breaklevel++;
     savesw = sw;			/* Save current level's variables */
@@ -684,6 +987,9 @@ switchstmt(void)
 
     caselevel--;
     breaklevel--;
+    vlacase_v13 = cc.prev;
+    vlabreak_v12 = bc.prev;
+    }
 
     n = ndeflr(Q_SWITCH, cond, stmt);
     if (sw.swdefault)		/* Put default at start of list, */
@@ -695,6 +1001,23 @@ switchstmt(void)
 	n->Nxswlist = sw.swcases;	/* and point to head of result */
     sw = savesw;		/* Restore vars for previous level */
     return n;
+}
+
+/* VLA_CASECHECK_V13 - A switch dispatch reaches a case/default label
+** directly from the switch entry.  Reject labels that would therefore enter
+** the lifetime of a VLA declaration skipped by that dispatch.
+*/
+static void
+vla_casecheck_v13(void)
+{
+    int illegal;
+
+    if (vlacase_v13 == NULL)
+        return;
+    (void)vla_cleanupmark_v12(vlacase_v13->target,
+                              vlaregion_cur_v12, &illegal);
+    if (illegal)
+        error("Switch label enters scope of variable length array");
 }
 
 /* CASESTMT - Parse CASE labeled statement
@@ -713,6 +1036,8 @@ casestmt(void)
 	error("Case label outside switch statement");	/* nope */
 	n = NULL;			/* disable further checks */
 	}
+    else
+        vla_casecheck_v13();
     this = ndefop(Q_CASE);
 
     /* Need to fix up the case constant-expression value further.
@@ -779,8 +1104,11 @@ defaultstmt(void)
     nextoken();
     if (caselevel == 0)
 	error("Case label outside switch statement");
-    else if (sw.swdefault != NULL)	/* Err if already have default stmt */
-	error("Switch statement has multiple \"default\" labels");
+    else {
+        vla_casecheck_v13();
+        if (sw.swdefault != NULL)	/* Err if already have default stmt */
+            error("Switch statement has multiple \"default\" labels");
+    }
 
     expect(T_COLON);
     sw.swdefault = n = ndefop(Q_DEFAULT);
@@ -2049,6 +2377,68 @@ alignexpr_v1(void)
 ** Similarly, the size of a char is always 1, regardless of the actual # of
 ** bits it uses.
 */
+static INT
+vla_sizebase_v11(TYPE *t)
+{
+    INT bits;
+
+    if (t == NULL)
+        return 0;
+    if (tispacked(t))
+        return t->Tbytes;
+    switch (t->Tspec) {
+    case TS_CHAR:
+    case TS_UCHAR:
+        return 1;
+    case TS_STRUCT:
+    case TS_UNION:
+        return sizetype(t) * (TGSIZ_WORD / TGSIZ_CHAR);
+    default:
+        if (tisscalar(t)) {
+            bits = tbitsize(t);
+            return (bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR;
+        }
+        return sizetype(t) * (TGSIZ_WORD / TGSIZ_CHAR);
+    }
+}
+
+/* Build the runtime sizeof value for a variably-modified array.  Bounds
+** belonging to an actual VLA object have already been evaluated once at
+** its declaration and live in hidden fixed-frame locals; using those
+** symbols here is required by C's evaluate-once VLA semantics.
+*/
+static NODE *
+vla_sizeexpr_v11(TYPE *t)
+{
+    NODE *count, *sub, *n;
+    SYMBOL *bs;
+
+    if (t == NULL)
+        return ndeficonst(0);
+    if (t->Tspec != TS_ARRAY)
+        return ndeficonst(vla_sizebase_v11(t));
+
+    if (tisvla(t)) {
+        bs = vlaboundsym_v11(t);
+        if (bs != NULL)
+            count = ndefident(bs);
+        else {
+            /* A variably-modified type-name has no object-side saved bound.
+            ** Its bound is evaluated as part of this sizeof expression. */
+            count = vlaboundexpr_v11(t);
+            if (count == NULL) {
+                int_error("vla_sizeexpr_v11: missing VLA bound");
+                count = ndeficonst(0);
+            }
+        }
+    } else
+        count = ndeficonst(t->Tsize);
+
+    sub = vla_sizeexpr_v11(t->Tsubt);
+    n = ndeflr(Q_MPLY, count, sub);
+    return convbinary(n);
+}
+
 static NODE *
 sizeexpr(void)
 {
@@ -2109,6 +2499,12 @@ sizeexpr(void)
 	case TS_ARRAY:
 	    {
 	    INT pbytes;
+            if (tisvla(t))
+                {
+                NODE *vn = vla_sizeexpr_v11(t);
+                constexpr = saveconst;
+                return convcast(siztype, vn);
+                }
 	    if (t->Tsize == 0)
 		{
 		error("Size of array not known");
@@ -3252,6 +3648,21 @@ cmpatype(struct type * pt, struct type * at)
     return 0;			/* That's all we can check for, give up. */
 }
 
+static int
+vla_object_v11(TYPE *t)
+{
+    if (t == NULL)
+        return 0;
+    if (t->Tspec != TS_ARRAY)
+        return sizetype(t) != 0;
+    while (t != NULL && t->Tspec == TS_ARRAY) {
+        if (tisvla(t))
+            return 1;
+        t = t->Tsubt;
+    }
+    return t != NULL && sizetype(t) != 0;
+}
+
 /* CHKADD - Check an add/sub expression node for conversions and validity.
 */
 static NODE *
@@ -3266,8 +3677,8 @@ chkadd(int op, struct node * n)
     /* Not both arith, check out pointer types */
     lt = n->Nleft->Ntype;
     rt = n->Nright->Ntype;
-    if ( (lt->Tspec == TS_PTR && !sizetype(lt->Tsubt))
-      || (rt->Tspec == TS_PTR && !sizetype(rt->Tsubt)))
+    if ( (lt->Tspec == TS_PTR && !vla_object_v11(lt->Tsubt))
+      || (rt->Tspec == TS_PTR && !vla_object_v11(rt->Tsubt)))
 	{
 	error("Pointer operand for + or - must point to valid object");
 	return n;

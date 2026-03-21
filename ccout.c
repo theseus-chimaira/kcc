@@ -1855,12 +1855,31 @@ outadjsp(INT n)
 static void
 simadjsp (PCODE *p)
 {
+    int mode;
+
     if (p->Preg != R_SP) {
 	int_error ("simadjsp: bad form");
 	outinstr (p);
 	return;
     }
-    outadjsp (p->Pvalue);
+    mode = p->Ptype & PTF_ADRMODE;
+    if (mode == PTA_RCONST) {
+        outadjsp(p->Pvalue);
+        return;
+    }
+    if (mode == PTA_MINDEXED && p->Pptr == NULL && p->Poffset == 0
+      && p->Pindex != 0 && p->Pindex != R_SP) {
+        /* PDP-6/KA10 have no ADJSP.  A runtime adjustment N must be
+        ** added to both halves of the pushdown pointer.  AC0 is never
+        ** allocated by KCC, so use it to form [N,,N] without consuming
+        ** another virtual register. */
+        fprintf(out, "\tMOVE\t0,%o\n", p->Pindex);
+        fprintf(out, "\tHRL\t0,%o\n", p->Pindex);
+        outstr("\tADD\t17,0\n");
+        return;
+    }
+    int_error("simadjsp: unsupported runtime form");
+    outinstr(p);
 }
 
 static void

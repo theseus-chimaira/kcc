@@ -159,7 +159,8 @@ char	    _ch_cpy,	/* 12/90 set in ccpp.c and used in CCSTMT */
 	    isr,		/* FW 2A(52) compiling an ISR */
 	    err_waiting;	/* signals if error is waiting to be printed*/
 
-EXT int fndimodcalls,		/* general DImode div/mod operations in current fn */
+EXT int fnvla_v11,             /* current function contains a VLA */
+    fndimodcalls,		/* general DImode div/mod operations in current fn */
     profbliss,		/* -p = 1 Include BLISS profiling stuff */
     mlist,			/* -d=list Generate mixed listing KAR 8/90 */
     stksz;			/* -Nxxxx User selectable run time stack

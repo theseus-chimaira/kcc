@@ -14,7 +14,8 @@
 #include <string.h>
 
 /* Imported (external) functions used herein */
-extern void ridlsym(SYMBOL *);				/* CCSYM */
+extern void ridlsym(SYMBOL *);
+extern void vlaclear_v12(void);				/* CCSYM */
 extern SYMBOL *newlabel(void);
 extern void freelabel(SYMBOL *);
 extern INT sizearray(TYPE *), sizetype(TYPE *);		/* CCSYM */
@@ -700,6 +701,7 @@ gencode(NODE *n)
 		break;
 	    case N_FUNCTION:
 		if (!nerrors) genfunct(n);	/* Generate function instrs */
+                vlaclear_v12();          /* Release per-function VLA metadata */
 		ridlsym((SYMBOL *)NULL);	/* Flush any local symbols */
 		break;
 	    default:
@@ -726,6 +728,7 @@ genfunct (NODE* n)
 
 
     isr = 0;
+    fnvla_v11 = (n->Nflag & NF_VLA) != 0;
     fndimodcalls = fn_dimode_divmod_count(n->Nright);
     fnsavescr = fn_needs_scrreg(n->Nright);
     fnframesave = 0;
@@ -774,6 +777,13 @@ genfunct (NODE* n)
 	if (fnsavescr)
 	    {
 	    code00(P_PUSH, R_SP, R_SCRREG);
+	    flushcode();
+	    ++stackoffset;
+	    ++fnframesave;
+	    }
+	if (fnvla_v11)
+	    {
+	    code00(P_PUSH, R_SP, R_MAXREG);
 	    flushcode();
 	    ++stackoffset;
 	    ++fnframesave;
@@ -850,6 +860,12 @@ genfunct (NODE* n)
 	{				/* If any auto vars, */
 	code8(P_ADJSP, VR_SP, maxauto);	/* make room for them on stack */
 	stackoffset += maxauto;		/* and remember stack bumped */
+        }
+
+    if (fnvla_v11)
+        {
+        code00(P_MOVE, R_MAXREG, R_SP);
+        flushcode();
         }
 
     genretinit(n->Nright);

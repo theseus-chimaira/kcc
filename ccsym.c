@@ -1952,6 +1952,51 @@ findctype1(int tsp, INT flags, unsigned INT siz, struct type *proto,
     return t;
 }
 
+
+/* NEWVLATYPE_V11 - Create a non-interned variable-length array type.
+**
+** Runtime array bounds are declaration-specific and therefore must not be
+** canonicalized with another VLA merely because the element type matches.
+** Keep the ordinary TYPE layout unchanged and allocate from the same type
+** pool used by findctype(), but deliberately do not insert this object in
+** the type hash table.  Runtime bound metadata is kept by CCDECL.
+*/
+TYPE *
+newvlatype_v11(INT flags, TYPE *subt)
+{
+    TYPE *t;
+
+#if !DEBUG_KCC
+    if (abs(debcsi) == KCC_DBG_SDBG || abs(debcsi) == KCC_DBG_FDBG)
+#endif
+        {
+        if (!maxtype)
+            {
+            types = (TYPE *) calloc(MAXTYPE, sizeof(TYPE));
+            if (types == NULL)
+                jerr("Out of memory for types table\n");
+            }
+        t = &types[maxtype];
+        }
+#if !DEBUG_KCC
+    else
+        {
+        t = (TYPE *) calloc(1, sizeof(TYPE));
+        if (t == NULL)
+            jerr("Out of memory for types table\n");
+        }
+#endif
+
+    if (++maxtype >= MAXTYPE)
+        efatal("Type table overflow");
+    t->Tspec = TS_ARRAY;
+    t->Tflag = flags | TF_VLA;
+    t->Tsize = 0;
+    t->Tsubt = subt;
+    t->Tnhash = NULL;
+    return t;
+}
+
 /* CMPTYPE - Compare two types for compatibility
 */
 int

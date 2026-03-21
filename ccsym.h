@@ -761,6 +761,7 @@ enum typespecs {
 #define TF_PACKEDPTR	01000000000L /* pointer into GNU packed byte stream */
 #define TF_BITPTR	02000000000L /* S=1 pointer to exact packed bit position */
 #define TF_MAYBITPTR	04000000000L /* function-boundary ptr may be S=1 */
+#define TF_VLA          020000000000L /* runtime-sized array type */
 #endif
 
 /* Combos */
@@ -808,6 +809,7 @@ enum typespecs {
 #define tispackedptr(t) ((t) && (t)->Tspec == TS_PTR && ((t)->Tflag & TF_PACKEDPTR))
 #define tisbitptr(t) ((t) && (t)->Tspec == TS_PTR && ((t)->Tflag & TF_BITPTR))
 #define tismaybitptr(t) ((t) && (t)->Tspec == TS_PTR && ((t)->Tflag & TF_MAYBITPTR))
+#define tisvla(t)       ((t) && (t)->Tspec == TS_ARRAY && ((t)->Tflag & TF_VLA))
 #define tispacked(t)	((t) && ((t)->Tspec == TS_STRUCT || (t)->Tspec == TS_UNION) \
 			 && (t)->Tbytes != 0)
 

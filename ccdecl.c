@@ -26,9 +26,12 @@ extern SYMBOL *symfxext(SYMBOL *);      /* CCSYM */
 extern SYMBOL *symftag(SYMBOL *);       /* CCSYM */
 extern SYMBOL *symfmember(SYMBOL *, SYMBOL *);  /* CCSYM */
 extern SYMBOL *symqcreat(SYMBOL *);     /* CCSYM */
+extern SYMBOL *vla_declscope_v12(void); /* CCSTMT */
+extern void vla_declregion_v12(void); /* CCSTMT */
 extern SYMBOL *isdupsym(SYMBOL *);      /* CCSYM */
 extern SYMBOL *beglsym(void);   /* CCSYM */
 extern TYPE *findctype(int, INT, unsigned INT, TYPE *),
+        *newvlatype_v11(INT, TYPE *),
         *findtype(int, TYPE *), /* CCSYM */
         *findftype(TYPE *, TYPE *),                     /* CCSYM */
         *findptype(int, TYPE *, TYPE *);                        /* CCSYM */
@@ -90,8 +93,14 @@ static void plcmpare(TYPE *, TYPE *, int),
 static NODE *dodecl(int, SYMBOL *, SYMBOL *);
 static SYMBOL *declarator(SYMBOL *);
 static TYPE *addpp(TYPE *, TYPE *), *pushsztype(int, INT, INT, TYPE *),
+            *vlamake_v11(NODE *, TYPE *), *vlaclone_v11(TYPE *, TYPE *),
             *fnmaybitptrtype(TYPE *), *tagspec(int);
 static int fnmaybitptrtarget(TYPE *);
+static void vlabindtype_v11(TYPE *);
+static void vlamarkfn_v11(void);
+static int fnregcap_v11(void);
+static struct vlaobj_v11 *vlaobjadd_v11(SYMBOL *);
+void vlaobjmark_v12(SYMBOL *, SYMBOL *);
 static SYMBOL *sdeclaration(SYMBOL *, SYMBOL *, INT *, int *, int *);
 static SYMBOL *sdeclanon_v7(SYMBOL *, SYMBOL *, TYPE *, INT *, int *, int *);
 static void anonpromote_v7(SYMBOL *, SYMBOL *, INT);
@@ -112,6 +121,80 @@ static void pizflush(int);
 static int isauto(SYMBOL *), nisconst(NODE *);
 static char *declputd(char *, int);
 static void Set_Register(SYMBOL *, int, int);
+
+/* VLA metadata is deliberately kept out of TYPE and SYMBOL so ordinary
+** compilation pays no structure-size penalty.  VLA TYPE objects themselves
+** are non-interned (CCSYM newvlatype_v11), which makes a TYPE * a unique key
+** for its runtime bound expression.
+*/
+struct vlainfo_v11 {
+    TYPE *type;
+    NODE *bound;
+    SYMBOL *boundsym;
+    int captured;
+    struct vlainfo_v11 *next;
+};
+
+struct vlaobj_v11 {
+    SYMBOL *object;
+    SYMBOL *base;
+    SYMBOL *mark;
+    struct vlaobj_v11 *next;
+};
+
+static struct vlainfo_v11 *vlainfos_v11;
+static struct vlaobj_v11 *vlaobjs_v11;
+static unsigned int vlacounter_v11;
+
+static struct vlainfo_v11 *
+vlafind_v11(TYPE *t)
+{
+    struct vlainfo_v11 *v;
+    for (v = vlainfos_v11; v != NULL; v = v->next)
+        if (v->type == t)
+            return v;
+    return NULL;
+}
+
+static TYPE *
+vlamake_v11(NODE *bound, TYPE *subt)
+{
+    struct vlainfo_v11 *v;
+    TYPE *t;
+
+    t = newvlatype_v11(typbsiztab[TS_ARRAY], subt);
+    v = (struct vlainfo_v11 *)calloc(1, sizeof(*v));
+    if (v == NULL)
+        jerr("Out of memory for VLA metadata\n");
+    v->type = t;
+    v->bound = bound;
+    v->next = vlainfos_v11;
+    vlainfos_v11 = v;
+    return t;
+}
+
+static TYPE *
+vlaclone_v11(TYPE *old, TYPE *subt)
+{
+    struct vlainfo_v11 *v;
+    v = vlafind_v11(old);
+    if (v == NULL) {
+        int_error("vlaclone_v11: missing metadata");
+        return findctype(TS_ARRAY, 0, 0, subt);
+    }
+    return vlamake_v11(v->bound, subt);
+}
+
+static int
+vlacontains_v11(TYPE *t)
+{
+    for (; t != NULL; t = t->Tsubt)
+        if (tisvla(t))
+            return 1;
+        else if (t->Tspec != TS_ARRAY && t->Tspec != TS_PTR)
+            break;
+    return 0;
+}
 
 static char *
 declputd(char * cp, int val)
@@ -138,6 +221,204 @@ declputd(char * cp, int val)
         *cp++ = buf[i];
     *cp = '\0';
     return cp;
+}
+
+static int
+fnregcap_v11(void)
+{
+    return R_PRESERVE_COUNT - (fnvla_v11 ? 1 : 0);
+}
+
+static void
+vlamarkfn_v11(void)
+{
+    SYMBOL *s;
+
+    if (fnvla_v11)
+        return;
+    fnvla_v11 = 1;
+
+    /* AC14 is the VLA frame pointer.  If register allocation already used
+    ** all five preserved ACs before the first VLA declaration, demote only
+    ** the AC14 occupant.  Earlier preserved locals stay in AC10..AC13.
+    */
+    if (_reg_count < R_PRESERVE_COUNT)
+        return;
+    s = Reg_Id[_reg_count - 1];
+    if (s == NULL || s->Sreg != R_MAXREG) {
+        int_error("vlamarkfn_v11: AC14 register owner missing");
+        return;
+    }
+    if (s->Sclass == SC_RAUTO) {
+        s->Sclass = SC_AUTO;
+        s->Sreg = 0;
+        s->Svalue = maxauto;
+        maxauto += sizetype(s->Stype);
+    } else if (s->Sclass == SC_RARG) {
+        s->Sclass = SC_ARG;
+        s->Sreg = 0;
+    } else {
+        int_error("vlamarkfn_v11: bad AC14 symbol class %d", s->Sclass);
+        return;
+    }
+    Reg_Id[--_reg_count] = NULL;
+}
+
+static SYMBOL *
+vlahidden_v11(char *stem, TYPE *typ)
+{
+    char name[40];
+    char *cp = name;
+    char *sp = stem;
+
+    *cp++ = SPC_IAUTO;
+    while (*sp != '\0')
+        *cp++ = *sp++;
+    cp = declputd(cp, (int)++vlacounter_v11);
+    *cp = '\0';
+    return defauto(name, typ);
+}
+
+static void
+vlabindtype_v11(TYPE *t)
+{
+    struct vlainfo_v11 *v;
+
+    if (t == NULL)
+        return;
+    if (t->Tspec == TS_ARRAY) {
+        if (tisvla(t)) {
+            v = vlafind_v11(t);
+            if (v == NULL) {
+                int_error("vlabindtype_v11: missing metadata");
+                return;
+            }
+            if (v->boundsym == NULL)
+                v->boundsym = vlahidden_v11("vlab", v->bound->Ntype);
+        }
+        vlabindtype_v11(t->Tsubt);
+    } else if (t->Tspec == TS_PTR)
+        vlabindtype_v11(t->Tsubt);
+}
+
+static struct vlaobj_v11 *
+vlaobjadd_v11(SYMBOL *s)
+{
+    struct vlaobj_v11 *v;
+    TYPE *pt;
+
+    v = (struct vlaobj_v11 *)calloc(1, sizeof(*v));
+    if (v == NULL)
+        jerr("Out of memory for VLA object metadata\n");
+    pt = findtype(TS_PTR, s->Stype->Tsubt);
+    v->object = s;
+    v->base = vlahidden_v11("vlap", pt);
+    v->next = vlaobjs_v11;
+    vlaobjs_v11 = v;
+    vlabindtype_v11(s->Stype);
+    return v;
+}
+
+static NODE *
+vlaparamdata_v11(SYMBOL *args)
+{
+    NODE *head, *tail, *d, *iz, *vz;
+    SYMBOL *s;
+
+    head = tail = NULL;
+    for (s = args; s != NULL; s = s->Spmnext) {
+        if (!vlacontains_v11(s->Stype))
+            continue;
+        vlamarkfn_v11();
+        vlabindtype_v11(s->Stype);
+        vz = ndeft(N_VLA, s->Stype);
+        vz->Nid = s;
+        iz = ndeflr(N_IZ, ndefident(s), vz);
+        d = ndefl(N_DATA, iz);
+        if (tail != NULL)
+            tail->Nright = d;
+        else
+            head = d;
+        tail = d;
+    }
+    return head;
+}
+
+SYMBOL *
+vlabase_v11(SYMBOL *s)
+{
+    struct vlaobj_v11 *v;
+    for (v = vlaobjs_v11; v != NULL; v = v->next)
+        if (v->object == s)
+            return v->base;
+    return NULL;
+}
+
+void
+vlaobjmark_v12(SYMBOL *s, SYMBOL *mark)
+{
+    struct vlaobj_v11 *v;
+    for (v = vlaobjs_v11; v != NULL; v = v->next)
+        if (v->object == s) {
+            v->mark = mark;
+            return;
+        }
+    int_error("vlaobjmark_v12: missing VLA object");
+}
+
+SYMBOL *
+vlaobjmarkget_v12(SYMBOL *s)
+{
+    struct vlaobj_v11 *v;
+    for (v = vlaobjs_v11; v != NULL; v = v->next)
+        if (v->object == s) return v->mark;
+    return NULL;
+}
+
+void
+vlaclear_v12(void)
+{
+    struct vlainfo_v11 *vi, *vin;
+    struct vlaobj_v11 *vo, *von;
+
+    for (vi = vlainfos_v11; vi != NULL; vi = vin) {
+        vin = vi->next;
+        free(vi);
+    }
+    for (vo = vlaobjs_v11; vo != NULL; vo = von) {
+        von = vo->next;
+        free(vo);
+    }
+    vlainfos_v11 = NULL;
+    vlaobjs_v11 = NULL;
+}
+
+NODE *
+vlaboundexpr_v11(TYPE *t)
+{
+    struct vlainfo_v11 *v = vlafind_v11(t);
+    return v ? v->bound : NULL;
+}
+
+int
+vlaboundcaptured_v12(TYPE *t)
+{
+    struct vlainfo_v11 *v = vlafind_v11(t);
+    return v ? v->captured : 0;
+}
+
+void
+vlaboundsetcaptured_v12(TYPE *t)
+{
+    struct vlainfo_v11 *v = vlafind_v11(t);
+    if (v != NULL) v->captured = 1;
+}
+
+SYMBOL *
+vlaboundsym_v11(TYPE *t)
+{
+    struct vlainfo_v11 *v = vlafind_v11(t);
+    return v ? v->boundsym : NULL;
 }
 
 
@@ -1691,7 +1972,7 @@ promote_abi_params(SYMBOL *args, SYMBOL *fn, NODE *body)
               && s->Svalue <= GCCABI_RET_REGS
               && fn_abi_param_after_query(body, s))
                 ++nsave;
-        if (_reg_count + nsave > R_PRESERVE_COUNT)
+        if (_reg_count + nsave > fnregcap_v11())
             return;
 
         for (s = args; s; s = s->Spmnext) {
@@ -1716,7 +1997,7 @@ promote_abi_params(SYMBOL *args, SYMBOL *fn, NODE *body)
     }
 
 preserve_params:
-    if (_reg_count + need > R_PRESERVE_COUNT)
+    if (_reg_count + need > fnregcap_v11())
         return;
 
     for (s = args; s; s = s->Spmnext) {
@@ -1757,7 +2038,7 @@ funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
 {
     INT n, siz;
     int nsjmps;
-    NODE *nnode, *header;
+    NODE *nnode, *header, *vlaparamdata;
     SYMBOL *s1;
     SYMBOL *args = d->Spmnext;  /*  List of parameter syms */
     SYMBOL *arghead = args;
@@ -1807,6 +2088,8 @@ funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
         error("Missing identifier for parameter in function def");
 
     maxauto = 0;                        /* no local variables yet */
+    fnvla_v11 = 0;                      /* establish per-function VLA state */
+    vlaparamdata = vlaparamdata_v11(arghead);
     stackrefs = 0;                      /* and therefore no refs to them */
     nsjmps = nsetjmps();                /* Remember # of setjmp refs */
     statdecls = stattail = NULL;        /* No static declarations yet */
@@ -1818,6 +2101,8 @@ funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
     ** compound() for further discussion.
     */
     nnode = funstmt();                  /* Parse function statement */
+    if (vlaparamdata != NULL)
+        nnode = ndeflr(N_STATEMENT, vlaparamdata, nnode);
 
     promote_abi_params(arghead, syment, nnode);
 
@@ -1833,6 +2118,8 @@ funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
     /* Return completed parse tree */
     nreg = ndeflr(N_FUNCTION, header, nnode);
     nreg->Nreg = _reg_count;
+    if (fnvla_v11)
+        nreg->Nflag |= NF_VLA;
 
     return nreg;
 }
@@ -4183,10 +4470,41 @@ declarator(SYMBOL *d)
 
                 dimension = 0;
                 if (token != T_RBRACK)
-                    if ((dimension = pconst()) <= 0)
-                        error("array dimension const must be > zero");
-
-                pp = addpp(pp, pushsztype(TS_ARRAY, 0, dimension, (TYPE *)NULL));
+                    {
+                    NODE *bnd = asgnexpr();
+                    bnd = evalexpr(bnd);
+                    if (bnd != NULL && bnd->Nop == N_ICONST)
+                        {
+                        dimension = bnd->Niconst;
+                        if (dimension <= 0)
+                            error("array dimension const must be > zero");
+                        pp = addpp(pp, pushsztype(TS_ARRAY, 0, dimension,
+                                                 (TYPE *)NULL));
+                        }
+                    else
+                        {
+                        if (!inproto && (lsymhead == NULL || curfn == NULL))
+                            {
+                            error("Variable length array requires block scope");
+                            pp = addpp(pp, pushsztype(TS_ARRAY, 0, 1,
+                                                     (TYPE *)NULL));
+                            }
+                        else if (bnd == NULL || !tisinteg(bnd->Ntype))
+                            {
+                            error("Variable length array bound must have integer type");
+                            pp = addpp(pp, pushsztype(TS_ARRAY, 0, 1,
+                                                     (TYPE *)NULL));
+                            }
+                        else
+                            {
+                            if (!inproto)
+                                vlamarkfn_v11();
+                            pp = addpp(pp, vlamake_v11(bnd, (TYPE *)NULL));
+                            }
+                        }
+                    }
+                else
+                    pp = addpp(pp, pushsztype(TS_ARRAY, 0, 0, (TYPE *)NULL));
                 expect(T_RBRACK);
                 break;
                                 /* fall through */
@@ -4501,8 +4819,11 @@ addpp(TYPE *pp, TYPE *t)
     ** but an iterative definition of this function would be worse...
     */
 
-    return (pp == NULL) ? t
-        : pushsztype(pp->Tspec, pp->Tflag, pp->Tsize, addpp(pp->Tsubt, t));
+    if (pp == NULL)
+        return t;
+    if (tisvla(pp))
+        return vlaclone_v11(pp, addpp(pp->Tsubt, t));
+    return pushsztype(pp->Tspec, pp->Tflag, pp->Tsize, addpp(pp->Tsubt, t));
 }
 
 /* PUSHTYPE - Construct a derived declarator type, checking for validity.
@@ -4552,7 +4873,7 @@ pushsztype(int typ, INT flags, INT siz, TYPE *ptr)
                         break;
                     case TS_ARRAY:              /* Array of arrays OK if size given */
                                         /* array[][x] ok, array[x][] bad */
-                        if (ptr->Tsize == 0)
+                        if (ptr->Tsize == 0 && !tisvla(ptr))
                             {
                             error("Illegal type - array of unknown-sized array");
                             ptr = inttype;      /* Use int instead */
@@ -4675,6 +4996,15 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
             s = uniqsym(s);             /* Ensure sym is fresh new one */
             s->Sclass = d->Sclass;      /* Fill in necessary parts of sym */
             s->Stype = d->Stype;
+            if (vlacontains_v11(s->Stype)) {
+                NODE *vz;
+                vlamarkfn_v11();
+                vlabindtype_v11(s->Stype);
+                vla_declregion_v12(); /* declaration region, no storage */
+                vz = ndeft(N_VLA, s->Stype);
+                vz->Nid = s;
+                return ndeflr(N_IZ, ndefident(s), vz);
+            }
             return NULL;                /* no initialization or storage */
 
         case SC_AUTO:           /* local extent variable, in function */
@@ -4923,6 +5253,14 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
             return NULL;
         }
 
+    /* C99 6.7.5.2: an object with static storage duration may not have a
+    ** variable length array type.  Pointer-to-VLA objects are not themselves
+    ** VLAs, so reject only array objects whose derived array chain is variable.
+    */
+    if (s->Stype->Tspec == TS_ARRAY && vlacontains_v11(s->Stype)
+      && s->Sclass != SC_AUTO && s->Sclass != SC_RAUTO)
+        error("Variable length array must have automatic storage duration");
+
     /* Parse initializer.
     ** At this point the symbol is guaranteed to have one of these classes:
     **  SC_EXTDEF, SC_EXLINK, SC_EXTREF,
@@ -4944,6 +5282,7 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
         /* No initializer.  Check to make sure this is okay. */
         if (s->Stype->Tspec == TS_ARRAY         /* If type is array, check */
           && s->Stype->Tsize == 0               /* to make sure size 0 okay */
+          && !tisvla(s->Stype)
           && s->Sclass != SC_EXTREF             /* Only ext refs allowed */
           && s->Sclass != SC_EXLINK)
             error("Missing size for def of array \"%s\"", s->Sname);
@@ -4967,6 +5306,18 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
 
     if (s->Sclass == SC_AUTO)
         {
+        if (vlacontains_v11(s->Stype))
+            {
+            NODE *vz;
+            s->Svalue = -1;
+            (void)vlaobjadd_v11(s);
+            vlaobjmark_v12(s, vla_declscope_v12());
+            if (z != NULL)
+                error("Variable length array may not be initialized");
+            vz = ndeft(N_VLA, s->Stype);
+            vz->Nid = s;
+            return ndeflr(N_IZ, ndefident(s), vz);
+            }
         s->Svalue = maxauto;            /* Remember its stack offset */
         maxauto += sizetype(s->Stype);  /* and count it in to frame size */
         }
@@ -6155,7 +6506,7 @@ Set_Register (SYMBOL *s, int rarg, int arg)
          * are available for register variables.
          */
 
-        if ((_reg_count < R_PRESERVE_COUNT)
+        if ((_reg_count < fnregcap_v11())
             && (tsizeone(s->Stype)
 #if 0   /* next version of Reg linkage */
                 || s->Stype->Tspec == TS_PTR && tsizeone(s->Stype->Tsubt)

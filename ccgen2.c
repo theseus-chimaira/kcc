@@ -120,6 +120,8 @@ kccfmt(char *buf, size_t size, const char *fmt, ...)
 
 /* Imported functions */
 extern SYMBOL *newlabel(void);		/* CCSYM */
+extern SYMBOL *vlabase_v11(SYMBOL *), *vlaboundsym_v11(TYPE *); /* CCDECL */
+extern NODE *vlaboundexpr_v11(TYPE *); /* CCDECL */
 extern SYMBOL *symfidstr(char *), *symgcreat(char *);
 extern int elembsize(TYPE *);			/* CCSYM */
 extern INT sizetype(TYPE *), sizeptobj(TYPE *);
@@ -127,6 +129,7 @@ extern int cmptype(TYPE *, TYPE *);
 extern void foldhalfstore(void);		/* CCCODE */
 extern void genadata(NODE *), genstmt(NODE *);	/* CCGEN1 */
 extern int sideffp(NODE *);		/* CCEVAL */
+extern NODE *convbinary(NODE *);		/* CCTYPE */
 extern void folddiv(VREG *);
 extern int unjump(SYMBOL *);
 extern SYMBOL *cregupto(SYMBOL *);	/* CCCREG for gternary() */
@@ -157,6 +160,26 @@ VREG *getmem(VREG *reg, TYPE *t, int byte, int keep),
   *stomem(VREG *reg, VREG *ra, INT siz, int byteptr); /* CCGEN1 auto inits */
 VREG *gmuuo(NODE *);
 
+static INT
+autooff_v11(SYMBOL *s)
+{
+    return fnvla_v11 ? (s->Svalue + 1 - maxauto)
+                     : ((s->Svalue + 1) + fnframesave - stackoffset);
+}
+
+static INT
+argoff_v11(SYMBOL *s)
+{
+    return fnvla_v11 ? (-s->Svalue - fnframesave - maxauto)
+                     : (-s->Svalue - stackoffset);
+}
+
+static int
+frameindex_v11(void)
+{
+    return fnvla_v11 ? R_MAXREG : R_SP;
+}
+
 /* Internal functions */
 static VREG *gexpr(NODE *),
 	*gternary(NODE *);
@@ -180,6 +203,8 @@ static VREG *gassign(NODE *),
 	*gincdec(NODE *, int, int),
 	*gprimary(NODE *),
 	*gcall(NODE *);
+static int vlatype_v11(TYPE *);
+static NODE *vlastride_v11(TYPE *);
 static void emit_blissargs(NODE *);
 static INT sizeargs(NODE *);
 static int gccabi_direct_reg_args(NODE *, int, TYPE *, int);
@@ -3047,10 +3072,11 @@ gassign(NODE *n)
                 INT off;
 
                 if (nod->Nid->Sclass == SC_AUTO)
-                    off = (nod->Nid->Svalue + 1) + fnframesave - stackoffset;
+                    off = autooff_v11(nod->Nid);
                 else
-                    off = (-nod->Nid->Svalue) - stackoffset;
-                codemdx(P_MOVEM, vrtoreal(r1), (SYMBOL *)NULL, off, R_SP);
+                    off = argoff_v11(nod->Nid);
+                codemdx(P_MOVEM, vrtoreal(r1), (SYMBOL *)NULL, off,
+                        frameindex_v11());
                 }
             else
                 r1 = stomem(r1,		/* Store the value */
@@ -4208,7 +4234,20 @@ gptrop(int op, struct vreg * r1, struct vreg * r2, struct type * lt, struct type
 		    }
 		else
 		    code0(P_SUB, r1, r2);
-		if ((size = sizeptobj(lt)) > 1)
+                if (lt->Tspec == TS_PTR && vlatype_v11(lt->Tsubt))
+                    {
+                    NODE *sn = vlastride_v11(lt);
+                    VREG *sr = genexpr(sn);
+                    if (sr == NULL)
+                        int_error("gptrop: null VLA subtraction stride");
+                    else {
+                        vrlowiden(r1);
+                        code0(P_IDIV, r1, sr);
+                        vrfree(sr);
+                        vrnarrow(r1);
+                    }
+                    }
+		else if ((size = sizeptobj(lt)) > 1)
 		    {
 		    vrlowiden(r1);		/* Ugh, must adjust result */
 		    code1(P_IDIV, r1, size);
@@ -4421,6 +4460,72 @@ gmaybitsub(VREG *left, VREG *right, TYPE *t)
     return res;
 }
 
+static int
+vlatype_v11(TYPE *t)
+{
+    while (t != NULL && t->Tspec == TS_ARRAY) {
+        if (tisvla(t))
+            return 1;
+        t = t->Tsubt;
+    }
+    return 0;
+}
+
+static NODE *
+vlastride_bin_v11(int op, NODE *l, NODE *r)
+{
+    return convbinary(ndeflr(op, l, r));
+}
+
+/* Return the pointer arithmetic stride for a pointer to a variably-sized
+** array.  Byte pointers are measured in their native element units; normal
+** pointers are measured in PDP-10 words, matching sizeptobj().
+*/
+static NODE *
+vlastride_v11(TYPE *pt)
+{
+    TYPE *t, *base;
+    NODE *n, *count;
+    SYMBOL *bs;
+    INT unit;
+
+    if (pt == NULL || pt->Tspec != TS_PTR || !vlatype_v11(pt->Tsubt))
+        return NULL;
+
+    t = pt->Tsubt;
+    base = t;
+    while (base != NULL && base->Tspec == TS_ARRAY)
+        base = base->Tsubt;
+
+    if (tisbytepointer(pt)) {
+        if (base != NULL && tispacked(base))
+            unit = base->Tbytes;
+        else
+            unit = 1;
+    } else
+        unit = sizetype(base);
+    n = ndeficonst(unit);
+
+    while (t != NULL && t->Tspec == TS_ARRAY) {
+        if (tisvla(t)) {
+            bs = vlaboundsym_v11(t);
+            if (bs != NULL)
+                count = ndefident(bs);
+            else {
+                count = vlaboundexpr_v11(t);
+                if (count == NULL) {
+                    int_error("vlastride_v11: missing VLA bound");
+                    count = ndeficonst(0);
+                }
+            }
+        } else
+            count = ndeficonst(t->Tsize);
+        n = vlastride_bin_v11(Q_MPLY, n, count);
+        t = t->Tsubt;
+    }
+    return n;
+}
+
 /* GPTRADDEND - Auxiliary to GPTROP.  This routine generates the
 **	proper value for adding or subtracting from a pointer.
 **	Note that it may return NULL if it determines that the value
@@ -4444,6 +4549,26 @@ gptraddend(TYPE *t, NODE *n)
             return NULL;
         return genexpr(n);
         }
+
+    if (t->Tspec == TS_PTR && vlatype_v11(t->Tsubt)) {
+        NODE *sn;
+        VREG *sr;
+
+        if (n->Nop == N_ICONST && n->Niconst == 0)
+            return NULL;
+        r = genexpr(n);
+        sn = vlastride_v11(t);
+        sr = genexpr(sn);
+        if (r == NULL || sr == NULL) {
+            if (r != NULL) vrfree(r);
+            if (sr != NULL) vrfree(sr);
+            int_error("gptraddend: null VLA stride");
+            return NULL;
+        }
+        code0(P_IMUL, r, sr);
+        vrfree(sr);
+        return r;
+    }
 
     if (n->Nop == N_ICONST && optgen)		/* Do optimization */
 	{
@@ -7242,7 +7367,7 @@ gcall (NODE* n)
      * NOTE: profiling precludes tail recursion: MVS 09/20/89
      */
 
-    if (!profbliss)			/* for BLISS profiler */
+    if (!profbliss && !fnvla_v11)	/* VLA frame must be unwound normally */
 	{
 	if ((n->Nflag & NF_RETEXPR) && (directtail || narg == 0))
 	    {
@@ -7269,7 +7394,7 @@ gcall (NODE* n)
 	    if (R_PRESERVE_COUNT >= _reg_count)
 		for (j = 0; j < _reg_count; ++j) {
 		    codemdx(P_MOVE, j + r_maxnopreserve + 1, (SYMBOL *)NULL,
-			    1 + fnsavescr + j - stackoffset, R_SP);
+			    1 + fnsavescr + (fnvla_v11 ? 1 : 0) + j - stackoffset, R_SP);
 		    flushcode();
 		    }
 	    if (fnsavescr)
@@ -7385,7 +7510,7 @@ gcall (NODE* n)
 
 	    if (siz > GCCABI_RET_REGS)
 		code13(P_MOVE, VR_RETVAL,
-		    (n->Nretstruct->Svalue + 1) + fnframesave - stackoffset);
+		    autooff_v11(n->Nretstruct));
 	    abiregwords = gccabi_load_args(arglist,
 		    siz > GCCABI_RET_REGS ? 1 : 0, n->Nleft->Ntype->Tproto);
 	    if (abiregwords) {
@@ -7397,7 +7522,7 @@ gcall (NODE* n)
 	    }
 	else if (siz > GCCABI_RET_REGS)
 	    code13(P_MOVE, VR_RETVAL,
-		(n->Nretstruct->Svalue + 1) + fnframesave - stackoffset);
+		autooff_v11(n->Nretstruct));
 	}
 
     narg -= stackoffset;	/* calculate neg number of arg words */
@@ -7441,7 +7566,7 @@ gcall (NODE* n)
       && siz > 2 && siz <= GCCABI_RET_REGS)
 	{
 	INT roff;
-	roff = (n->Nretstruct->Svalue + 1) + fnframesave - stackoffset;
+	roff = autooff_v11(n->Nretstruct);
 	for (narg = 0; narg < siz; ++narg)
 	    codemdx(P_MOVEM, narg + 1, (SYMBOL *)NULL, roff + narg, R_SP);
 	code13(P_MOVE, (r = vrretget()), roff);
@@ -7453,7 +7578,7 @@ gcall (NODE* n)
     else if (siz > GCCABI_RET_REGS)
 	{
 	code13 (P_MOVE, (r = vrretget ()),
-		(n->Nretstruct->Svalue + 1) + fnframesave - stackoffset);
+		autooff_v11(n->Nretstruct));
 	}
     else
 	return NULL;			/* Returning void */
@@ -7715,10 +7840,15 @@ gaddress(NODE *n)
 		genadata(n->Nleft);
 	    return gaddress(n->Nright);
 
-	case Q_ASPLUS:	/* ptr += &a[] */
 	case Q_PLUS:
-	case Q_ASMINUS:	/* ptr -= &a[] */
 	case Q_MINUS:
+            /* Address-valued array subscripts retain the pointer arithmetic.
+            ** Dropping Nright here made &a[i] collapse to &a[0], and affected
+            ** fixed multidimensional arrays as well as VLAs. */
+            return genexpr(n);
+
+	case Q_ASPLUS:	/* ptr += &a[] */
+	case Q_ASMINUS:	/* ptr -= &a[] */
 	case N_PTR:
 	    return genexpr(n->Nleft);
 
@@ -7934,7 +8064,22 @@ gaddress(NODE *n)
 		    return r;
 
 		case SC_AUTO:		/* Local variables */
-		    code13(P_MOVE, r, (s->Svalue + 1) + fnframesave - stackoffset);
+                    {
+                    SYMBOL *vb = vlabase_v11(s);
+                    if (vb != NULL)
+                        {
+                        codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL,
+                                autooff_v11(vb), frameindex_v11());
+                        if (tisbytearray(s->Stype))
+                            pitopc(r, elembsize(s->Stype), 0, 1);
+                        return r;
+                        }
+                    if (fnvla_v11)
+                        codemdx(P_MOVEI, vrtoreal(r), (SYMBOL *)NULL,
+                                autooff_v11(s), R_MAXREG);
+                    else
+                        code13(P_MOVE, r, autooff_v11(s));
+                    }
 		    break;
 
 
@@ -7943,7 +8088,11 @@ gaddress(NODE *n)
 		    return r;
 
 		case SC_ARG:
-		    code13(P_MOVE, r, (- s->Svalue) - stackoffset);
+                    if (fnvla_v11)
+                        codemdx(P_MOVEI, vrtoreal(r), (SYMBOL *)NULL,
+                                argoff_v11(s), R_MAXREG);
+                    else
+                        code13(P_MOVE, r, argoff_v11(s));
 		    break;
 
 		case SC_ENUM:

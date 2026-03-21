@@ -157,6 +157,7 @@ NODE {
 #define NF_USERCAST	0400	/* This N_CAST was explicitly given by user */
 #define NF_WIDE		01000	/* N_ICONST uses n_var1.n_int as high word */
 #define NF_QUERYNORMAL	02000	/* Q_QUERY may merge outside ABI return ACs */
+#define NF_VLA          04000   /* function contains variable length arrays */
 #if SYS_CSI /* KAR-1/91, Added NF_ flag for NPD;only used in */
 	    /*		 N_PTR & Q_MEMBER nodes */
 #define NF_USENPD  020000000000 /* Null pointer detection flag */
