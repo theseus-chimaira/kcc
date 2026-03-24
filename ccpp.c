@@ -695,6 +695,8 @@ ppinit(void)
     if (clevel >= CLEV_STDC)		/* When we're fully ready */
 	{
 	mdefstr("__STDC__", MACF_STDC, "1");
+	if (cstdmode >= CSTD_C99)
+	    mdefstr("__STDC_VERSION__", MACF_ATOM, "199901L");
 	}
     if (clevkcc)
 	{

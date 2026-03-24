@@ -964,6 +964,10 @@ trfltcon(void)
     /* C99 hexadecimal floating constants use a binary exponent. */
     if (c == '0' && (cp[1] == 'x' || cp[1] == 'X'))
 	{
+	if (!CSTD_HAS(CSTD_C99)) {
+	    error("Hexadecimal floating constants require C99");
+	    return dzerotok();
+	}
 	int ndig = 0;
 
 	cp += 2;

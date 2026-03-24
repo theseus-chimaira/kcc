@@ -650,8 +650,11 @@ compoundstmt(int toplev)
 
     for (beg = n = NULL; token != T_RBRACE && token != T_EOF; n = nr)
 	{
-	if (isdecl())
+	if (isdecl()) {
+	    if (!CSTD_HAS(CSTD_C99))
+		error("Declarations after statements require C99");
 	    nr = ndefl(N_STATEMENT, ldecllist());
+	}
 	else
 	    nr = ndefl(N_STATEMENT, statement());
 	if (n != NULL)
@@ -809,8 +812,11 @@ forstmt(void)
     expect(T_LPAREN);
     if (token != T_SCOLON)		/* Get initialization expr if one */
 	{
-	if (isdecl())
+	if (isdecl()) {
+	    if (!CSTD_HAS(CSTD_C99))
+		error("Declaration in for initializer requires C99");
 	    e1 = ldecllist();
+	}
 	else
 	    {
 	    e1 = ediscifok(evalifok(expression()));

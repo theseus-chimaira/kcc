@@ -5909,6 +5909,8 @@ pizstruct(TYPE *t, int lev, int isunion)
     while (token != T_RBRACE && token != T_EOF) {
         designated = 0;
         if (token == Q_DOT) {
+            if (!CSTD_HAS(CSTD_C99))
+                error("Designated initializers require C99");
             if (nextoken() != Q_IDENT) {
                 error("Member name required after . in initializer");
                 pizflush(1);
@@ -6045,6 +6047,8 @@ pizarray(TYPE *t, int lev)
         while (token != T_RBRACE && token != T_EOF) {
             designated = 0;
             if (token == T_LBRACK) {
+            if (!CSTD_HAS(CSTD_C99))
+                error("Designated initializers require C99");
                 nextoken();
                 idx = pconst();
                 if (idx < 0) {

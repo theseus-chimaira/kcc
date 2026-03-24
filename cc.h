@@ -249,7 +249,12 @@ EXT int wrnlev;			/* -w=	Specifies warning level, one of: */
 
 extern int clevkcc;		/* -P=KCC Asks for KCC extensions */
 extern int clevnocpp;           /* -P=nocpp asks to forbid "//" comments */
-extern int clevel;		/* -P=    Specifies C implem level, one of: */
+extern int clevel;		/* -P=    Specifies historical C implem level */
+extern int cstdmode;		/* Explicit standard profile, if selected */
+#define CSTD_LEGACY 0
+#define CSTD_C89 89
+#define CSTD_C99 99
+#define CSTD_HAS(v) (cstdmode == CSTD_LEGACY || cstdmode >= (v) || clevkcc)
 #define CLEV_BASE 0		/* Base (default) should always be 0 */
 #define CLEV_CARM 1
 #define CLEV_ANSI 2

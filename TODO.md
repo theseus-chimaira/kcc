@@ -16,9 +16,9 @@
 
 Tests belong in `pdp10-c-testkit`, not in this repository.
 
-- [ ] Audit C89 functionality systematically.
-- [ ] Audit `inline` semantics and code generation.
-- [ ] Audit `typeof` semantics.
+- [x] Audit C89 functionality systematically. Explicit `-Pc89`, `-Pc99`,
+  `-Pgnu89`, and `-Pgnu99` language profiles enforce the standard/extension
+  boundary; `-Pstrict` is an alias for `-Pc89`.
 
 ## PDP-10 target completion
 

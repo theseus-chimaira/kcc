@@ -287,13 +287,16 @@ syminit(void)
 	    case TKTY_RWOP:
 		break;			/* Is reserved word, hack it! */
 	    }
-	if ((f = tok[i].tkprec)&(RWF_ANSI+RWF_KCC))	/* Any flags set? */
+	if ((f = tok[i].tkprec)&(RWF_ANSI+RWF_KCC+RWF_C99+RWF_C11))
 	    {
-	    if (((f & RWF_ANSI) && clevel >= CLEV_ANSI)	/* If ANSI and OK, */
-		|| ((f & RWF_KCC) && clevkcc))		/* or KCC and OK, */
-		;
-	    else
-		continue;	/* then go ahead, else skip sym. */
+	    if ((f & RWF_ANSI) && clevel < CLEV_ANSI)
+		continue;
+	    if ((f & RWF_KCC) && !clevkcc)
+		continue;
+	    if ((f & RWF_C99) && !CSTD_HAS(CSTD_C99))
+		continue;
+	    if ((f & RWF_C11) && cstdmode != CSTD_LEGACY && !clevkcc)
+		continue;
 	    }
 	/* Make reserved-word symbol! */
 	s = symgcreat(tokstr[i]);	/* Make symbol for the word */

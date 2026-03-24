@@ -129,7 +129,9 @@ Syntax is: cc [switches] file[s]		  * indicates default.\n\
 -n	  do no optimizations		-Nxxx	    set stack to xxx words\n\
 -o=name   generate name.EXE		-P=kcc	  * allow KCC lang. extensions\n\
 -P=base   Kernighan & Ritchie C		-P=carm     Harbison & Steele C\n\
--P=ansi	  carm with some ANSI stuff	-P=stdc   * Full ANSI-Standard C\n\
+-Pc89      strict ISO C89             -Pc99       strict ISO C99\n\
+-Pgnu89     C89 plus GNU/KCC extensions -Pgnu99     C99 plus GNU/KCC extensions\n\
+-Pstrict    alias for -Pc89\n\
 -p	  link with Bliss profiler	-q	    compile only if changed\n\
 -R=<fname> designate .REL, .MAC name    -s          redirect messages to stdout\n\
 -S	  compile: don't asm or link	-m=macro    old MACRO-style asm\n\
@@ -658,18 +660,15 @@ cswitch (char *s, int *aac, char ***aav)
 		savname = s;
 		return 1;		/*  Can flush arg from switch list */
 
-	    case 'P':			/* -P	Port level (same as -P=) */
+	    case 'P':			/* -Pfoo or -P=foo portability level */
 
-		if (s[1] == '=')	/* -P=<flags>	If extended syntax, */
-		    {
-		    ++s;
-		    cportlev(++s);	/*	go hack rest of arg string. */
-		    return(1);
-		    }
+		if (s[1] == '=')
+		    cportlev(s + 2);
+		else if (s[1] != '\0')
+		    cportlev(s + 1);
 		else
-		    cportlev("");	/*	Else just use basic level */
-
-		break;
+		    cportlev("");
+		return 1;
 
 	    case 'p':			/* -p   Bliss Profiler (link locals)*/
 		csidebug("bprof");	/* changed 9/8/90 MVS */
@@ -1173,9 +1172,41 @@ static flagent_t cplevtab[] = {
 };
 
 static void
-cportlev(char * s)
+cportlev(char *s)
 {
-    parcswi(s, cplevtab, 1);	/* Reset switches and parse */
+    /* The explicit standard profiles are two-dimensional: standard version
+    ** and extension policy.  Keep the historical flag parser intact for old
+    ** command lines such as -P=stdc+kcc. */
+    if (!strcmp(s, "c89") || !strcmp(s, "strict")) {
+	clevel = CLEV_STRICT;
+	clevkcc = 0;
+	clevnocpp = 1;
+	cstdmode = CSTD_C89;
+	return;
+    }
+    if (!strcmp(s, "c99")) {
+	clevel = CLEV_STRICT;
+	clevkcc = 0;
+	clevnocpp = 0;
+	cstdmode = CSTD_C99;
+	return;
+    }
+    if (!strcmp(s, "gnu89")) {
+	clevel = CLEV_STDC;
+	clevkcc = 1;
+	clevnocpp = 0;
+	cstdmode = CSTD_C89;
+	return;
+    }
+    if (!strcmp(s, "gnu99")) {
+	clevel = CLEV_STDC;
+	clevkcc = 1;
+	clevnocpp = 0;
+	cstdmode = CSTD_C99;
+	return;
+    }
+    cstdmode = CSTD_LEGACY;
+    parcswi(s, cplevtab, 1);
 }
 
 /* CVERBOSE - Set -v verboseness switches.

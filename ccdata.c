@@ -34,6 +34,7 @@ int stksz   = 010000;		/* Runtime Stack, default 4 K (8 pages) */
 */
 
 int clevel = SWI_CLEV;		/* Default C implementation level */
+int cstdmode = CSTD_LEGACY;	/* Legacy behavior unless explicit cXX/gnuXX */
 int clevkcc = 1;		/* Always default to ask for KCC extensions */
 int clevnocpp = 0;              /* FW 2A(45) default permit "//" comments */
 int asmdialect = ASM_GAS;	/* Default assembler output dialect */

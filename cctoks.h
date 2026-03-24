@@ -82,6 +82,8 @@ enum toktype {
 #define RWF_PREC	077	/* Operator precedence, if applicable */
 #define RWF_ANSI	0100	/* Keyword is ANSI addition */
 #define RWF_KCC		0200	/* Keyword is KCC extension */
+#define RWF_C99		0400	/* Keyword requires C99, or GNU/KCC mode */
+#define RWF_C11		01000	/* Later-standard keyword; GNU/KCC extension here */
 
 enum tokcodes {
 #endif
@@ -142,7 +144,7 @@ tokdef(N_PCONST,0,TKTY_PRIMARY,	16)	/* Pointer-type constant */
 tokdef(N_VCONST,0,TKTY_PRIMARY,	16)	/* Void-type "constant" expr */
 tokdef(N_ECONST,0,TKTY_PRIMARY,	16)	/* Enum-type constant */
 tokdef(N_ACONST,0,TKTY_PRIMARY,	16)	/* GNU label address (&&label) */
-tokdef(T_GENERIC,"_Generic",TKTY_RWOP,RWF_ANSI+16) /* C11 generic selection */
+tokdef(T_GENERIC,"_Generic",TKTY_RWOP,RWF_ANSI+RWF_C11+16) /* C11 generic selection */
 /* 40 */
 /* no special op for subscript */	/* [k]	subscripting */
 tokdef(N_FNCALL,0,TKTY_PRIMARY,	16)	/* f()	function call */
@@ -155,8 +157,8 @@ tokdef(N_POSTDEC, 0,	TKTY_UNOP,	15)	/* ()--	Postfix decrement */
 tokdef(N_PREINC, 0,	TKTY_UNOP,	14)	/* ++()	Prefix increment */
 tokdef(N_PREDEC, 0,	TKTY_UNOP,	14)	/* --()	Prefix decrement */
 tokdef(T_SIZEOF,"sizeof",TKTY_RWOP,	14)	/* sizeof	Size */
-tokdef(T_ALIGNOF,"_Alignof",TKTY_RWOP,	14)	/* C11 _Alignof */
-tokdef(T_ALIGNAS,"_Alignas",TKTY_RWOP,	0)	/* C11 alignment specifier */
+tokdef(T_ALIGNOF,"_Alignof",TKTY_RWOP,	RWF_ANSI+RWF_C11+14)	/* C11 _Alignof */
+tokdef(T_ALIGNAS,"_Alignas",TKTY_RWOP,	RWF_ANSI+RWF_C11)	/* C11 alignment specifier */
 tokdef(N_CAST,	0,	TKTY_UNOP,	14)	/* (type)	Cast */
 tokdef(Q_COMPL,	"~",	TKTY_UNOP,	14)	/* ~	Bitwise not */
 /* 50 */
@@ -220,10 +222,10 @@ tokdef(T_UNSIGNED,"unsigned",	TKTY_RWTYPE, 0)
 tokdef(T_SIGNED,"signed",	TKTY_RWTYPE, RWF_ANSI)	/* (ANSI addition) */
 tokdef(T_CONST,	"const",	TKTY_RWTYPE, RWF_ANSI)	/* (ANSI addition) */
 tokdef(T_VOLATILE,"volatile",	TKTY_RWTYPE, RWF_ANSI)	/* (ANSI addition) */
-tokdef(T_RESTRICT,"restrict",	TKTY_RWTYPE, RWF_ANSI)	/* C99: ignored qualifier */
-tokdef(T_BOOL,	"_Bool",	TKTY_RWTYPE, RWF_ANSI)	/* C99 boolean type */
-tokdef(T_INLINE,"inline",	TKTY_RWTYPE, RWF_ANSI)	/* C99: ignored function spec */
-tokdef(T_NORETURN,"_Noreturn",	TKTY_RWTYPE, RWF_ANSI)	/* C11: ignored function spec */
+tokdef(T_RESTRICT,"restrict",	TKTY_RWTYPE, RWF_ANSI+RWF_C99)	/* C99: ignored qualifier */
+tokdef(T_BOOL,	"_Bool",	TKTY_RWTYPE, RWF_ANSI+RWF_C99)	/* C99 boolean type */
+tokdef(T_INLINE,"inline",	TKTY_RWTYPE, RWF_ANSI+RWF_C99)	/* C99: ignored function spec */
+tokdef(T_NORETURN,"_Noreturn",	TKTY_RWTYPE, RWF_ANSI+RWF_C11)	/* C11: ignored function spec */
 tokdef(T_EXTENSION,"__extension__",TKTY_RWTYPE, RWF_KCC)	/* GNU: ignored extension marker */
 tokdef(T_ATTRIBUTE,"__attribute__",TKTY_RWTYPE, RWF_KCC)	/* GNU: ignored attribute marker */
 tokdef(T_ATTRIBUTE2,"__attribute",TKTY_RWTYPE, RWF_KCC)	/* GNU alias */
@@ -253,8 +255,8 @@ tokdef(T_INTERRUPT, "interrupt",TKTY_RWTYPE, RWF_KCC) /* FW 2A(52) */
 
 
 /* Reserved-Word: Storage Class */
-tokdef(T_STATIC_ASSERT,"_Static_assert",TKTY_RWSC, RWF_ANSI)	/* C11 declaration */
-tokdef(T_STATIC_ASSERT2,"static_assert",TKTY_RWSC, RWF_ANSI)	/* C23 spelling */
+tokdef(T_STATIC_ASSERT,"_Static_assert",TKTY_RWSC, RWF_ANSI+RWF_C11)	/* C11 declaration */
+tokdef(T_STATIC_ASSERT2,"static_assert",TKTY_RWSC, RWF_ANSI+RWF_C11)	/* C23 spelling */
 tokdef(T_AUTO,	"auto",		TKTY_RWSC, 0)
 tokdef(T_EXTERN,"extern",	TKTY_RWSC, 0)
 tokdef(T_REGISTER,"register",	TKTY_RWSC, 0)
