@@ -2932,8 +2932,6 @@ gassign(NODE *n)
 	{
         if (tispacked(n->Ntype) && (n->Ntype->Tspec == TS_STRUCT || n->Ntype->Tspec == TS_UNION))
             {
-            if (!(n->Nflag & NF_DISCARD))
-                error("value of GNU packed aggregate assignment is not yet supported");
             r1 = gpackedcopy(nod, n->Nright, n->Ntype);
             if (volat)
                 flushcode();

@@ -1518,7 +1518,7 @@ gizlist(NODE *n, TYPE *t, SYMBOL *s)	/* N_IZLIST to initialize from */
 	    /* First ensure ready to emit right word for this object */
 	    if ((o = sm->Ssmoff) < 0) {	/* Byte or bitf object? */
                 if (((-o) & 07777L) == 07700L) {
-                    error("initializer for cross-word GNU packed member is not yet supported");
+                    int_error("gizlist: packed cross-word member escaped packed initializer path");
                     continue;
                 }
 		w = (-o) >> 12;		/* Decode word offset */
