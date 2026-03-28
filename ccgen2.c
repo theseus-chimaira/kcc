@@ -224,7 +224,9 @@ static VREG *gmaybitload(NODE *);
 static VREG *gmaybitstore(VREG *, NODE *);
 static INT packedoffbit(INT);
 static VREG *gpackedload(NODE *);
+static VREG *gpackedloadat(NODE *, VREG *);
 static VREG *gpackedstore(VREG *, NODE *);
+static VREG *gpackedstoreat(VREG *, NODE *, VREG *);
 static VREG *gpackedcopy(NODE *, NODE *, TYPE *);
 static VREG *gpackedbitbase(NODE *, INT *);
 static VREG *gpackedbitvalue(NODE *, TYPE *);
@@ -3141,21 +3143,43 @@ gassign(NODE *n)
            && (packedcross(nod->Nxoff) || packedbit(nod->Nxoff) || packedbitscalar(nod->Nxoff)))
           || packedptrderef(nod) || bitptrmember(nod) || maybitptrderef(nod)))
         {
-        if (sideffp(nod))
+        ra = NULL;
+        if (sideffp(nod) && !maybitptrderef(nod))
             {
-            error("side effects in compound assignment of cross-word GNU packed member are not yet supported");
-            vrfree(r2);
-            return NULL;
+            int raflags;
+            ra = gaddress(nod);
+            raflags = ra->Vrflags;
+            ra->Vrflags |= VRF_LOCK;
+            r1 = gpackedloadat(nod, ra);
+            ra->Vrflags = raflags;
             }
-        r1 = maybitptrderef(nod) ? gmaybitload(nod) : gpackedload(nod);
+        else
+            {
+            if (sideffp(nod))
+                {
+                error("side effects in compound assignment through representation-polymorphic pointer are not yet supported");
+                vrfree(r2);
+                return NULL;
+                }
+            r1 = maybitptrderef(nod) ? gmaybitload(nod) : gpackedload(nod);
+            }
         if (lconv != CAST_NONE)
             r1 = gcastr(lconv, r1, fromt, tot, nod);
         r1 = garithop(n->Nop, r1, r2, n->Nleft->Ntype->Tspec);
         if (n->Nascast != CAST_NONE)
             r1 = gcastr(n->Nascast, r1, n->Nleft->Ntype, n->Ntype,
                         (NODE *)NULL);
-        r1 = maybitptrderef(nod) ? gmaybitstore(r1, nod)
-                                  : gpackedstore(r1, nod);
+        if (ra != NULL)
+            {
+            int raflags = ra->Vrflags;
+            ra->Vrflags |= VRF_LOCK;
+            r1 = gpackedstoreat(r1, nod, ra);
+            ra->Vrflags = raflags;
+            vrfree(ra);
+            }
+        else
+            r1 = maybitptrderef(nod) ? gmaybitstore(r1, nod)
+                                      : gpackedstore(r1, nod);
         if (volat)
             flushcode();
         return r1;
@@ -5531,12 +5555,18 @@ gincdec(NODE *n, int inc, int pre)
             {
             TYPE *optype;
 
+            ra = NULL;
             if (sideffp(n))
                 {
-                error("side effects in increment of cross-word GNU packed member are not yet supported");
-                return NULL;
+                int raflags;
+                ra = gaddress(n);
+                raflags = ra->Vrflags;
+                ra->Vrflags |= VRF_LOCK;
+                r = gpackedloadat(n, ra);
+                ra->Vrflags = raflags;
                 }
-            r = gpackedload(n);
+            else
+                r = gpackedload(n);
             if (!pre)
                 {
                 r2 = vrget();
@@ -5547,7 +5577,16 @@ gincdec(NODE *n, int inc, int pre)
             optype = (tbitsize(n->Ntype) < TGSIZ_WORD) ? inttype : n->Ntype;
             if (optype != n->Ntype)
                 r = gcastr(CAST_IT_IT, r, optype, n->Ntype, n);
-            (void) gpackedstore(r, n);
+            if (ra != NULL)
+                {
+                int raflags = ra->Vrflags;
+                ra->Vrflags |= VRF_LOCK;
+                (void) gpackedstoreat(r, n, ra);
+                ra->Vrflags = raflags;
+                vrfree(ra);
+                }
+            else
+                (void) gpackedstore(r, n);
             if (!pre)
                 {
                 vrfree(r);
@@ -5923,6 +5962,12 @@ gmaybitstore(VREG *reg, NODE *n)
 static VREG *
 gpackedload(NODE *n)
 {
+    return gpackedloadat(n, (VREG *)NULL);
+}
+
+static VREG *
+gpackedloadat(NODE *n, VREG *savedbase)
+{
     VREG *base, *p, *q, *r;
     int bits, units, tail, i, nbits, saveflags;
 
@@ -5932,7 +5977,14 @@ gpackedload(NODE *n)
         int done, bflags;
         VREG *acc;
 
-        base = gaddress(n);
+        if (savedbase != NULL)
+            {
+            base = vrget();
+            base->Vrtype = savedbase->Vrtype;
+            codek0(P_MOVE, base, savedbase);
+            }
+        else
+            base = gaddress(n);
         bflags = base->Vrflags;
         base->Vrflags |= VRF_LOCK;
         acc = vrget();
@@ -5965,7 +6017,14 @@ gpackedload(NODE *n)
         INT bitoff = packedmembit(n->Nxoff);
         int done = 0;
         VREG *acc = NULL;
-        base = gaddress(n);
+        if (savedbase != NULL)
+            {
+            base = vrget();
+            base->Vrtype = savedbase->Vrtype;
+            codek0(P_MOVE, base, savedbase);
+            }
+        else
+            base = gaddress(n);
         saveflags = base->Vrflags;
         base->Vrflags |= VRF_LOCK;
         while (done < bits)
@@ -6000,7 +6059,14 @@ gpackedload(NODE *n)
         }
     units = (bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR;
     tail = bits % TGSIZ_CHAR;
-    base = gaddress(n);
+    if (savedbase != NULL)
+            {
+            base = vrget();
+            base->Vrtype = savedbase->Vrtype;
+            codek0(P_MOVE, base, savedbase);
+            }
+        else
+            base = gaddress(n);
     saveflags = base->Vrflags;
     base->Vrflags |= VRF_LOCK;
     q = NULL;
@@ -6043,6 +6109,12 @@ gpackedload(NODE *n)
 static VREG *
 gpackedstore(VREG *reg, NODE *n)
 {
+    return gpackedstoreat(reg, n, (VREG *)NULL);
+}
+
+static VREG *
+gpackedstoreat(VREG *reg, NODE *n, VREG *savedbase)
+{
     VREG *base, *p, *q;
     INT mask;
     int bits, units, tail, i, nbits, below, savebase, savereg;
@@ -6052,7 +6124,14 @@ gpackedstore(VREG *reg, NODE *n)
         {
         int done, bflags, rflags, shift;
 
-        base = gaddress(n);
+        if (savedbase != NULL)
+            {
+            base = vrget();
+            base->Vrtype = savedbase->Vrtype;
+            codek0(P_MOVE, base, savedbase);
+            }
+        else
+            base = gaddress(n);
         bflags = base->Vrflags;
         rflags = reg->Vrflags;
         base->Vrflags |= VRF_LOCK;
@@ -6090,7 +6169,14 @@ gpackedstore(VREG *reg, NODE *n)
                       ? ((bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR) * TGSIZ_CHAR
                       : bits;
         int done = 0;
-        base = gaddress(n);
+        if (savedbase != NULL)
+            {
+            base = vrget();
+            base->Vrtype = savedbase->Vrtype;
+            codek0(P_MOVE, base, savedbase);
+            }
+        else
+            base = gaddress(n);
         savebase = base->Vrflags;
         savereg = reg->Vrflags;
         base->Vrflags |= VRF_LOCK;
@@ -6142,7 +6228,14 @@ gpackedstore(VREG *reg, NODE *n)
         }
     units = (bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR;
     tail = bits % TGSIZ_CHAR;
-    base = gaddress(n);
+    if (savedbase != NULL)
+            {
+            base = vrget();
+            base->Vrtype = savedbase->Vrtype;
+            codek0(P_MOVE, base, savedbase);
+            }
+        else
+            base = gaddress(n);
     savebase = base->Vrflags;
     savereg = reg->Vrflags;
     base->Vrflags |= VRF_LOCK;
