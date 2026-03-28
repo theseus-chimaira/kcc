@@ -221,7 +221,9 @@ static int packedbitscalar(INT);
 static int packedbitagg(INT);
 static int packedptrderef(NODE *), bitptrderef(NODE *), maybitptrderef(NODE *), bitptrmember(NODE *);
 static VREG *gmaybitload(NODE *);
+static VREG *gmaybitloaddepth(NODE *, int);
 static VREG *gmaybitstore(VREG *, NODE *);
+static VREG *gmaybitstoredepth(VREG *, NODE *, int);
 static INT packedoffbit(INT);
 static VREG *gpackedload(NODE *);
 static VREG *gpackedloadat(NODE *, VREG *);
@@ -3134,6 +3136,44 @@ gassign(NODE *n)
         }
     }
 
+    /* A compound assignment through a representation-polymorphic exact-width
+    ** pointer must evaluate a side-effecting pointer expression exactly once.
+    ** Anchor both the raw pointer and RHS in real stack memory before the
+    ** dynamic load: PDP-6 ADJBP expansion may spill several ACs.
+    */
+    if (tisinteg(nod->Ntype) && maybitptrderef(nod) && sideffp(nod))
+        {
+        int pdepth;
+
+        ra = genexpr(nod->Nleft);
+        code0(P_PUSH, VR_SP, ra);
+        ++stackoffset;
+        pdepth = stackoffset;
+        vrfree(ra);
+
+        r2 = genexpr(n->Nright);
+        code0(P_PUSH, VR_SP, r2);
+        ++stackoffset;
+        vrfree(r2);
+
+        r1 = gmaybitloaddepth(nod, pdepth);
+        r2 = vrget();
+        r2->Vrtype = n->Nright->Ntype;
+        codemdx(P_MOVE, vrtoreal(r2), (SYMBOL *)NULL, 0, R_SP);
+        if (lconv != CAST_NONE)
+            r1 = gcastr(lconv, r1, fromt, tot, nod);
+        r1 = garithop(n->Nop, r1, r2, n->Nleft->Ntype->Tspec);
+        if (n->Nascast != CAST_NONE)
+            r1 = gcastr(n->Nascast, r1, n->Nleft->Ntype, n->Ntype,
+                        (NODE *)NULL);
+        r1 = gmaybitstoredepth(r1, nod, pdepth);
+        code8(P_ADJSP, VR_SP, -2);
+        stackoffset -= 2;
+        if (volat)
+            flushcode();
+        return r1;
+        }
+
     r2 = (n->Ntype->Tspec == TS_PTR) ?		/* Doing pointer arith? */
 	gptraddend(n->Nleft->Ntype, n->Nright)	/* Operand for ptr arith */
 	: genexpr(n->Nright);			/* General-type operand */
@@ -3144,7 +3184,7 @@ gassign(NODE *n)
           || packedptrderef(nod) || bitptrmember(nod) || maybitptrderef(nod)))
         {
         ra = NULL;
-        if (sideffp(nod) && !maybitptrderef(nod))
+        if (sideffp(nod))
             {
             int raflags;
             ra = gaddress(nod);
@@ -3154,15 +3194,7 @@ gassign(NODE *n)
             ra->Vrflags = raflags;
             }
         else
-            {
-            if (sideffp(nod))
-                {
-                error("side effects in compound assignment through representation-polymorphic pointer are not yet supported");
-                vrfree(r2);
-                return NULL;
-                }
             r1 = maybitptrderef(nod) ? gmaybitload(nod) : gpackedload(nod);
-            }
         if (lconv != CAST_NONE)
             r1 = gcastr(lconv, r1, fromt, tot, nod);
         r1 = garithop(n->Nop, r1, r2, n->Nleft->Ntype->Tspec);
@@ -5549,6 +5581,58 @@ gincdec(NODE *n, int inc, int pre)
 	    }
 
 
+        /* Increment/decrement through a function-boundary exact-width pointer
+        ** must preserve the pointer's runtime representation.  If the pointer
+        ** expression has side effects, save its raw word once and reuse it for
+        ** the dynamic load and store.
+        */
+        if (maybitptrderef(n))
+            {
+            int saved, pdepth;
+            TYPE *optype;
+
+            saved = sideffp(n);
+            pdepth = 0;
+            if (saved)
+                {
+                ra = genexpr(n->Nleft);
+                code0(P_PUSH, VR_SP, ra);
+                ++stackoffset;
+                pdepth = stackoffset;
+                vrfree(ra);
+                r = gmaybitloaddepth(n, pdepth);
+                }
+            else
+                r = gmaybitload(n);
+
+            if (!pre)
+                {
+                r2 = vrget();
+                r2->Vrtype = n->Ntype;
+                codek0(P_MOVE, r2, r);
+                }
+            code1((inc > 0 ? P_ADD : P_SUB), r, 1);
+            optype = (tbitsize(n->Ntype) < TGSIZ_WORD) ? inttype : n->Ntype;
+            if (optype != n->Ntype)
+                r = gcastr(CAST_IT_IT, r, optype, n->Ntype, n);
+            if (saved)
+                {
+                (void) gmaybitstoredepth(r, n, pdepth);
+                code8(P_ADJSP, VR_SP, -1);
+                --stackoffset;
+                }
+            else
+                (void) gmaybitstore(r, n);
+            if (!pre)
+                {
+                vrfree(r);
+                r = r2;
+                }
+            if (volat)
+                flushcode();
+            return r;
+            }
+
         if (((n->Nop == Q_MEMBER || n->Nop == Q_DOT)
              && (packedcross(n->Nxoff) || packedbit(n->Nxoff) || packedbitscalar(n->Nxoff)))
           || packedptrderef(n) || bitptrmember(n))
@@ -5815,22 +5899,36 @@ gincdec(NODE *n, int inc, int pre)
 static VREG *
 gmaybitload(NODE *n)
 {
-    VREG *base, *tmp, *r, *p, *q, *b;
-    SYMBOL *bitlab, *done;
-    int bits, i;
+    VREG *base, *r;
+    int depth;
 
-    bits = tbitsize(n->Ntype);
-
-    /* Keep the representation-polymorphic pointer in real stack memory.
-    ** PDP-6 ADJBP expansion can spill several ACs, so a long-lived virtual
-    ** register is not a reliable anchor across the bit-at-a-time path.
-    */
     base = genexpr(n->Nleft);
     code0(P_PUSH, VR_SP, base);
     ++stackoffset;
+    depth = stackoffset;
+    vrfree(base);
+    r = gmaybitloaddepth(n, depth);
+    code8(P_ADJSP, VR_SP, -1);
+    --stackoffset;
+    return r;
+}
+
+/* GMAYBITLOADDEPTH - Load through a representation-polymorphic pointer
+** whose raw pointer word is already saved at the given stack depth.
+*/
+static VREG *
+gmaybitloaddepth(NODE *n, int depth)
+{
+    VREG *tmp, *r, *p, *q, *b;
+    SYMBOL *bitlab, *done;
+    int bits, i;
+    INT off;
+
+    bits = tbitsize(n->Ntype);
+    off = depth - stackoffset;
 
     tmp = vrget();
-    codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, 0, R_SP);
+    codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, off, R_SP);
     code0(P_HLRZ, tmp, tmp);
     code8(P_LSH, tmp, -6);
     code1(P_AND, tmp, 077);
@@ -5843,7 +5941,8 @@ gmaybitload(NODE *n)
     r = vrget();
     r->Vrtype = uinttype;
     p = vrget();
-    codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, 0, R_SP);
+    off = depth - stackoffset;
+    codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, off, R_SP);
     code0(P_LDB, r, p);
     code6(P_JRST, (VREG *)NULL, done);
     flushcode();
@@ -5853,12 +5952,13 @@ gmaybitload(NODE *n)
     for (i = 0; i < bits; ++i)
         {
         p = vrget();
+        off = depth - stackoffset;
         if (i == 0)
-            codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, 0, R_SP);
+            codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, off, R_SP);
         else
             {
             b = vrget();
-            codemdx(P_MOVE, vrtoreal(b), (SYMBOL *)NULL, 0, R_SP);
+            codemdx(P_MOVE, vrtoreal(b), (SYMBOL *)NULL, off, R_SP);
             code1(P_MOVE, p, i);
             code0(P_ADJBP, p, b);
             flushcode();
@@ -5872,8 +5972,6 @@ gmaybitload(NODE *n)
         }
     flushcode();
     codlabel(done);
-    code8(P_ADJSP, VR_SP, -1);
-    --stackoffset;
     return gcastr(CAST_IT_IT, r, uinttype, n->Ntype, (NODE *)NULL);
 }
 
@@ -5886,20 +5984,39 @@ gmaybitload(NODE *n)
 static VREG *
 gmaybitstore(VREG *reg, NODE *n)
 {
-    VREG *base, *tmp, *p, *q, *v, *r;
-    SYMBOL *bitlab, *done;
-    int bits, i, shift;
+    VREG *base, *r;
+    int depth;
 
-    bits = tbitsize(n->Ntype);
     base = genexpr(n->Nleft);
     code0(P_PUSH, VR_SP, base);
-    code0(P_PUSH, VR_SP, reg);
-    stackoffset += 2;
+    ++stackoffset;
+    depth = stackoffset;
     vrfree(base);
+    r = gmaybitstoredepth(reg, n, depth);
+    code8(P_ADJSP, VR_SP, -1);
+    --stackoffset;
+    return r;
+}
+
+/* GMAYBITSTOREDEPTH - Store through a representation-polymorphic pointer
+** whose raw pointer word is already saved at the given stack depth.
+*/
+static VREG *
+gmaybitstoredepth(VREG *reg, NODE *n, int depth)
+{
+    VREG *tmp, *p, *q, *v, *r;
+    SYMBOL *bitlab, *done;
+    int bits, i, shift;
+    INT off;
+
+    bits = tbitsize(n->Ntype);
+    code0(P_PUSH, VR_SP, reg);
+    ++stackoffset;
     vrfree(reg);
 
+    off = depth - stackoffset;
     tmp = vrget();
-    codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, -1, R_SP);
+    codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, off, R_SP);
     code0(P_HLRZ, tmp, tmp);
     code8(P_LSH, tmp, -6);
     code1(P_AND, tmp, 077);
@@ -5911,7 +6028,8 @@ gmaybitstore(VREG *reg, NODE *n)
 
     p = vrget();
     v = vrget();
-    codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, -1, R_SP);
+    off = depth - stackoffset;
+    codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, off, R_SP);
     codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
     code0(P_DPB, v, p);
     vrfree(p);
@@ -5923,7 +6041,8 @@ gmaybitstore(VREG *reg, NODE *n)
     for (i = 0; i < bits; ++i)
         {
         p = vrget();
-        codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, -1, R_SP);
+        off = depth - stackoffset;
+        codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, off, R_SP);
         if (i != 0)
             {
             q = vrget();
@@ -5948,8 +6067,8 @@ gmaybitstore(VREG *reg, NODE *n)
     r = vrget();
     r->Vrtype = n->Ntype;
     codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
-    code8(P_ADJSP, VR_SP, -2);
-    stackoffset -= 2;
+    code8(P_ADJSP, VR_SP, -1);
+    --stackoffset;
     return r;
 }
 
