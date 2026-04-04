@@ -404,7 +404,6 @@ enum symbolspec {
 #define SF_ALIGN2	01000000	/* GNU/C11 halfword alignment */
 #define SF_ALIGN4	02000000	/* GNU/C11 word alignment */
 #define SF_PACKED	04000000	/* GNU packed aggregate/member */
-#define SF_MAYBITMEM	010000000	/* Auto aggregate may retain TF_MAYBITPTR */
 #define SF_MACVAR	020000000	/* SC_MACRO only: C99 variadic macro */
 #define SF_REGSPEC	0100000000	/* Declaration explicitly used register */
 #define SF_ANONMEM	0200000000	/* Physical C11 anonymous aggregate member */
@@ -760,7 +759,7 @@ enum typespecs {
 #define TF_INTERRUPT	0400000000L /* FW 2A(52) interrupt fn qualifier */
 #define TF_PACKEDPTR	01000000000L /* pointer into GNU packed byte stream */
 #define TF_BITPTR	02000000000L /* S=1 pointer to exact packed bit position */
-#define TF_MAYBITPTR	04000000000L /* function-boundary ptr may be S=1 */
+#define TF_MAYBITPTR	04000000000L /* runtime S selects exact-width ptr form */
 #define TF_VLA          020000000000L /* runtime-sized array type */
 #endif
 

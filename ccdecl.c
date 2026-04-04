@@ -94,7 +94,8 @@ static NODE *dodecl(int, SYMBOL *, SYMBOL *);
 static SYMBOL *declarator(SYMBOL *);
 static TYPE *addpp(TYPE *, TYPE *), *pushsztype(int, INT, INT, TYPE *),
             *vlamake_v11(NODE *, TYPE *), *vlaclone_v11(TYPE *, TYPE *),
-            *fnmaybitptrtype(TYPE *), *tagspec(int);
+            *fnmaybitptrtype(TYPE *), *storagemaybitptrtype_v18(TYPE *),
+            *tagspec(int);
 static int fnmaybitptrtarget(TYPE *);
 static void vlabindtype_v11(TYPE *);
 static void vlamarkfn_v11(void);
@@ -4068,6 +4069,8 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
             */
             copysym(&tempsym, &base);
             u = declarator(&tempsym);
+            if (u != NULL)
+                tempsym.Stype = storagemaybitptrtype_v18(tempsym.Stype);
             if (u == NULL)              /* Check for case of no identifier */
                 {
                 error("Null declarator (expecting ident)");
@@ -4803,6 +4806,25 @@ fnmaybitptrtype(TYPE *t)
     return t;
 }
 
+/* STORAGEMAYBITPTRTYPE_V18 - Preserve exact-width packed pointer words in
+** persistent pointer objects.
+**
+** A pointer to a non-native exact-width sub-word integer may contain either
+** an ordinary PDP-10 byte pointer or KCC's S=1 logical packed pointer.  The
+** raw word is self-describing through its S field, so static-storage pointer
+** objects and aggregate pointer members must retain TF_MAYBITPTR in every
+** translation unit that accesses them.
+*/
+static TYPE *
+storagemaybitptrtype_v18(TYPE *t)
+{
+    if (t != NULL && t->Tspec == TS_PTR && t->Tsubt != NULL
+      && fnmaybitptrtarget(t->Tsubt))
+        return findctype(TS_PTR, t->Tflag | TF_MAYBITPTR,
+                         t->Tsize, t->Tsubt);
+    return t;
+}
+
 /* ADDPP - add type to inside of nesting
 **      Only invoked by declarator().
 */
@@ -4926,6 +4948,16 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
     SYMBOL *ns;
     TYPE   *nt;
     NODE   *z;
+
+    /* Static-storage pointer objects form a translation-unit boundary just
+    ** like function arguments do.  Mark exact-width sub-word pointers here
+    ** before linkage/composite-type processing so every declaration of an
+    ** externally visible object agrees on the representation-polymorphic
+    ** type.  Automatic objects keep the existing local specialization.
+    */
+    if (d->Sclass == SC_EXLINK || d->Sclass == SC_EXTREF
+      || d->Sclass == SC_INTREF)
+        d->Stype = storagemaybitptrtype_v18(d->Stype);
 
     if (d->Sflags & (SF_ALIGN1 | SF_ALIGN2 | SF_ALIGN4))
         {

@@ -626,10 +626,10 @@ convasgn(struct type * lt, struct node * n)
 	rt = n->Ntype;			/* n may have changed */
 	if (rt->Tspec != TS_PTR)	/* Ensure all ptr-to-ptr after here */
 	    break;
-	/* Function-boundary exact-width pointers preserve their raw pointer
-	** representation.  TF_MAYBITPTR means the runtime S field selects
-	** ordinary byte-pointer versus S=1 logical semantics; no cast may
-	** rewrite that field here.
+	/* Representation-polymorphic exact-width pointers preserve their raw
+	** pointer word.  TF_MAYBITPTR means the runtime S field selects ordinary
+	** byte-pointer versus S=1 logical semantics; no cast may rewrite that
+	** field here.
 	*/
 	if (tismaybitptr(lt) && lt->Tsubt != NULL && rt->Tsubt != NULL
 	  && cmputype(lt->Tsubt, rt->Tsubt))
@@ -639,7 +639,7 @@ convasgn(struct type * lt, struct node * n)
 	    }
 	if (tismaybitptr(rt) && !tismaybitptr(lt))
 	    {
-	    error("function-boundary packed pointer representation must be retained locally");
+	    error("exact-width packed pointer requires representation-preserving destination");
 	    n->Ntype = lt;
 	    return n;
 	    }

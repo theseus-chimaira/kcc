@@ -77,8 +77,6 @@ static int stmtpackedagg(INT);
 static void stmtintname(char *, char *, unsigned int);
 static INT stmtpackedbit(INT);
 static INT stmtpackedencode(TYPE *, INT);
-static SYMBOL *stmtlocalaggroot(NODE *);
-static int stmtmaybitptrmembertype(TYPE *, TYPE *);
 #if 0
 static int cmpatype();
 static NODE *statement(),
@@ -122,39 +120,6 @@ stmtintname(char *dst, char *stem, unsigned int value)
     while (--n >= 0)
 	*dst++ = digits[n];
     *dst = '\0';
-}
-
-/* Return the automatic aggregate object at the root of a direct member
-** selection.  Indirect Q_MEMBER accesses are deliberately excluded because
-** an automatic pointer does not imply that the pointed-to aggregate is local.
-*/
-static SYMBOL *
-stmtlocalaggroot(NODE *n)
-{
-    while (n != NULL && n->Nop == Q_DOT)
-        n = n->Nleft;
-    if (n == NULL || n->Nop != Q_IDENT)
-        return NULL;
-    if (n->Nid->Sclass != SC_AUTO && n->Nid->Sclass != SC_RAUTO)
-        return NULL;
-    return n->Nid;
-}
-
-/* True when a pointer member can carry the same exact-width boundary
-** representation as rt without changing its one-word storage.
-*/
-static int
-stmtmaybitptrmembertype(TYPE *lt, TYPE *rt)
-{
-    INT bits;
-
-    if (lt == NULL || rt == NULL || lt->Tspec != TS_PTR
-      || rt->Tspec != TS_PTR || !tismaybitptr(rt)
-      || lt->Tsubt == NULL || rt->Tsubt == NULL
-      || !cmputype(lt->Tsubt, rt->Tsubt) || !tisinteg(lt->Tsubt))
-        return 0;
-    bits = tbitsize(lt->Tsubt);
-    return bits > 0 && bits < TGSIZ_WORD;
 }
 
 /* STMT packed-member helpers.  P=074,S=0 marks a packed aggregate whose
@@ -1461,18 +1426,6 @@ asgnexpr(void)
                                      l->Ntype->Tsize, l->Ntype->Tsubt);
                 l->Ntype = mt;
                 l->Nid->Stype = mt;
-                }
-            else if (l->Nop == Q_DOT
-              && stmtmaybitptrmembertype(l->Ntype, r->Ntype))
-                {
-                SYMBOL *aroot = stmtlocalaggroot(l);
-                if (aroot != NULL)
-                    {
-                    aroot->Sflags |= SF_MAYBITMEM;
-                    l->Ntype = findctype(TS_PTR,
-                                         l->Ntype->Tflag | TF_MAYBITPTR,
-                                         l->Ntype->Tsize, l->Ntype->Tsubt);
-                    }
                 }
             }
 
@@ -2843,24 +2796,6 @@ posttail(NODE *n)
 		    }
 		if (csymbol->Sclass == SC_UNDEF)
 		    freesym(csymbol);
-
-        /* Once an automatic aggregate has retained a function-boundary
-        ** exact-width pointer in one of its members, later direct member
-        ** selections from that same object must preserve the runtime S-field
-        ** interpretation.  The marker lives on the local object symbol, not
-        ** on the shared structure-member definition.
-        */
-        if (op == Q_DOT)
-            {
-            SYMBOL *aroot = stmtlocalaggroot(n);
-            if (aroot != NULL && (aroot->Sflags & SF_MAYBITMEM)
-              && mt != NULL && mt->Tspec == TS_PTR && mt->Tsubt != NULL
-              && tisinteg(mt->Tsubt)
-              && tbitsize(mt->Tsubt) > 0
-              && tbitsize(mt->Tsubt) < TGSIZ_WORD)
-                mt = findctype(TS_PTR, mt->Tflag | TF_MAYBITPTR,
-                               mt->Tsize, mt->Tsubt);
-            }
 
 	/* A packed nested aggregate may begin at an arbitrary bit offset.
 	** It has no directly representable PDP-10 byte pointer, so flatten a
