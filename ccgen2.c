@@ -8052,9 +8052,31 @@ gaddress(NODE *n)
 
 	case Q_PLUS:
 	case Q_MINUS:
-            /* Address-valued array subscripts retain the pointer arithmetic.
-            ** Dropping Nright here made &a[i] collapse to &a[0], and affected
-            ** fixed multidimensional arrays as well as VLAs. */
+            /* Address-valued array subscripts retain an ARRAY result type on
+            ** the lvalue node even though one operand is the pointer used to
+            ** form the address.  Feeding that node back through genexpr()
+            ** makes gbinary() classify e.g. 2 + a as ordinary ARRAY
+            ** arithmetic and eventually call garithop(TS_ARRAY).  Generate
+            ** the underlying pointer arithmetic directly instead.  This is
+            ** especially visible for &vla[i], but applies to fixed arrays too.
+            */
+            if (n->Nleft != NULL && n->Nright != NULL)
+                {
+                if (n->Nleft->Ntype->Tspec == TS_PTR)
+                    {
+                    r = genexpr(n->Nleft);
+                    p = gptraddend(n->Nleft->Ntype, n->Nright);
+                    return gptrop(n->Nop, r, p,
+                                  n->Nleft->Ntype, n->Nright->Ntype);
+                    }
+                if (n->Nop == Q_PLUS && n->Nright->Ntype->Tspec == TS_PTR)
+                    {
+                    p = gptraddend(n->Nright->Ntype, n->Nleft);
+                    r = genexpr(n->Nright);
+                    return gptrop(n->Nop, r, p,
+                                  n->Nright->Ntype, n->Nleft->Ntype);
+                    }
+                }
             return genexpr(n);
 
 	case Q_ASPLUS:	/* ptr += &a[] */
