@@ -194,6 +194,7 @@ static VREG *gassign(NODE *),
 	*gptraddend(TYPE *, NODE *),
 	*gmaybitadjust(VREG *, VREG *, TYPE *, int),
 	*gmaybitsub(VREG *, VREG *, TYPE *),
+	*gptrcanoncmp(VREG *, TYPE *),
 	*glogical(NODE *),
 	*gunary(NODE *),
 	*gcast(NODE *),
@@ -2462,6 +2463,71 @@ gdimodezero(NODE *n, int op, int reverse)
     return 1;
 }
 
+/* GPTRCANONCMP - Canonicalize a pointer for mixed-representation compare.
+**
+** Function-boundary exact-width pointers may be either native byte pointers
+** or KCC's S=1 logical bit addresses.  Equality must compare addresses, not
+** their incidental representation.  Convert every non-NULL operand to the
+** S=1 form naming the same first bit.  Spill across the branch because a
+** label may flush VREG state.
+*/
+static VREG *
+gptrcanoncmp(VREG *r, TYPE *t)
+{
+    VREG *tmp, *v;
+    SYMBOL *done;
+    int fsiz;
+
+    if (!r)
+        return (VREG *)-1;
+    if (t == NULL || t->Tspec != TS_PTR)
+        return r;
+    if (tisbitptr(t)) {
+        r->Vrtype = voidptrtype;
+        return r;                     /* Already canonical S=1. */
+    }
+
+    fsiz = elembsize(t);
+    if (!fsiz)
+        fsiz = TGSIZ_CHAR;
+
+    code0(P_PUSH, VR_SP, r);
+    ++stackoffset;
+    vrfree(r);
+    done = newlabel();
+
+    tmp = vrget();
+    codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, 0, R_SP);
+    code6(P_JUMP+POS_SKPE, tmp, done);       /* NULL stays NULL. */
+
+    if (tismaybitptr(t)) {
+        code0(P_HLRZ, tmp, tmp);
+        code8(P_LSH, tmp, -6);
+        code1(P_AND, tmp, 077);
+        code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
+        code6(P_JRST, (VREG *)NULL, done);   /* Already S=1. */
+    }
+    vrfree(tmp);
+
+    v = vrget();
+    codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+    if (tisbytepointer(t))
+        code10(P_PTRCNV, v, (SYMBOL *)NULL, 1, -fsiz);
+    else
+        pitopc(v, 1, 0, 0);
+    codemdx(P_MOVEM, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+    vrfree(v);
+    flushcode();
+    codlabel(done);
+
+    r = vrget();
+    r->Vrtype = voidptrtype;
+    codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
+    code8(P_ADJSP, VR_SP, -1);
+    --stackoffset;
+    return r;
+}
+
 /* GBOOLOP - Generate code for == > < <= >= !=
 **
 */
@@ -2475,6 +2541,26 @@ gboolop(NODE *n, int reverse)
     if (gboolmaskzero(n, op, reverse) || gboolzero(n, op, reverse)
       || gdimodezero(n, op, reverse))
         return;
+
+    /* Equality of a representation-polymorphic exact-width pointer and
+    ** another pointer is an address comparison.  Canonicalize both raw
+    ** pointer words to S=1 so native-vs-logical representation differences
+    ** cannot make equal pointers compare unequal.
+    */
+    if ((n->Nop == Q_EQUAL || n->Nop == Q_NEQ)
+      && n->Nleft->Ntype->Tspec == TS_PTR
+      && n->Nright->Ntype->Tspec == TS_PTR
+      && (tismaybitptr(n->Nleft->Ntype)
+        || tismaybitptr(n->Nright->Ntype))) {
+        r1 = gptrcanoncmp(genexpr(n->Nleft), n->Nleft->Ntype);
+        r2 = gptrcanoncmp(genexpr(n->Nright), n->Nright->Ntype);
+        if (reverse)
+            op = revop(op);
+        code0(op, r1, r2);
+        vrfree(r1);
+        vrfree(r2);
+        return;
+    }
 
     /* May need to munch on char pointers to get into comparable form */
     switch (n->Nop)
@@ -4884,15 +4970,53 @@ gcastptr(VREG *r, TYPE *tfrom, TYPE *tto)
 {
     int fsiz, tsiz;
 
-    /* Erasing the pointed-to type must not rewrite the runtime pointer.
-    ** Both native byte pointers and KCC's S=1 logical packed pointers are
-    ** valid opaque void * values and must round-trip unchanged.
+    /* Erasing the pointed-to type must leave one canonical opaque form.
+    ** A TF_MAYBITPTR value may arrive either as a native byte pointer or as
+    ** KCC's S=1 logical bit address.  Preserve S=1 and NULL; convert every
+    ** native form to S=1 before the value becomes an ordinary void *.
+    **
+    ** The value is spilled because codlabel() may flush the virtual-register
+    ** state.  Never return a VREG which lived across such a control-flow join.
     */
     if (tismaybitptr(tfrom) && tto != NULL && tto->Tspec == TS_PTR
       && tto->Tsubt != NULL && tto->Tsubt->Tspec == TS_VOID) {
+        VREG *tmp, *v;
+        SYMBOL *done;
+
         if (!r)
             return (VREG *)-1;
+        fsiz = elembsize(tfrom);
+        if (!fsiz)
+            fsiz = TGSIZ_CHAR;
+
+        code0(P_PUSH, VR_SP, r);
+        ++stackoffset;
+        vrfree(r);
+
+        done = newlabel();
+        tmp = vrget();
+        codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, 0, R_SP);
+        code6(P_JUMP+POS_SKPE, tmp, done);       /* NULL stays NULL. */
+        code0(P_HLRZ, tmp, tmp);
+        code8(P_LSH, tmp, -6);
+        code1(P_AND, tmp, 077);
+        code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
+        code6(P_JRST, (VREG *)NULL, done);      /* Already canonical S=1. */
+        vrfree(tmp);
+
+        v = vrget();
+        codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+        code10(P_PTRCNV, v, (SYMBOL *)NULL, 1, -fsiz);
+        codemdx(P_MOVEM, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+        vrfree(v);
+        flushcode();
+        codlabel(done);
+
+        r = vrget();
         r->Vrtype = tto;
+        codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
+        code8(P_ADJSP, VR_SP, -1);
+        --stackoffset;
         return r;
     }
 
@@ -4903,37 +5027,49 @@ gcastptr(VREG *r, TYPE *tfrom, TYPE *tto)
     if (tfrom != NULL && tfrom->Tspec == TS_PTR
       && tfrom->Tsubt != NULL && tfrom->Tsubt->Tspec == TS_VOID
       && tismaybitptr(tto) && tisbytepointer(tto)) {
-        VREG *tmp;
+        VREG *tmp, *v;
         SYMBOL *done;
 
         if (!r)
             return (VREG *)-1;
-        flushcode();
-        tmp = vrget();
-        code0(P_HLRZ, tmp, r);
-        code8(P_LSH, tmp, -6);
-        code1(P_AND, tmp, 077);
         tsiz = elembsize(tto);
         if (!tsiz)
             tsiz = TGSIZ_CHAR;
+
+        code0(P_PUSH, VR_SP, r);
+        ++stackoffset;
+        vrfree(r);
         done = newlabel();
+
+        tmp = vrget();
+        codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, 0, R_SP);
+        code6(P_JUMP+POS_SKPE, tmp, done);       /* NULL stays NULL. */
+        code0(P_HLRZ, tmp, tmp);
+        code8(P_LSH, tmp, -6);
+        code1(P_AND, tmp, 077);
         code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
-        code6(P_JRST, (VREG *)NULL, done);
-        code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, tsiz);
-        code6(P_JRST, (VREG *)NULL, done);
+        code6(P_JRST, (VREG *)NULL, done);      /* Canonical S=1 survives. */
         vrfree(tmp);
-        pitopc(r, tsiz, 0, 0);
+
+        v = vrget();
+        codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+        pitopc(v, tsiz, 0, 0);
+        codemdx(P_MOVEM, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+        vrfree(v);
         flushcode();
         codlabel(done);
+
+        r = vrget();
         r->Vrtype = tto;
+        codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
+        code8(P_ADJSP, VR_SP, -1);
+        --stackoffset;
         return r;
     }
 
     /* Converting a representation-polymorphic pointer to an ordinary word
     ** pointer discards byte/logical pointer metadata.  Every supported
-    ** representation keeps the containing word address in the RH, so this
-    ** is the same operation as the native byte-pointer-to-word conversion.
-    ** Opaque void * is handled above and deliberately retains the raw word.
+    ** representation keeps the containing word address in the RH.
     */
     if (tismaybitptr(tfrom) && tto != NULL && tto->Tspec == TS_PTR
       && tto->Tsubt != NULL && tto->Tsubt->Tspec != TS_VOID
@@ -4945,13 +5081,15 @@ gcastptr(VREG *r, TYPE *tfrom, TYPE *tto)
         return r;
     }
 
-    /* A function-boundary exact-width pointer may be either a native byte
-    ** pointer or KCC's S=1 logical packed pointer.  Width-changing casts
-    ** must rewrite only the native representation; the S=1 form already
-    ** names the exact starting bit and therefore only changes C type.
+    /* Casting between two non-native exact-width pointer types keeps the
+    ** self-describing function-boundary representation.  Native pointers
+    ** must change their encoded byte size; S=1 already denotes the exact
+    ** first bit and therefore only changes C type.  Anchor the value across
+    ** the runtime-selected join so codlabel() cannot invalidate its VREG.
     */
-    if (tismaybitptr(tfrom) && tisbytepointer(tto)) {
-        VREG *tmp;
+    if (tismaybitptr(tfrom) && tismaybitptr(tto)
+      && tisbytepointer(tto)) {
+        VREG *tmp, *v;
         SYMBOL *done;
 
         fsiz = elembsize(tfrom);
@@ -4960,31 +5098,110 @@ gcastptr(VREG *r, TYPE *tfrom, TYPE *tto)
             fsiz = TGSIZ_CHAR;
         if (!tsiz)
             tsiz = TGSIZ_CHAR;
-        if (fsiz == tsiz)
+        if (fsiz == tsiz) {
+            if (r)
+                r->Vrtype = tto;
             return r;
+        }
         if (!r)
             return (VREG *)-1;
 
+        code0(P_PUSH, VR_SP, r);
+        ++stackoffset;
+        vrfree(r);
+        done = newlabel();
+
         tmp = vrget();
-        code0(P_HLRZ, tmp, r);
+        codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, 0, R_SP);
+        code6(P_JUMP+POS_SKPE, tmp, done);       /* NULL stays NULL. */
+        code0(P_HLRZ, tmp, tmp);
         code8(P_LSH, tmp, -6);
         code1(P_AND, tmp, 077);
-        done = newlabel();
         code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
-        code6(P_JRST, (VREG *)NULL, done);
+        code6(P_JRST, (VREG *)NULL, done);      /* S=1 changes type only. */
         vrfree(tmp);
 
-        /* Native byte pointer.  NULL remains NULL; otherwise P_PTRCNV's
-        ** packed-member form preserves the exact bit address while changing
-        ** the byte size.
-        */
-        code6(P_JUMP+POS_SKPE, r, done);
-        code10(P_PTRCNV, r, (SYMBOL *)NULL, tsiz, -fsiz);
+        v = vrget();
+        codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+        code10(P_PTRCNV, v, (SYMBOL *)NULL, tsiz, -fsiz);
+        codemdx(P_MOVEM, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+        vrfree(v);
         flushcode();
         codlabel(done);
+
+        r = vrget();
         r->Vrtype = tto;
+        codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
+        code8(P_ADJSP, VR_SP, -1);
+        --stackoffset;
         return r;
     }
+
+    /* Materialize an ordinary destination byte-pointer representation from
+    ** a function-boundary representation-polymorphic pointer.  S=1 and
+    ** native source pointers require different source sizes, so select the
+    ** conversion at runtime.  The result is anchored on the stack across
+    ** the join to avoid stale VREG state.
+    */
+    if (tismaybitptr(tfrom) && tisbytepointer(tto)
+      && !tismaybitptr(tto)) {
+        VREG *tmp, *v;
+        SYMBOL *bitlab, *done;
+
+        fsiz = elembsize(tfrom);
+        tsiz = elembsize(tto);
+        if (!fsiz)
+            fsiz = TGSIZ_CHAR;
+        if (!tsiz)
+            tsiz = TGSIZ_CHAR;
+        if (!r)
+            return (VREG *)-1;
+
+        code0(P_PUSH, VR_SP, r);
+        ++stackoffset;
+        vrfree(r);
+        bitlab = newlabel();
+        done = newlabel();
+
+        tmp = vrget();
+        codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, 0, R_SP);
+        code6(P_JUMP+POS_SKPE, tmp, done);       /* NULL stays NULL. */
+        code0(P_HLRZ, tmp, tmp);
+        code8(P_LSH, tmp, -6);
+        code1(P_AND, tmp, 077);
+        code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
+        code6(P_JRST, (VREG *)NULL, bitlab);
+        vrfree(tmp);
+
+        /* Native source representation. */
+        if (fsiz != tsiz) {
+            v = vrget();
+            codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+            code10(P_PTRCNV, v, (SYMBOL *)NULL, tsiz, -fsiz);
+            codemdx(P_MOVEM, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+            vrfree(v);
+        }
+        code6(P_JRST, (VREG *)NULL, done);
+        flushcode();
+
+        /* Canonical logical source representation. */
+        codlabel(bitlab);
+        v = vrget();
+        codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+        code10(P_PTRCNV, v, (SYMBOL *)NULL, tsiz, -1);
+        codemdx(P_MOVEM, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
+        vrfree(v);
+        flushcode();
+
+        codlabel(done);
+        r = vrget();
+        r->Vrtype = tto;
+        codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
+        code8(P_ADJSP, VR_SP, -1);
+        --stackoffset;
+        return r;
+    }
+
 
     if (tisbytepointer(tfrom)) {
         if (tisbytepointer(tto)) {

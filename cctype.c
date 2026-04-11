@@ -525,12 +525,10 @@ convcast(struct type * t, struct node * n)
 	    else if (tismaybitptr(n->Ntype)
 	      && st != NULL && dt != NULL && dt->Tspec == TS_VOID) {
 		/* Canonicalize a representation-polymorphic byte pointer to
-		** KCC's S=1 logical form before it becomes an untyped void *.
-		** The raw bit address then survives arbitrary void * call/return
-		** boundaries without needing source-width metadata.
+		** KCC's S=1 logical form before erasing its pointed-to type.
+		** The resulting void * is an ordinary ABI pointer type; the raw
+		** pointer word itself carries the representation information.
 		*/
-		t = findctype(TS_PTR, t->Tflag | TF_MAYBITPTR,
-		              t->Tsize, dt);
 		return ndefcast(CAST_PT_PT, t, n);
 	    }
 	    else if (tismaybitptr(n->Ntype))
@@ -553,7 +551,14 @@ convcast(struct type * t, struct node * n)
 	flags = t->Tflag;
 	if (tisbitptr(n->Ntype))
 	    flags |= TF_PACKEDPTR | TF_BITPTR;
-	if (tismaybitptr(n->Ntype))
+	/* Keep representation polymorphism only for a true no-op cast.
+	** An explicit cast to a different byte-pointer type must materialize
+	** that target representation instead of leaking TF_MAYBITPTR into
+	** an ordinary local pointer type.
+	*/
+	if (tismaybitptr(n->Ntype) && dt != NULL && tisinteg(dt)
+	  && tbitsize(dt) > 0 && tbitsize(dt) < TGSIZ_WORD
+	  && !(tischar(dt) && tbitsize(dt) == TGSIZ_CHAR))
 	    flags |= TF_MAYBITPTR;
 	t = findctype(TS_PTR, flags, t->Tsize, dt);
 
