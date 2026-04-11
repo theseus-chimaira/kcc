@@ -5338,7 +5338,7 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
 
     if (s->Sclass == SC_AUTO)
         {
-        if (vlacontains_v11(s->Stype))
+        if (s->Stype->Tspec == TS_ARRAY && vlacontains_v11(s->Stype))
             {
             NODE *vz;
             s->Svalue = -1;
