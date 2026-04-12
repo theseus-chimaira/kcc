@@ -688,8 +688,14 @@ findcse(int r, struct pcode * p, int safedouble)
 	*/
 
 	case P_CAI: case P_CAM:
+	    /* Equality fallthrough can substitute one register value for
+	    ** another, but it does not turn a register into the contents of
+	    ** memory addressed by that value.  Restrict this CSE shortcut to
+	    ** direct register MOVE targets; indexed/byte-pointer loads must
+	    ** still perform their memory access. */
 	    if (dropsout (after (q)) && (q->Pop & POF_OPSKIP) == POS_SKPE &&
-		match (q, P_MOVE)) {	/* P_CAME+P_JRST is like P_MOVE */
+		(target[0]->Ptype & PTF_ADRMODE) == PTA_REGIS &&
+		match (q, P_MOVE)) {	/* P_CAME+P_JRST is like register MOVE */
 		r = q->Preg;		/* (except that reg not munged) */
 		break;
 	    }
