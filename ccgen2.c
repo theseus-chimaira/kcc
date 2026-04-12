@@ -7078,9 +7078,15 @@ gprimary(NODE *n)
         */
         if (tisdimode(n->Ntype)) {
             if ((n->Nid->Sflags & (SF_ABIREG|SF_ABICONSUME))
-              == (SF_ABIREG|SF_ABICONSUME))
+              == (SF_ABIREG|SF_ABICONSUME)) {
                 r = vrdgetreg(n->Nid->Sreg);
-            else {
+                /* This read-once incoming pair is now an ordinary temporary.
+                ** Release its ABI reservation so later pair allocation can
+                ** reuse the dead parameter ACs after this value is freed.
+                */
+                fnargkeepmask &= ~((1 << n->Nid->Sreg)
+                    | (1 << (n->Nid->Sreg + 1)));
+            } else {
                 r = vrdget();
                 code00(P_DMOVE, r->Vrloc, n->Nid->Sreg);
             }
