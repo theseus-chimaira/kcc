@@ -231,8 +231,10 @@ static VREG *gpackedloadat(NODE *, VREG *);
 static VREG *gpackedstore(VREG *, NODE *);
 static VREG *gpackedstoreat(VREG *, NODE *, VREG *);
 static VREG *gpackedcopy(NODE *, NODE *, TYPE *);
+static VREG *gpackedvalue(NODE *, TYPE *);
 static VREG *gpackedbitbase(NODE *, INT *);
 static VREG *gpackedbitvalue(NODE *, TYPE *);
+static VREG *gpackedregscalar(NODE *, VREG *);
 static VREG *gpackedbitstorereg(NODE *, VREG *, TYPE *);
 static VREG *gpackedbitcopy(NODE *, NODE *, TYPE *);
 static VREG *gpackedcopyreg(NODE *, VREG *, TYPE *);
@@ -6638,6 +6640,54 @@ gpackedbitbase(NODE *n, INT *bitp)
 ** would in aligned memory.  This is sufficient for the normal KCC/GCC ABI
 ** argument and return paths without inventing a software pointer value.
 */
+/* GPACKEDREGSCALAR - Extract an integral packed member from a one- or
+** two-word aggregate value already held in registers.
+*/
+static VREG *
+gpackedregscalar(NODE *n, VREG *agg)
+{
+    VREG *q, *r;
+    INT bitoff;
+    int bits, word, intra, first, second, shift;
+
+    bitoff = packedoffbit(n->Nxoff);
+    bits = tbitsize(n->Ntype);
+    word = (int)(bitoff / TGSIZ_WORD);
+    intra = (int)(bitoff % TGSIZ_WORD);
+    if (bits <= 0 || bits > TGSIZ_WORD || word < 0 || word > 1)
+        {
+        int_error("gpackedregscalar: bad packed member %N", n);
+        return agg;
+        }
+
+    q = vrget();
+    q->Vrtype = uinttype;
+    codek0(P_MOVE, q, word == 0 ? agg : VR2(agg));
+    if (intra + bits <= TGSIZ_WORD)
+        {
+        shift = TGSIZ_WORD - intra - bits;
+        if (shift) code8(P_LSH, q, -shift);
+        if (bits < TGSIZ_WORD) code1(P_AND, q, (((INT)1 << bits) - 1));
+        }
+    else
+        {
+        first = TGSIZ_WORD - intra;
+        second = bits - first;
+        code1(P_AND, q, (((INT)1 << first) - 1));
+        code8(P_LSH, q, second);
+        r = vrget();
+        r->Vrtype = uinttype;
+        codek0(P_MOVE, r, VR2(agg));
+        shift = TGSIZ_WORD - second;
+        if (shift) code8(P_LSH, r, -shift);
+        if (second < TGSIZ_WORD) code1(P_AND, r, (((INT)1 << second) - 1));
+        code0(P_IOR, q, r);
+        vrfree(r);
+        }
+    vrfree(agg);
+    return gcastr(CAST_IT_IT, q, uinttype, n->Ntype, (NODE *)NULL);
+}
+
 static VREG *
 gpackedbitvalue(NODE *n, TYPE *t)
 {
@@ -6896,6 +6946,52 @@ gpackedbitcopy(NODE *dst, NODE *src, TYPE *t)
     return da;
 }
 
+/* GPACKEDVALUE - Materialize an aligned packed aggregate into the normal
+** one- or two-word aggregate value representation without reading bytes
+** beyond the object.  Packed bytes occupy successive 9-bit fields from the
+** high end of each word.
+*/
+static VREG *
+gpackedvalue(NODE *src, TYPE *t)
+{
+    VREG *sa, *sp, *q, *r, *dw;
+    int i, bytes, word, pos, sflags;
+
+    bytes = t->Tbytes;
+    r = (sizetype(t) == 2) ? vrdget() : vrget();
+    r->Vrtype = t;
+    if (sizetype(t) == 2)
+        VR2(r)->Vrtype = t;
+    code5(P_SETZ, r);
+    if (sizetype(t) == 2)
+        code5(P_SETZ, VR2(r));
+
+    sa = gaddress(src);
+    sflags = sa->Vrflags;
+    sa->Vrflags |= VRF_LOCK;
+    for (i = 0; i < bytes; ++i)
+        {
+        sp = vrget();
+        if (i == 0) codek0(P_MOVE, sp, sa);
+        else { code1(P_MOVE, sp, i); codek0(P_ADJBP, sp, sa); }
+        q = vrget();
+        q->Vrtype = uinttype;
+        code0(P_LDB, q, sp);
+        vrfree(sp);
+
+        word = i / 4;
+        pos = i % 4;
+        if (pos != 3)
+            code8(P_LSH, q, (3 - pos) * TGSIZ_CHAR);
+        dw = (word == 0) ? r : VR2(r);
+        code0(P_IOR, dw, q);
+        vrfree(q);
+        }
+    sa->Vrflags = sflags;
+    vrfree(sa);
+    return r;
+}
+
 static VREG *
 gpackedcopy(NODE *dst, NODE *src, TYPE *t)
 {
@@ -6907,6 +7003,9 @@ gpackedcopy(NODE *dst, NODE *src, TYPE *t)
       || ((src->Nop == Q_MEMBER || src->Nop == Q_DOT)
          && packedbitagg(src->Nxoff)))
         return gpackedbitcopy(dst, src, t);
+
+    if ((src->Nflag & NF_LVALUE) && sizetype(t) <= 2)
+        return gpackedcopyreg(dst, gpackedvalue(src, t), t);
 
     if (!(src->Nflag & NF_LVALUE))
         {
@@ -7032,10 +7131,12 @@ gpackedcopyreg(NODE *dst, VREG *src, TYPE *t)
         }
 
     src->Vrflags = savesrc;
-    vrfree(src);
     da->Vrflags = saveflags;
-    da->Vrtype = t;
-    return da;
+    vrfree(da);
+    src->Vrtype = t;
+    if (sizetype(t) == 2)
+        VR2(src)->Vrtype = t;
+    return src;
 }
 
 static VREG *
@@ -7268,6 +7369,10 @@ gprimary(NODE *n)
 
     /* Pull component out of structure in 1- or 2-word register */
     r = genexpr(n->Nleft);	/* Get the structure */
+    if (tisinteg(n->Ntype)
+      && (packedcross(n->Nxoff) || packedbit(n->Nxoff)
+       || packedbitscalar(n->Nxoff)))
+        return gpackedregscalar(n, r);
     switch (n->Nxoff)		/* See which part of it we want */
 	{
 	case 0:			/* Want first word? */
