@@ -4258,16 +4258,29 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
 static INT
 fldsize(int bsiz, INT *offset, int *boffset)
 {
+    INT startbit;
+    int oldboff;
+
     if (bsiz > TGSIZ_WORD || bsiz < 0)  /* range check */
         error("Bit field longer than word (%d bits)", TGSIZ_WORD);
     if (bsiz == 0 && *boffset > 0)      /* Zero size means round to wd bdry */
         *boffset = TGSIZ_WORD+1;        /* Hack so roundup is forced */
 
+    oldboff = *boffset;
+    startbit = *offset * TGSIZ_WORD + oldboff;
     *boffset += bsiz;                   /* advance by that many bits */
-    if (*boffset > TGSIZ_WORD)  /* If not enough room */
+    if (*boffset > TGSIZ_WORD)          /* Field crosses a word boundary */
         {
-        *boffset = bsiz;                /* move bit offset to word bdy */
-        (*offset)++;                    /* in next word */
+        *offset += *boffset / TGSIZ_WORD;
+        *boffset %= TGSIZ_WORD;
+
+        /* P=076,S=0 is KCC's exact-bit-offset encoding.  Unlike the
+        ** historical layout, GCC keeps an ordinary bit-field contiguous
+        ** when it crosses a 36-bit word.  The generator already knows how
+        ** to split exact-bit fields across address units, so use that path
+        ** rather than rounding the field to the next word.
+        */
+        return -((startbit << 12) | 07300L);
         }
     /* Return encoded offset */
     return -(((*offset * 64) + TGSIZ_WORD - *boffset) * 64 + bsiz);

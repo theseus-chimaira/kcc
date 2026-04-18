@@ -218,6 +218,8 @@ static INT packedmembyte(INT);
 static INT packedmembit(INT);
 static int packedcross(INT);
 static int packedbit(INT);
+static int crossbit(INT);
+static INT crossbitoff(INT);
 static int packedbitscalar(INT);
 static int packedbitagg(INT);
 static int packedptrderef(NODE *), bitptrderef(NODE *), maybitptrderef(NODE *), bitptrmember(NODE *);
@@ -3064,7 +3066,7 @@ gassign(NODE *n)
 	r1 = genexpr(n->Nright);	/* Generate value first */
         if (tisinteg(nod->Ntype)
           && (((nod->Nop == Q_MEMBER || nod->Nop == Q_DOT)
-               && (packedcross(nod->Nxoff) || packedbit(nod->Nxoff) || packedbitscalar(nod->Nxoff)))
+               && (packedcross(nod->Nxoff) || packedbit(nod->Nxoff) || packedbitscalar(nod->Nxoff) || crossbit(nod->Nxoff)))
               || packedptrderef(nod) || bitptrmember(nod)))
             {
             r1 = gpackedstore(r1, nod);
@@ -3268,7 +3270,7 @@ gassign(NODE *n)
 
     if (tisinteg(nod->Ntype)
       && (((nod->Nop == Q_MEMBER || nod->Nop == Q_DOT)
-           && (packedcross(nod->Nxoff) || packedbit(nod->Nxoff) || packedbitscalar(nod->Nxoff)))
+           && (packedcross(nod->Nxoff) || packedbit(nod->Nxoff) || packedbitscalar(nod->Nxoff) || crossbit(nod->Nxoff)))
           || packedptrderef(nod) || bitptrmember(nod) || maybitptrderef(nod)))
         {
         ra = NULL;
@@ -5853,7 +5855,7 @@ gincdec(NODE *n, int inc, int pre)
             }
 
         if (((n->Nop == Q_MEMBER || n->Nop == Q_DOT)
-             && (packedcross(n->Nxoff) || packedbit(n->Nxoff) || packedbitscalar(n->Nxoff)))
+             && (packedcross(n->Nxoff) || packedbit(n->Nxoff) || packedbitscalar(n->Nxoff) || crossbit(n->Nxoff)))
           || packedptrderef(n) || bitptrmember(n))
             {
             TYPE *optype;
@@ -6310,7 +6312,7 @@ gpackedloadat(NODE *n, VREG *savedbase)
     int bits, units, tail, i, nbits, saveflags;
 
     bits = tbitsize(n->Ntype);
-    if (bitptrderef(n) || bitptrmember(n))
+    if (bitptrderef(n) || bitptrmember(n) || crossbit(n->Nxoff))
         {
         int done, bflags;
         VREG *acc;
@@ -6458,7 +6460,7 @@ gpackedstoreat(VREG *reg, NODE *n, VREG *savedbase)
     int bits, units, tail, i, nbits, below, savebase, savereg;
 
     bits = tbitsize(n->Ntype);
-    if (bitptrderef(n) || bitptrmember(n))
+    if (bitptrderef(n) || bitptrmember(n) || crossbit(n->Nxoff))
         {
         int done, bflags, rflags, shift;
 
@@ -7311,7 +7313,7 @@ gprimary(NODE *n)
                 return r;
                 }
 
-            if (tisinteg(n->Ntype) && (packedcross(n->Nxoff) || packedbit(n->Nxoff) || packedbitscalar(n->Nxoff)))
+            if (tisinteg(n->Ntype) && (packedcross(n->Nxoff) || packedbit(n->Nxoff) || packedbitscalar(n->Nxoff) || crossbit(n->Nxoff)))
                 {
                 r = gpackedload(n);
                 if (volat)
@@ -8281,7 +8283,8 @@ packedoffbit(INT off)
 
     if (off >= 0) return off * TGSIZ_WORD;
     code = (unsigned INT)(-off);
-    if ((code & 07777L) == 07400L
+    if ((code & 07777L) == 07300L
+      || (code & 07777L) == 07400L
       || (code & 07777L) == 07500L
       || (code & 07777L) == 07600L)
         return (INT)(code >> 12);
@@ -8312,6 +8315,22 @@ packedbit(INT off)
     if (off >= 0) return 0;
     code = -off;
     return (code & 07777L) == 07600L;
+}
+
+static int
+crossbit(INT off)
+{
+    INT code;
+    if (off >= 0) return 0;
+    code = -off;
+    return (code & 07777L) == 07300L;
+}
+
+static INT
+crossbitoff(INT off)
+{
+    if (!crossbit(off)) return -1;
+    return (unsigned INT)(-off) >> 12;
 }
 
 static int
@@ -8454,6 +8473,31 @@ gaddress(NODE *n)
                 {
                 p = vrget();
                 code1(P_MOVE, p, b);
+                code0(P_ADJBP, p, r);
+                vrfree(r);
+                r = p;
+                }
+            return r;
+            }
+
+        /* A normal cross-word bit-field uses an exact S=1 internal bit
+        ** pointer.  Its offset is measured from the aggregate's first bit,
+        ** so first advance the word address, convert it to a one-bit byte
+        ** pointer, and then advance within that word.  Such pointers never
+        ** escape because C forbids taking a bit-field address.
+        */
+        if (crossbit(offset))
+            {
+            INT bit = crossbitoff(offset);
+            INT word = bit / TGSIZ_WORD;
+            INT phase = bit % TGSIZ_WORD;
+            if (word != 0)
+                code1(P_ADD, r, word);
+            pitopc(r, 1, 0, 0);
+            if (phase != 0)
+                {
+                p = vrget();
+                code1(P_MOVE, p, phase);
                 code0(P_ADJBP, p, r);
                 vrfree(r);
                 r = p;
