@@ -1919,6 +1919,7 @@ promote_abi_params(SYMBOL *args, SYMBOL *fn, NODE *body)
     for (s = args; s; s = s->Spmnext) {
         ++nargs;
         if (sizetype(s->Stype) != 1 || tispacked(s->Stype)
+          || s->Stype->Tspec == TS_STRUCT || s->Stype->Tspec == TS_UNION
           || (s->Sflags & SF_ADDRTAKEN)
           || s->Svalue < 1 || s->Svalue > GCCABI_ARG_REGS)
             return;
