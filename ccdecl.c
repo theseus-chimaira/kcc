@@ -4263,8 +4263,20 @@ fldsize(int bsiz, INT *offset, int *boffset)
 
     if (bsiz > TGSIZ_WORD || bsiz < 0)  /* range check */
         error("Bit field longer than word (%d bits)", TGSIZ_WORD);
-    if (bsiz == 0 && *boffset > 0)      /* Zero size means round to wd bdry */
-        *boffset = TGSIZ_WORD+1;        /* Hack so roundup is forced */
+
+    /* A zero-width bit-field is an alignment directive, not a field.
+    ** Move directly to the next word boundary.  The old TGSIZ_WORD+1
+    ** sentinel went through the cross-word-field path and left boffset at
+    ** one, causing the following ordinary member to advance by a second
+    ** word.
+    */
+    if (bsiz == 0) {
+        if (*boffset > 0) {
+            (*offset)++;
+            *boffset = 0;
+        }
+        return -(((*offset * 64) + TGSIZ_WORD) * 64);
+    }
 
     oldboff = *boffset;
     startbit = *offset * TGSIZ_WORD + oldboff;
