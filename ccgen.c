@@ -39,6 +39,8 @@ extern int				/* CCOUT */
 extern void vrinit(void);			/* CCREG.C */
 extern void vrendchk (void);
 extern void vrfree (VREG *);
+extern void gccabi_dimode_normalize_reg(int);
+extern void gccabi_dimode_encode_regs(int, int);
 
 extern
 void	    outiprolog (void);		/* FW 2A(52) */
@@ -104,6 +106,38 @@ static INT locctr;	/* Location counter (only for tracking # wds output) */
 ** return PC for the current KCC-generated function.  The epilogue removes
 ** exactly these shim words before returning to the caller.
 */
+
+
+/* Normalize signed GCC-ABI DImode argument pairs for KCC's internal
+** high36:low35 representation.  GCC duplicates the sign into bit 35 of
+** the low word; KCC arithmetic keeps that bit clear.  Stack-resident low
+** words are normalized when loaded by gdimemload().
+*/
+static void
+gccabi_normalize_dimode_regs(void)
+{
+    TYPE *p, *t;
+    int cum, siz, lowreg;
+
+    cum = (sizetype(curfn->Stype->Tsubt) > GCCABI_RET_REGS) ? 1 : 0;
+    p = curfn->Stype->Tproto ? curfn->Stype->Tproto : curfn->Shproto;
+    while (p && p->Tspec == TS_PARAM) {
+        t = p->Tsubt;
+        siz = sizetype(t);
+        if (siz == 2 && tisdimode(t) && !tisunsign(t)) {
+            lowreg = 0;
+            if (cum < GCCABI_ARG_REGS - 1)
+                lowreg = cum + 2;
+            else if (cum == GCCABI_ARG_REGS - 1)
+                lowreg = GCCABI_ARG_REGS;
+            if (lowreg)
+                gccabi_dimode_normalize_reg(lowreg);
+        }
+        cum += siz;
+        p = p->Tproto;
+    }
+    flushcode();
+}
 
 /* GCCABI_ARG_PROLOGUE - Reconstruct KCC's internal parameter stack view.
 **
@@ -772,6 +806,7 @@ genfunct (NODE* n)
 	** preserve it locally, avoiding two extra prologue/epilogue words in the
 	** common case on PDP-6, which has no native DMOVE/DMOVEM.
 	*/
+        gccabi_normalize_dimode_regs();
 	if (!fnabidirect)
 	    gccabi_arg_prologue();
 	if (fnsavescr)

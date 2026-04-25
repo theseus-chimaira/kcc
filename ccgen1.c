@@ -1381,6 +1381,11 @@ greturn (NODE *n)
 		    vrfree(r);
 		else
 		    code0 (P_DMOVE, VR_RETVAL, r);
+                if (!tisunsign(n->Ntype)) {
+                    code8(P_TLZ, VR_RETDBL, 0400000L);
+                    code8(P_TLN+POF_ISSKIP+POS_SKPE, VR_RETVAL, 0400000L);
+                    code8(P_TLO, VR_RETDBL, 0400000L);
+                }
 		}
 	    else
 		code0 (P_DMOVE, VR_RETVAL, r);

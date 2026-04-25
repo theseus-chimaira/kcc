@@ -118,6 +118,29 @@ kccfmt(char *buf, size_t size, const char *fmt, ...)
     return (int)used;
 }
 
+void
+gccabi_dimode_normalize_reg(int lo)
+{
+    char buf[48];
+    int n;
+    n = kccfmt(buf, sizeof(buf), "\tTLZ\t%o,0400000\n", lo);
+    codestr(buf, n);
+}
+
+void
+gccabi_dimode_encode_regs(int hi, int lo)
+{
+    char buf[112];
+    int n;
+    n = kccfmt(buf, sizeof(buf),
+        "\tTLZ\t%o,0400000\n"
+        "\tTLNE\t%o,0400000\n"
+        "\t TLO\t%o,0400000\n",
+        lo, hi, lo);
+    codestr(buf, n);
+}
+
+
 /* Imported functions */
 extern SYMBOL *newlabel(void);		/* CCSYM */
 extern SYMBOL *vlabase_v11(SYMBOL *), *vlaboundsym_v11(TYPE *); /* CCDECL */
@@ -241,7 +264,7 @@ static VREG *gpackedbitstorereg(NODE *, VREG *, TYPE *);
 static VREG *gpackedbitcopy(NODE *, NODE *, TYPE *);
 static VREG *gpackedcopyreg(NODE *, VREG *, TYPE *);
 static void gasm(NODE *), gjffo(NODE *);
-static void gdimemload(VREG *, VREG *, int);
+static void gdimemload(VREG *, VREG *, TYPE *, int);
 static void gdimemstore(VREG *, VREG *);
 static void gdimove(VREG *, VREG *);
 static VREG *gdimode_from_int(VREG *, TYPE *, TYPE *, NODE *);
@@ -850,13 +873,15 @@ dimode_negative_power2_exp(INT hi, INT lo)
 
 /* Load integral DImode value from memory at idx into pair q. */
 static void
-gdimemload(VREG *q, VREG *idx, int keep)
+gdimemload(VREG *q, VREG *idx, TYPE *t, int keep)
 {
     int ar;
 
     ar = vrreal(idx);
     codek4(P_MOVE, q, idx);
     codemdx(P_MOVE, vrreal(VR2(q)), NULL, 1, ar);
+    if (!tisunsign(t))
+        code8(P_TLZ, VR2(q), 0400000L);
     if (!keep)
 	vrfree(idx);
 }
@@ -886,10 +911,21 @@ gdimemstore(VREG *reg, VREG *ra)
     reg->Vrflags = hflags;
     VR2(reg)->Vrflags = lflags;
     flushcode();
-    n = kccfmt(buf, sizeof(buf),
-	"\tMOVEM\t%o,0(%o)\n"
-	"\tMOVEM\t%o,1(%o)\n",
-	hi, ar, lo, ar);
+    if (reg->Vrtype && !tisunsign(reg->Vrtype)) {
+        n = kccfmt(buf, sizeof(buf),
+            "\tTLZ\t%o,0400000\n"
+            "\tTLNE\t%o,0400000\n"
+            "\t TLO\t%o,0400000\n"
+            "\tMOVEM\t%o,0(%o)\n"
+            "\tMOVEM\t%o,1(%o)\n"
+            "\tTLZ\t%o,0400000\n",
+            lo, hi, lo, hi, ar, lo, ar, lo);
+    } else {
+        n = kccfmt(buf, sizeof(buf),
+            "\tMOVEM\t%o,0(%o)\n"
+            "\tMOVEM\t%o,1(%o)\n",
+            hi, ar, lo, ar);
+    }
     codestr(buf, n);
     vrfree(ra);
 }
@@ -3099,16 +3135,24 @@ gassign(NODE *n)
 		nout = kccfmt(buf, sizeof(buf),
 		    "\tDMOVE\t%o,-1(17)\n"
 		    "\tSUB\t17,[2,,2]\n"
-		    "\tDMOVEM\t%o,0(%o)\n",
-		    hi, hi, ar);
+                    "\tTLZ\t%o,0400000\n"
+                    "\tTLNE\t%o,0400000\n"
+                    "\t TLO\t%o,0400000\n"
+		    "\tDMOVEM\t%o,0(%o)\n"
+                    "\tTLZ\t%o,0400000\n",
+		    hi, lo, hi, lo, hi, ar, lo);
 	    else
 		nout = kccfmt(buf, sizeof(buf),
 		    "\tMOVE\t%o,-1(17)\n"
 		    "\tMOVE\t%o,0(17)\n"
 		    "\tSUB\t17,[2,,2]\n"
+                    "\tTLZ\t%o,0400000\n"
+                    "\tTLNE\t%o,0400000\n"
+                    "\t TLO\t%o,0400000\n"
 		    "\tMOVEM\t%o,0(%o)\n"
-		    "\tMOVEM\t%o,1(%o)\n",
-		    hi, lo, hi, ar, lo, ar);
+		    "\tMOVEM\t%o,1(%o)\n"
+                    "\tTLZ\t%o,0400000\n",
+		    hi, lo, lo, hi, lo, hi, ar, lo, ar, lo);
 	    codestr(buf, nout);
 	    stackoffset -= 2;
 	    vrfree(ra);
@@ -7235,7 +7279,7 @@ gprimary(NODE *n)
 		r = vrdget();
 		r->Vrtype = n->Ntype;
 		dimode_iconst_words(n, &hi, &lo);
-		lo = dimode_lo_abi(hi, lo);
+		lo = dimode_lo_expand(hi, lo);
 		flushcode();
 		code1(P_MOVE, r, hi);
 		code1(P_MOVE, VR2(r), lo);
@@ -7806,6 +7850,27 @@ gccabi_tail_regs(void)
                 }
             }
         }
+        if (siz == 2 && tisdimode(t) && !tisunsign(t)) {
+            int lowreg;
+            lowreg = 0;
+            if (cum < GCCABI_ARG_REGS - 1)
+                lowreg = cum + 2;
+            else if (cum == GCCABI_ARG_REGS - 1)
+                lowreg = GCCABI_ARG_REGS;
+            if (lowreg) {
+                gccabi_dimode_normalize_reg(lowreg);
+                if (cum < GCCABI_ARG_REGS - 1) {
+                    gccabi_dimode_encode_regs(cum + 1, lowreg);
+                } else {
+                    /* Split pair: the high word remains in the external
+                    ** stack area, so reload it temporarily to test sign. */
+                    codemdx(P_MOVE, R_ABITMP, (SYMBOL *)NULL,
+                            -(stackoffset + 1 + cum + 1), R_SP);
+                    gccabi_dimode_encode_regs(R_ABITMP, lowreg);
+                }
+                flushcode();
+            }
+        }
         cum += siz;
         p = p->Tproto;
     }
@@ -8113,8 +8178,11 @@ gcall (NODE* n)
 	}
     else if (siz == 1)
 	r = vrretget ();		/* one return register */
-    else if (siz == 2)
+    else if (siz == 2) {
 	r = vrretdget ();		/* two */
+        if (tisdimode(n->Ntype) && !tisunsign(n->Ntype))
+            code8(P_TLZ, VR2(r), 0400000L);
+    }
     else if (siz > GCCABI_RET_REGS)
 	{
 	code13 (P_MOVE, (r = vrretget ()),
@@ -8218,8 +8286,15 @@ gfnarg(NODE *n)
 	    break;
 	case 2:
 	    reg = genexpr(n);
+            if (tisdimode(n->Ntype) && !tisunsign(n->Ntype)) {
+                code8(P_TLZ, VR2(reg), 0400000L);
+                code8(P_TLN+POF_ISSKIP+POS_SKPE, reg, 0400000L);
+                code8(P_TLO, VR2(reg), 0400000L);
+            }
 	    code0(P_PUSH, VR_SP, reg);
 	    code0(P_PUSH, VR_SP, VR2(reg));
+            if (tisdimode(n->Ntype) && !tisunsign(n->Ntype))
+                code8(P_TLZ, VR2(reg), 0400000L);
 	    vrfree(reg);
 	    stackoffset += 2;
 	    break;
@@ -8759,7 +8834,7 @@ getmem(VREG *reg, TYPE *t, int byte, int keep)
 	    q = vrdget();
 	    q->Vrtype = t;		/* Set C type of object in reg */
 	    if (tisdimode(t))
-		gdimemload(q, reg, keep);
+		gdimemload(q, reg, t, keep);
 	    else
 		(keep ? codek4(P_DMOVE, q, reg) : code4(P_DMOVE, q, reg));
 	    return q;

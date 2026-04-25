@@ -783,9 +783,10 @@ enum typespecs {
 #define dimode_wd36mask()	dimode_hi36mask()
 #define dimode_hi_negative(hi)	(((unsigned long long)(hi) & dimode_word_signbit()) != 0)
 #define dimode_lo_expand(hi, lo)	((INT)((lo) & dimode_lo35mask()))
-#define dimode_lo_signcopy(hi, lo)	((INT)((lo) & dimode_lo35mask()))
-#define dimode_lo_abi(hi, lo)\
-    ((INT)((lo) & dimode_lo35mask()))
+#define dimode_lo_signcopy(hi, lo)\
+    ((INT)(((lo) & dimode_lo35mask()) |\
+      ((((hi) & dimode_word_signbit()) != 0) ? dimode_word_signbit() : 0)))
+#define dimode_lo_abi(hi, lo)	dimode_lo_signcopy((hi), (lo))
 #define dimode_sighi(lo)	\
     ((((unsigned long long)(lo) & dimode_word_signbit()) != 0) ? (INT)(-1) : 0)
 #define dimode_iconst_words(n, hip, lop) do { \
