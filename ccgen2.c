@@ -892,7 +892,7 @@ gdimemstore(VREG *reg, VREG *ra)
 {
     int ar, hi, lo, n;
     int hflags, lflags;
-    char buf[80];
+    char buf[40];
 
     /*
      * Keep the two DImode value ACs stable while the destination address is
@@ -911,22 +911,29 @@ gdimemstore(VREG *reg, VREG *ra)
     reg->Vrflags = hflags;
     VR2(reg)->Vrflags = lflags;
     flushcode();
+    /*
+     * Keep this sequence out of the peephole/allocator path: AR and the
+     * DImode pair were fixed above and must remain fixed through both stores.
+     * Emit one short line at a time rather than building the whole signed
+     * sequence in a fixed text buffer.  The latter exceeded 80 bytes once
+     * GCC-compatible low-word sign copying was added.
+     */
     if (reg->Vrtype && !tisunsign(reg->Vrtype)) {
-        n = kccfmt(buf, sizeof(buf),
-            "\tTLZ\t%o,0400000\n"
-            "\tTLNE\t%o,0400000\n"
-            "\t TLO\t%o,0400000\n"
-            "\tMOVEM\t%o,0(%o)\n"
-            "\tMOVEM\t%o,1(%o)\n"
-            "\tTLZ\t%o,0400000\n",
-            lo, hi, lo, hi, ar, lo, ar, lo);
-    } else {
-        n = kccfmt(buf, sizeof(buf),
-            "\tMOVEM\t%o,0(%o)\n"
-            "\tMOVEM\t%o,1(%o)\n",
-            hi, ar, lo, ar);
+        n = kccfmt(buf, sizeof(buf), "\tTLZ\t%o,0400000\n", lo);
+        codestr(buf, n);
+        n = kccfmt(buf, sizeof(buf), "\tTLNE\t%o,0400000\n", hi);
+        codestr(buf, n);
+        n = kccfmt(buf, sizeof(buf), "\t TLO\t%o,0400000\n", lo);
+        codestr(buf, n);
     }
+    n = kccfmt(buf, sizeof(buf), "\tMOVEM\t%o,0(%o)\n", hi, ar);
     codestr(buf, n);
+    n = kccfmt(buf, sizeof(buf), "\tMOVEM\t%o,1(%o)\n", lo, ar);
+    codestr(buf, n);
+    if (reg->Vrtype && !tisunsign(reg->Vrtype)) {
+        n = kccfmt(buf, sizeof(buf), "\tTLZ\t%o,0400000\n", lo);
+        codestr(buf, n);
+    }
     vrfree(ra);
 }
 
