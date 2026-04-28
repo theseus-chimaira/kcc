@@ -4158,9 +4158,15 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                     tempsym.Stype = deftype;
                     }
 
-                bsiz = tisscalar(tempsym.Stype) ?       /* Get object size */
-                        tbitsize(tempsym.Stype)         /* in bits if can */
-                        : TGSIZ_WORD;           /* else force wd mode */
+                /* Only true byte objects use sub-word struct layout.
+                ** Exact-width integer types such as _KCCtype_int32 retain
+                ** word storage even though their value width is below 36
+                ** bits.  Treating every narrow scalar as a byte object can
+                ** create an impossible cross-word member offset and crash
+                ** static initializer generation. */
+                bsiz = tisbyte(tempsym.Stype)
+                        ? tbitsize(tempsym.Stype)
+                        : TGSIZ_WORD;
 
                 /* GNU aligned(N) is expressed in C address units.  On the
                 ** PDP-10 target one unit is 9 bits and useful alignment is
