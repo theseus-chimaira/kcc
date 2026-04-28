@@ -7057,9 +7057,6 @@ gpackedcopy(NODE *dst, NODE *src, TYPE *t)
          && packedbitagg(src->Nxoff)))
         return gpackedbitcopy(dst, src, t);
 
-    if ((src->Nflag & NF_LVALUE) && sizetype(t) <= 2)
-        return gpackedcopyreg(dst, gpackedvalue(src, t), t);
-
     if (!(src->Nflag & NF_LVALUE))
         {
         VREG *rv;
@@ -7111,6 +7108,9 @@ gpackedcopy(NODE *dst, NODE *src, TYPE *t)
 
     for (i = 0; i < bytes; ++i)
         {
+        /* Build both byte pointers before loading the value.  P_ADJBP can
+        ** become a helper call on early machines and therefore must not
+        ** have a live byte value across it. */
         sp = vrget();
         if (i == 0)
             codek0(P_MOVE, sp, sa);
@@ -7119,9 +7119,6 @@ gpackedcopy(NODE *dst, NODE *src, TYPE *t)
             code1(P_MOVE, sp, i);
             codek0(P_ADJBP, sp, sa);
             }
-        q = vrget();
-        code0(P_LDB, q, sp);
-
         dp = vrget();
         if (i == 0)
             codek0(P_MOVE, dp, da);
@@ -7130,8 +7127,12 @@ gpackedcopy(NODE *dst, NODE *src, TYPE *t)
             code1(P_MOVE, dp, i);
             codek0(P_ADJBP, dp, da);
             }
+        q = vrget();
+        code0(P_LDB, q, sp);
         code0(P_DPB, q, dp);
         vrfree(q);
+        vrfree(dp);
+        vrfree(sp);
         }
 
     sa->Vrflags = sflags;
