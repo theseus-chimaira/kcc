@@ -4209,6 +4209,20 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                     {
                     if (*boffset % bsiz)        /* Align to byte bndry */
                         *boffset += (int) bsiz - (*boffset % (int) bsiz);
+
+                    /* Ordinary addressable byte objects must fit wholly
+                    ** within one 36-bit word.  fldsize() also serves true
+                    ** bit-fields, where cross-word placement is valid, so
+                    ** do this alignment here in the non-bitfield path.
+                    ** Without it a mixed-width struct can receive the
+                    ** exact cross-word bit-field encoding and static
+                    ** initializer generation later treats an addressable
+                    ** member as an impossible overlapping byte field. */
+                    if (*boffset + bsiz > TGSIZ_WORD)
+                        {
+                        (*offset)++;
+                        *boffset = 0;
+                        }
                     offcode = fldsize((int)bsiz, offset, boffset);
                     }
                 else                    /* One or more words */

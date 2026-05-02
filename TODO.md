@@ -39,8 +39,9 @@ language model or native semantics simply to mimic GCC.
   aggregate layout, and array stride.
 - [x] Classify GNU attributes explicitly as supported, harmless, emulated, or
   unsupported; do not silently erase attributes with ABI/semantic meaning.
-- [ ] Detect compiler-conditioned source branches that compile materially
-  different programs and exclude them from optimization comparisons.
+- [x] Eliminate compiler-conditioned executable/data branches from direct
+  optimization-comparison sources.  Keep only explicitly semantic-only native
+  language-model or imported-suite differences, enforced by the testkit audit.
 - [ ] Audit direct KCC/GCC interoperability for argument assignment, return
   registers, preserved registers, stack cleanup, aggregate returns, aggregate
   and bit-field layout, pointer representations, floating formats, symbol
