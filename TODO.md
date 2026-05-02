@@ -33,11 +33,11 @@ Tests belong in `pdp10-c-testkit`, not in this repository.
 KCC should interoperate with PDP-10 GCC where useful without replacing KCC's
 language model or native semantics simply to mimic GCC.
 
-- [ ] Keep testkit type metadata honest. Never compare KCC and GCC cells whose
+- [x] Keep testkit type metadata honest. Never compare KCC and GCC cells whose
   source types or widths do not describe equivalent operations.
-- [ ] Continue exact-width semantic probes for truncation, sign extension,
+- [x] Continue exact-width semantic probes for truncation, sign extension,
   aggregate layout, and array stride.
-- [ ] Classify GNU attributes explicitly as supported, harmless, emulated, or
+- [x] Classify GNU attributes explicitly as supported, harmless, emulated, or
   unsupported; do not silently erase attributes with ABI/semantic meaning.
 - [ ] Detect compiler-conditioned source branches that compile materially
   different programs and exclude them from optimization comparisons.

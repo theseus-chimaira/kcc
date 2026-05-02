@@ -13,6 +13,8 @@
 #include "cclex.h"	/* Get stuff shared with CCINP */
 #include <stddef.h>	/* ptrdiff_t */
 int strcmp (const char *, const char *);
+int strncmp (const char *, const char *, size_t);
+size_t strlen (const char *);
 
 /* Imported functions */
 extern SYMBOL *symfind(char *, int);	/* CCSYM */
@@ -31,7 +33,7 @@ static int trident(void), trintcon(void), trfltcon(void),
 static int spcident(char *, char *, int), cchar(char **);
 static int zerotok(void), dzerotok(void), szerotok(void);
 static int strctok(char *), skipgnuattr(void), skipcxxattr(void),
-	attralignval(char *);
+	attralignval(char *), gnuattrname(char *, char *);
 static long gnuattr_pending;
 static char *stripintseps(char *, char *, int);
 
@@ -429,6 +431,20 @@ attralignval(char *cp)
 }
 
 static int
+gnuattrname(char *name, char *plain)
+{
+    size_t n;
+
+    if (!strcmp(name, plain))
+        return 1;
+    n = strlen(plain);
+    return name[0] == '_' && name[1] == '_'
+        && !strncmp(name + 2, plain, n)
+        && name[n + 2] == '_' && name[n + 3] == '_'
+        && name[n + 4] == '\0';
+}
+
+static int
 skipgnuattr(void)
 {
     int t, depth, inaligned;
@@ -465,13 +481,13 @@ skipgnuattr(void)
 	else if (t == T_IDENT && depth == 2 && (name = curval.cp) != NULL)
 	    {
 	    inaligned = 0;
-	    if (!strcmp(name, "noreturn") || !strcmp(name, "__noreturn__"))
+	    if (gnuattrname(name, "noreturn"))
 		gnuattr_pending |= SF_NORETURN;
-	    else if (!strcmp(name, "noinline") || !strcmp(name, "__noinline__"))
+	    else if (gnuattrname(name, "noinline"))
 		gnuattr_pending |= SF_NOINLINE;
-	    else if (!strcmp(name, "packed") || !strcmp(name, "__packed__"))
+	    else if (gnuattrname(name, "packed"))
 		gnuattr_pending |= SF_PACKED;
-	    else if (!strcmp(name, "aligned") || !strcmp(name, "__aligned__"))
+	    else if (gnuattrname(name, "aligned"))
 		{
 		/* GCC defaults to maximum useful target alignment when the
 		** argument is omitted.  PDP-10 GCC caps object alignment at
@@ -481,6 +497,33 @@ skipgnuattr(void)
 		gnuattr_pending |= SF_ALIGN4;
 		inaligned = 1;
 		}
+	    else if (gnuattrname(name, "unused")
+	          || gnuattrname(name, "deprecated")
+	          || gnuattrname(name, "format")
+	          || gnuattrname(name, "format_arg")
+	          || gnuattrname(name, "warn_unused_result")
+	          || gnuattrname(name, "pure")
+	          || gnuattrname(name, "const")
+	          || gnuattrname(name, "always_inline")
+	          || gnuattrname(name, "hot")
+	          || gnuattrname(name, "cold")
+	          || gnuattrname(name, "malloc"))
+		;                       /* Correctness-neutral metadata/optimization. */
+	    else if (gnuattrname(name, "weak")
+	          || gnuattrname(name, "alias")
+	          || gnuattrname(name, "section")
+	          || gnuattrname(name, "mode")
+	          || gnuattrname(name, "visibility")
+	          || gnuattrname(name, "constructor")
+	          || gnuattrname(name, "destructor")
+	          || gnuattrname(name, "used")
+	          || gnuattrname(name, "common")
+	          || gnuattrname(name, "nocommon")
+	          || gnuattrname(name, "dllimport")
+	          || gnuattrname(name, "dllexport"))
+		error("GNU attribute %s is not supported", name);
+	    else
+		warn("Unknown GNU attribute %s ignored", name);
 	    }
 	else if (t == T_ICONST && depth == 3 && inaligned
 	      && curval.cp != NULL)
