@@ -1,33 +1,5 @@
 # KCC TODO
 
-## Language implementation
-
-- [x] Variable length arrays.
-- [x] Hexadecimal floating constants.
-- [x] `_Noreturn`.
-- [x] `_Generic`.
-- [x] `_Alignof`.
-- [x] `_Alignas`.
-- [x] Anonymous structs and unions.
-- [x] Preprocessor `#elifdef`, `#elifndef`, and `#warning`.
-- [x] `__VA_OPT__`.
-
-## Language audit
-
-Tests belong in `pdp10-c-testkit`, not in this repository.
-
-- [x] Audit C89 functionality systematically. Explicit `-Pc89`, `-Pc99`,
-  `-Pgnu89`, and `-Pgnu99` language profiles enforce the standard/extension
-  boundary; `-Pstrict` is an alias for `-Pc89`.
-
-## PDP-10 target completion
-
-- [ ] Finish KL10 support. The current KL target is usable but is not yet a
-  complete model of the KL instruction set, addressing modes, and profitable
-  KL-specific code generation.
-- [ ] Audit profitable `EXTEND` generation for KL10/KS10 where it reduces code
-  size or runtime without materially increasing compiler RAM.
-
 ## KCC/GCC compatibility audit
 
 KCC should interoperate with PDP-10 GCC where useful without replacing KCC's
@@ -71,6 +43,20 @@ The current DImode division policy intentionally keeps a single general
 signed/unsigned operation inline, while repeated same-kind operations may use a
 shared helper. Revisit that threshold only with measurements across PDP-6,
 KA10, KI10, and KS10.
+
+## Rerun optimization audit
+- [ ] After the last optimization round we added many new features.
+  We have to check them if generate non-optimal code and optimize code generation
+  - if it doesn't cost too much memory
+
+## PDP-10 target completion
+
+- [ ] Finish KL10 support. The current KL target is usable but is not yet a
+  complete model of the KL instruction set, addressing modes, and profitable
+  KL-specific code generation.
+- [ ] Audit profitable `EXTEND` generation for KL10/KS10 where it reduces code
+  size or runtime without materially increasing compiler RAM.
+
 
 ## Design constraints
 
