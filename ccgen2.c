@@ -7231,7 +7231,12 @@ gprimary(NODE *n)
         ** caller does not need a second MOVE in greturn().  Otherwise use
         ** a normal temporary.
         */
-        if (tisdimode(n->Ntype)) {
+        /* Incoming ABI register pairs are used by both integer DImode and
+        ** native two-word floating scalars.  Treating only integer DImode as
+        ** a pair loses the low half of a direct-register double parameter.
+        */
+        if (sizetype(n->Ntype) == 2
+          && n->Ntype->Tspec != TS_STRUCT && n->Ntype->Tspec != TS_UNION) {
             if ((n->Nid->Sflags & (SF_ABIREG|SF_ABICONSUME))
               == (SF_ABIREG|SF_ABICONSUME)) {
                 r = vrdgetreg(n->Nid->Sreg);

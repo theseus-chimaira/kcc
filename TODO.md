@@ -42,12 +42,12 @@ language model or native semantics simply to mimic GCC.
 - [x] Eliminate compiler-conditioned executable/data branches from direct
   optimization-comparison sources.  Keep only explicitly semantic-only native
   language-model or imported-suite differences, enforced by the testkit audit.
-- [ ] Audit direct KCC/GCC interoperability for argument assignment, return
+- [x] Audit direct KCC/GCC interoperability for argument assignment, return
   registers, preserved registers, stack cleanup, aggregate returns, aggregate
   and bit-field layout, pointer representations, floating formats, symbol
   spelling/significance, runtime helpers, assembler directives, relocation,
   and object conventions.
-- [ ] Use explicit adapters for interfaces whose native representations differ;
+- [x] Use explicit adapters for interfaces whose native representations differ;
   do not change KCC `long`, byte pointers, or the default ABI merely to match a
   GCC internal machine mode.
 - [ ] Keep runtime-result equivalence separate from code-size/performance
