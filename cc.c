@@ -1081,6 +1081,10 @@ ctargmach(char * s)
     if (tgits && !(tgcpu == TGCPU_KA || tgcpu == TGCPU_KS
 		    || tgcpu == TGCPU_KL0 || tgcpu == TGCPU_KLX))
 	jerr("ITS target variant requires KA10, KS10, or KL10");
+#ifndef MULTI_SECTION
+    if (tgarch == TGARCH_KLX || tgcpu == TGCPU_KLX)
+	jerr("KL10 non-zero-section target requires MULTI_SECTION compiler build");
+#endif
     settgcpu(tgcpu);
 }
 

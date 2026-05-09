@@ -22,9 +22,9 @@ language model or native semantics simply to mimic GCC.
 - [x] Use explicit adapters for interfaces whose native representations differ;
   do not change KCC `long`, byte pointers, or the default ABI merely to match a
   GCC internal machine mode.
-- [ ] Keep runtime-result equivalence separate from code-size/performance
+- [x] Keep runtime-result equivalence separate from code-size/performance
   comparisons when built-ins or compatibility helpers differ.
-- [ ] Treat mixed variadic calls as unsupported unless direct ABI compatibility
+- [x] Treat mixed variadic calls as unsupported unless direct ABI compatibility
   is proven; otherwise use explicit wrappers.
 
 ## Optimizer follow-up
@@ -45,17 +45,26 @@ shared helper. Revisit that threshold only with measurements across PDP-6,
 KA10, KI10, and KS10.
 
 ## Rerun optimization audit
-- [ ] After the last optimization round we added many new features.
-  We have to check them if generate non-optimal code and optimize code generation
-  - if it doesn't cost too much memory
+- [x] Re-audit code generation added by the compatibility and language work.
+  Packed aggregate copies now stream byte pointers instead of repeatedly
+  recomputing them with `ADJBP`; small constant byte-pointer adjustments use
+  `IBP` on PDP-6/KA10/KI10 while KS10/KL10 keep native `ADJBP`.  Representative
+  exact-width, DImode ABI, packed-value, aggregate, and mixed-call paths were
+  rechecked.  Compiler executable size did not increase, and measured compiler
+  RSS did not regress.  Do not add allocator/control-flow complexity merely to
+  remove the remaining one-instruction exact-18 return copy.
 
 ## PDP-10 target completion
 
-- [ ] Finish KL10 support. The current KL target is usable but is not yet a
-  complete model of the KL instruction set, addressing modes, and profitable
-  KL-specific code generation.
-- [ ] Audit profitable `EXTEND` generation for KL10/KS10 where it reduces code
-  size or runtime without materially increasing compiler RAM.
+- [x] Finish the standard-build KL10 section-0 target model.  `-x=kl10`
+  uses the native section-0 instruction capabilities already represented by
+  KCC; `-x=klx` is rejected unless KCC is built with the historical
+  `MULTI_SECTION` support instead of silently emitting section-0 code.
+- [x] Audit profitable `EXTEND` generation for KL10/KS10.  The current IR has
+  no low-cost common C lowering for CMPS/MOVS/EDIT/CVT, and XBLT primarily
+  serves extended-address copies rather than improving section-0 BLT.  Do not
+  add new string/dataflow machinery without a measured workload that justifies
+  its compiler-RAM cost.
 
 
 ## Design constraints

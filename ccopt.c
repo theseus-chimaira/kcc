@@ -294,7 +294,7 @@ void
 foldadjbp(struct pcode * p)
 {
     PCODE *q, *n;
-    int a, r, s;
+    int a, r, s, steps;
     INT boff, woff, bsiz;
 
     /* Make sure we're looking at an unskipped P_ADJBP */
@@ -436,29 +436,25 @@ foldadjbp(struct pcode * p)
 	return;
 	}
 
-    /* A one-byte positive adjustment is exactly MOVE + IBP.  Keep this
-    ** out of the general ADJBP path, which is especially expensive on
-    ** PDP-6/KA10 targets where ADJBP must be simulated.
+    /* A small positive adjustment can be cheaper as MOVE + repeated IBP.
+    ** One byte is always a win.  On PDP-6/KA10/KI10, where ADJBP is simulated,
+    ** use up to three IBPs; KS10/KL10 retain native ADJBP for larger counts.
     */
-    if (n->Pop == P_MOVE && n->Pvalue == 1)
+    if (n->Pop == P_MOVE && n->Pvalue > 0
+      && (n->Pvalue == 1 || (tgcpu <= TGCPU_KI && n->Pvalue <= 3)))
 	{
-	n->Pop = P_NOP;			/* change P_MOVEI R,1 + P_ADJBP R,x */
-	p->Pop = P_MOVE;		/* into P_MOVE R,x + P_IBP R */
+	steps = (int)n->Pvalue;
+	n->Pop = P_NOP;
+	p->Pop = P_MOVE;
 	r = p->Preg;
-	foldmove(p);			/* optimize the P_MOVE */
-	/* If the MOVE survived CSE folding, try the opposite safe rewrite:
-	** retarget the instructions which produced S so they produce R directly.
-	** changereg() proves that the rewrite can be made through the peephole
-	** window without clobbering another live value.  Only after that proof do
-	** we remove MOVE R,S; the destructive IBP still updates its result AC R.
-	*/
+	foldmove(p);
 	if (p->Pop == P_MOVE && p->Ptype == PTA_REGIS
 	  && p->Preg == r && !prevskips(p)
 	  && changereg(r, p->Pr2, before(p)))
 	    dropinstr(p);
 
-	/* Increment the byte pointer held in the result AC. */
-	code00(P_IBP, 0, r);
+	while (steps-- > 0)
+	    code00(P_IBP, 0, r);
 	return;
 	}
 

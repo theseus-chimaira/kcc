@@ -2559,6 +2559,12 @@ void
 code12(int op, struct vreg * vr, INT offset)
 {
     codrmdx(PTA_MINDEXED, op, vrtoreal(vr), (SYMBOL *)NULL, offset, R_SP);
+    /* codrmdx() deliberately performs no optimization.  A direct two-word
+    ** stack load, however, is already in canonical address form and may
+    ** immediately follow a store of the same value.  Give DMOVE the same
+    ** store-forward/CSE opportunity as other generated loads. */
+    if (optobj && op == P_DMOVE)
+        foldmove(previous);
 }
 
 /* CODE13 - Generates MOVEI of stack location.

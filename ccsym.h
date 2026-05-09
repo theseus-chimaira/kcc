@@ -776,7 +776,7 @@ enum typespecs {
 #define tisstructivolat(t)	(((t)->Tflag&TF_SIVOLAT)!=0)
 #define tisanyvolat(t)		(((t)->Tflag&(TF_VOLATILE|TF_SIVOLAT))!=0)
 #define tisinteg(t)		(((t)->Tflag&TF_INTEG)!=0)
-#define tisdimode(t)		((t) && sizetype(t) == 2 && !tisfloat(t))
+#define tisdimode(t)		((t) && tisinteg(t) && sizetype(t) == 2 && !tisfloat(t))
 #define dimode_hi36mask()	((unsigned long long)0777777777777ULL)
 #define dimode_lo35mask()	((unsigned long long)0377777777777ULL)
 #define dimode_word_signbit()	((unsigned long long)0400000000000ULL)

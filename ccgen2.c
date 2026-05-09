@@ -255,13 +255,13 @@ static VREG *gpackedload(NODE *);
 static VREG *gpackedloadat(NODE *, VREG *);
 static VREG *gpackedstore(VREG *, NODE *);
 static VREG *gpackedstoreat(VREG *, NODE *, VREG *);
-static VREG *gpackedcopy(NODE *, NODE *, TYPE *);
+static VREG *gpackedcopy(NODE *, NODE *, TYPE *, int);
 static VREG *gpackedvalue(NODE *, TYPE *);
 static VREG *gpackedbitbase(NODE *, INT *);
 static VREG *gpackedbitvalue(NODE *, TYPE *);
 static VREG *gpackedregscalar(NODE *, VREG *);
 static VREG *gpackedbitstorereg(NODE *, VREG *, TYPE *);
-static VREG *gpackedbitcopy(NODE *, NODE *, TYPE *);
+static VREG *gpackedbitcopy(NODE *, NODE *, TYPE *, int);
 static VREG *gpackedcopyreg(NODE *, VREG *, TYPE *);
 static void gasm(NODE *), gjffo(NODE *);
 static void gdimemload(VREG *, VREG *, TYPE *, int);
@@ -3069,7 +3069,35 @@ gassign(NODE *n)
 	{
         if (tispacked(n->Ntype) && (n->Ntype->Tspec == TS_STRUCT || n->Ntype->Tspec == TS_UNION))
             {
-            r1 = gpackedcopy(nod, n->Nright, n->Ntype);
+            /* A packed aggregate assignment used as a value must return an
+            ** exact packed value without the ordinary aggregate-load cleanup
+            ** that can alter meaningful high bits in a partial final word.
+            */
+            if (!(n->Nflag & NF_DISCARD) && (n->Nright->Nflag & NF_LVALUE)
+              && siz <= 2)
+                {
+                if ((n->Nright->Nop == Q_MEMBER || n->Nright->Nop == Q_DOT)
+                  && packedbitagg(n->Nright->Nxoff))
+                    r1 = gpackedbitvalue(n->Nright, n->Ntype);
+                else
+                    r1 = gpackedvalue(n->Nright, n->Ntype);
+                if ((nod->Nop == Q_MEMBER || nod->Nop == Q_DOT)
+                  && packedbitagg(nod->Nxoff))
+                    r1 = gpackedbitstorereg(nod, r1, n->Ntype);
+                else
+                    r1 = gpackedcopyreg(nod, r1, n->Ntype);
+                }
+            else if (!(n->Nflag & NF_DISCARD) && siz <= 2)
+                {
+                r1 = genexpr(n->Nright);
+                if ((nod->Nop == Q_MEMBER || nod->Nop == Q_DOT)
+                  && packedbitagg(nod->Nxoff))
+                    r1 = gpackedbitstorereg(nod, r1, n->Ntype);
+                else
+                    r1 = gpackedcopyreg(nod, r1, n->Ntype);
+                }
+            else
+                r1 = gpackedcopy(nod, n->Nright, n->Ntype, (n->Nflag & NF_DISCARD) != 0);
             if (volat)
                 flushcode();
             return r1;
@@ -6762,7 +6790,7 @@ gpackedbitvalue(NODE *n, TYPE *t)
         {
         r = vrdget();
         code5(P_SETZ, r);
-        code5(P_SETZ, VR2(r));
+        code1(P_MOVE, VR2(r), 0);
         }
     else
         {
@@ -6905,7 +6933,7 @@ gpackedbitstorereg(NODE *dst, VREG *src, TYPE *t)
 ** it is an internal lowering for whole aggregate assignment.
 */
 static VREG *
-gpackedbitcopy(NODE *dst, NODE *src, TYPE *t)
+gpackedbitcopy(NODE *dst, NODE *src, TYPE *t, int discard)
 {
     VREG *da, *sa, *dp, *sp, *sv, *dv;
     INT dbit, sbit, bits, done;
@@ -6934,6 +6962,106 @@ gpackedbitcopy(NODE *dst, NODE *src, TYPE *t)
     sflags = sa->Vrflags;
     da->Vrflags |= VRF_LOCK;
     sa->Vrflags |= VRF_LOCK;
+
+    if (discard)
+        {
+        VREG *ns, *nd;
+        INT cur_sbyte, cur_dbyte;
+        int spflags, dpflags;
+
+        cur_sbyte = sbit / TGSIZ_CHAR;
+        cur_dbyte = dbit / TGSIZ_CHAR;
+        sp = vrget();
+        if (cur_sbyte == 0)
+            code0(P_MOVE, sp, sa);
+        else
+            {
+            code1(P_MOVE, sp, cur_sbyte);
+            codek0(P_ADJBP, sp, sa);
+            vrfree(sa);
+            }
+        dp = vrget();
+        if (cur_dbyte == 0)
+            code0(P_MOVE, dp, da);
+        else
+            {
+            code1(P_MOVE, dp, cur_dbyte);
+            codek0(P_ADJBP, dp, da);
+            vrfree(da);
+            }
+        spflags = sp->Vrflags;
+        dpflags = dp->Vrflags;
+        sp->Vrflags |= VRF_LOCK;
+        dp->Vrflags |= VRF_LOCK;
+
+        done = 0;
+        while (done < bits)
+            {
+            INT spos, dpos, sbyte, dbyte, mask, keepmask;
+            int sskip, dskip, take, sshift, dshift;
+
+            spos = sbit + done;
+            dpos = dbit + done;
+            sbyte = spos / TGSIZ_CHAR;
+            dbyte = dpos / TGSIZ_CHAR;
+            while (cur_sbyte < sbyte)
+                {
+                ns = vrget();
+                code1(P_MOVE, ns, 1);
+                codek0(P_ADJBP, ns, sp);
+                vrfree(sp);
+                sp = ns;
+                sp->Vrflags |= VRF_LOCK;
+                ++cur_sbyte;
+                }
+            while (cur_dbyte < dbyte)
+                {
+                nd = vrget();
+                code1(P_MOVE, nd, 1);
+                codek0(P_ADJBP, nd, dp);
+                vrfree(dp);
+                dp = nd;
+                dp->Vrflags |= VRF_LOCK;
+                ++cur_dbyte;
+                }
+
+            sskip = (int)(spos % TGSIZ_CHAR);
+            dskip = (int)(dpos % TGSIZ_CHAR);
+            take = TGSIZ_CHAR - sskip;
+            if (take > TGSIZ_CHAR - dskip)
+                take = TGSIZ_CHAR - dskip;
+            if ((INT)take > bits - done)
+                take = (int)(bits - done);
+
+            sv = vrget();
+            sv->Vrtype = uinttype;
+            codek0(P_LDB, sv, sp);
+            sshift = TGSIZ_CHAR - sskip - take;
+            if (sshift != 0)
+                code8(P_LSH, sv, -sshift);
+            mask = ((INT)1 << take) - 1;
+            code1(P_AND, sv, mask);
+
+            dv = vrget();
+            dv->Vrtype = uinttype;
+            codek0(P_LDB, dv, dp);
+            dshift = TGSIZ_CHAR - dskip - take;
+            keepmask = 0777L ^ (mask << dshift);
+            code1(P_AND, dv, keepmask);
+            if (dshift != 0)
+                code8(P_LSH, sv, dshift);
+            code0(P_IOR, dv, sv);
+            codek0(P_DPB, dv, dp);
+            vrfree(dv);
+            done += take;
+            }
+
+        sp->Vrflags = spflags;
+        vrfree(sp);
+        dp->Vrflags = dpflags;
+        dp->Vrtype = t;
+        return dp;
+        }
 
     done = 0;
     while (done < bits)
@@ -7017,20 +7145,18 @@ gpackedvalue(NODE *src, TYPE *t)
         VR2(r)->Vrtype = t;
     code5(P_SETZ, r);
     if (sizetype(t) == 2)
-        code5(P_SETZ, VR2(r));
+        code1(P_MOVE, VR2(r), 0);
 
     sa = gaddress(src);
     sflags = sa->Vrflags;
     sa->Vrflags |= VRF_LOCK;
     for (i = 0; i < bytes; ++i)
         {
-        sp = vrget();
-        if (i == 0) codek0(P_MOVE, sp, sa);
-        else { code1(P_MOVE, sp, i); codek0(P_ADJBP, sp, sa); }
+        VREG *ns;
+
         q = vrget();
         q->Vrtype = uinttype;
-        code0(P_LDB, q, sp);
-        vrfree(sp);
+        codek0(P_LDB, q, sa);
 
         word = i / 4;
         pos = i % 4;
@@ -7039,6 +7165,16 @@ gpackedvalue(NODE *src, TYPE *t)
         dw = (word == 0) ? r : VR2(r);
         code0(P_IOR, dw, q);
         vrfree(q);
+
+        if (i + 1 < bytes)
+            {
+            ns = vrget();
+            code1(P_MOVE, ns, 1);
+            codek0(P_ADJBP, ns, sa);
+            vrfree(sa);
+            sa = ns;
+            sa->Vrflags |= VRF_LOCK;
+            }
         }
     sa->Vrflags = sflags;
     vrfree(sa);
@@ -7046,7 +7182,7 @@ gpackedvalue(NODE *src, TYPE *t)
 }
 
 static VREG *
-gpackedcopy(NODE *dst, NODE *src, TYPE *t)
+gpackedcopy(NODE *dst, NODE *src, TYPE *t, int discard)
 {
     VREG *da, *sa, *dp, *sp, *q;
     int i, bytes, dflags, sflags;
@@ -7055,7 +7191,7 @@ gpackedcopy(NODE *dst, NODE *src, TYPE *t)
          && packedbitagg(dst->Nxoff))
       || ((src->Nop == Q_MEMBER || src->Nop == Q_DOT)
          && packedbitagg(src->Nxoff)))
-        return gpackedbitcopy(dst, src, t);
+        return gpackedbitcopy(dst, src, t, discard);
 
     if (!(src->Nflag & NF_LVALUE))
         {
@@ -7106,33 +7242,83 @@ gpackedcopy(NODE *dst, NODE *src, TYPE *t)
     da->Vrflags |= VRF_LOCK;
     sa->Vrflags |= VRF_LOCK;
 
-    for (i = 0; i < bytes; ++i)
+    if (discard)
         {
-        /* Build both byte pointers before loading the value.  P_ADJBP can
-        ** become a helper call on early machines and therefore must not
-        ** have a live byte value across it. */
+        VREG *ns, *nd;
+        int spflags, dpflags;
+
+        /* A discarded assignment does not need the original aggregate
+        ** address as its expression value.  Consume those addresses into
+        ** two streaming byte pointers, then advance each by one byte at a
+        ** time.  The +1 ADJBP form folds to IBP, avoiding the expensive
+        ** general ADJBP helper on PDP-6/KA10. */
         sp = vrget();
-        if (i == 0)
-            codek0(P_MOVE, sp, sa);
-        else
-            {
-            code1(P_MOVE, sp, i);
-            codek0(P_ADJBP, sp, sa);
-            }
         dp = vrget();
-        if (i == 0)
-            codek0(P_MOVE, dp, da);
-        else
+        code0(P_MOVE, sp, sa);
+        code0(P_MOVE, dp, da);
+        spflags = sp->Vrflags;
+        dpflags = dp->Vrflags;
+        sp->Vrflags |= VRF_LOCK;
+        dp->Vrflags |= VRF_LOCK;
+        for (i = 0; i < bytes; ++i)
             {
-            code1(P_MOVE, dp, i);
-            codek0(P_ADJBP, dp, da);
+            q = vrget();
+            codek0(P_LDB, q, sp);
+            codek0(P_DPB, q, dp);
+            vrfree(q);
+            if (i + 1 < bytes)
+                {
+                ns = vrget();
+                code1(P_MOVE, ns, 1);
+                codek0(P_ADJBP, ns, sp);
+                vrfree(sp);
+                sp = ns;
+                sp->Vrflags |= VRF_LOCK;
+
+                nd = vrget();
+                code1(P_MOVE, nd, 1);
+                codek0(P_ADJBP, nd, dp);
+                vrfree(dp);
+                dp = nd;
+                dp->Vrflags |= VRF_LOCK;
+                }
             }
-        q = vrget();
-        code0(P_LDB, q, sp);
-        code0(P_DPB, q, dp);
-        vrfree(q);
-        vrfree(dp);
+        sp->Vrflags = spflags;
         vrfree(sp);
+        dp->Vrflags = dpflags;
+        dp->Vrtype = t;
+        return dp;
+        }
+    else
+        {
+        for (i = 0; i < bytes; ++i)
+            {
+            /* Build both byte pointers before loading the value.  P_ADJBP
+            ** can become a helper call on early machines and therefore must
+            ** not have a live byte value across it. */
+            sp = vrget();
+            if (i == 0)
+                codek0(P_MOVE, sp, sa);
+            else
+                {
+                code1(P_MOVE, sp, i);
+                codek0(P_ADJBP, sp, sa);
+                }
+            dp = vrget();
+            if (i == 0)
+                codek0(P_MOVE, dp, da);
+            else
+                {
+                code1(P_MOVE, dp, i);
+                codek0(P_ADJBP, dp, da);
+                }
+            q = vrget();
+            code0(P_LDB, q, sp);
+            code0(P_DPB, q, dp);
+            vrfree(q);
+            vrfree(dp);
+            vrfree(sp);
+            }
         }
 
     sa->Vrflags = sflags;
@@ -7161,8 +7347,11 @@ gpackedcopyreg(NODE *dst, VREG *src, TYPE *t)
     da->Vrflags |= VRF_LOCK;
     src->Vrflags |= VRF_LOCK;
 
+    dp = da;
     for (i = 0; i < bytes; ++i)
         {
+        VREG *nd;
+
         word = i / 4;
         pos = i % 4;
         sw = (word == 0) ? src : VR2(src);
@@ -7171,22 +7360,23 @@ gpackedcopyreg(NODE *dst, VREG *src, TYPE *t)
         if (pos != 3)
             code8(P_LSH, q, -((3 - pos) * TGSIZ_CHAR));
         code1(P_AND, q, 0777);
-
-        dp = vrget();
-        if (i == 0)
-            codek0(P_MOVE, dp, da);
-        else
-            {
-            code1(P_MOVE, dp, i);
-            codek0(P_ADJBP, dp, da);
-            }
-        code0(P_DPB, q, dp);
+        codek0(P_DPB, q, dp);
         vrfree(q);
+
+        if (i + 1 < bytes)
+            {
+            nd = vrget();
+            code1(P_MOVE, nd, 1);
+            codek0(P_ADJBP, nd, dp);
+            vrfree(dp);
+            dp = nd;
+            dp->Vrflags |= VRF_LOCK;
+            }
         }
 
     src->Vrflags = savesrc;
-    da->Vrflags = saveflags;
-    vrfree(da);
+    dp->Vrflags = saveflags;
+    vrfree(dp);
     src->Vrtype = t;
     if (sizetype(t) == 2)
         VR2(src)->Vrtype = t;
@@ -7258,6 +7448,20 @@ gprimary(NODE *n)
             code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
         }
         }
+	    else if (n->Nid->Sclass == SC_AUTO && !fnvla_v11
+              && sizetype(n->Ntype) == 2 && !tisbyte(n->Ntype)) {
+                /* A fixed two-word automatic has a directly addressable
+                ** stack slot.  Load it directly instead of first materializing
+                ** its address in an AC.  Besides saving address setup, this
+                ** preserves the canonical DMOVEM M / DMOVE M shape used by
+                ** the store-forwarding peephole.  Direct stack addressing
+                ** cannot suffer the PDP-6 address/destination overlap that
+                ** getmem() must guard against for register-held addresses. */
+                r = vrdget();
+                r->Vrtype = n->Ntype;
+                VR2(r)->Vrtype = n->Ntype;
+                code12(P_DMOVE, r, autooff_v11(n->Nid));
+            }
 	    else
 		r = getmem(gaddress(n), n->Ntype, tisbyte(n->Ntype), 0);
 
@@ -8848,8 +9052,15 @@ getmem(VREG *reg, TYPE *t, int byte, int keep)
 	    q->Vrtype = t;		/* Set C type of object in reg */
 	    if (tisdimode(t))
 		gdimemload(q, reg, t, keep);
-	    else
-		(keep ? codek4(P_DMOVE, q, reg) : code4(P_DMOVE, q, reg));
+	    else {
+                /* On PDP-6/KA10 DMOVE expands to two MOVEs.  Preserve the
+                ** address until both words have been fetched; otherwise the
+                ** first destination AC may alias and destroy the address used
+                ** by the second MOVE. */
+                codek4(P_DMOVE, q, reg);
+                if (!keep)
+                    vrfree(reg);
+            }
 	    return q;
 
 	default:
