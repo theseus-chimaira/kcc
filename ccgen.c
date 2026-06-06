@@ -1550,10 +1550,46 @@ gizlist(NODE *n, TYPE *t, SYMBOL *s)	/* N_IZLIST to initialize from */
 	    INT w, o, woff;
 	    int p = 0, s = 0, gap;
 
-	    /* First ensure ready to emit right word for this object */
+	    /* First ensure ready to emit right word for this object.
+	    ** P=073,S=0 is the exact-bit-offset form used for an ordinary
+	    ** bit-field whose layout crossed a word boundary.  It is not a
+	    ** byte-pointer P/S encoding, so consume it as an exact bit stream.
+	    ** This also handles fields that themselves straddle a word.
+	    */
 	    if ((o = sm->Ssmoff) < 0) {	/* Byte or bitf object? */
-                if (((-o) & 07777L) == 07700L) {
+                unsigned INT code = (unsigned INT)(-o);
+
+                if ((code & 07777L) == 07700L) {
                     int_error("gizlist: packed cross-word member escaped packed initializer path");
+                    continue;
+                }
+                if ((code & 07777L) == 07300L) {
+                    INT bitoff = (INT)(code >> 12);
+                    INT curbit;
+                    unsigned INT v;
+
+                    s = tbitsize(sm->Stype);
+                    if (!bsiz) bytbeg(1);
+                    curbit = (locctr - savloc) * TGSIZ_WORD
+                           + (TGSIZ_WORD - bpos);
+                    if (curbit > bitoff) {
+                        int_error("gizlist: exact-bit offset clash for %S", sm);
+                        continue;
+                    }
+                    while (curbit < bitoff) {
+                        int take = (int)(bitoff - curbit);
+                        if (take > TGSIZ_WORD) take = TGSIZ_WORD;
+                        gizpackedputbits(0, take);
+                        curbit += take;
+                    }
+                    if (n->Nleft == NULL)
+                        v = 0;
+                    else {
+                        if (n->Nleft->Nop != N_ICONST)
+                            int_error("gizlist: bitf izer not iconst %N", n);
+                        v = (unsigned INT)n->Nleft->Niconst;
+                    }
+                    gizpackedputbits(v, s);
                     continue;
                 }
 		w = (-o) >> 12;		/* Decode word offset */
