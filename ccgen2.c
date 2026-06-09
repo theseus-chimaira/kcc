@@ -4608,9 +4608,10 @@ gmaybitadjust(VREG *ptr, VREG *count, TYPE *t, int neg)
 static VREG *
 gmaybitsub(VREG *left, VREG *right, TYPE *t)
 {
-    VREG *tmp, *l, *r, *res;
-    SYMBOL *bitlab, *done;
+    VREG *v, *l, *r, *res;
+    SYMBOL *done;
     INT bits, stride, nsize;
+    int off;
 
     bits = (t != NULL && t->Tsubt != NULL) ? tbitsize(t->Tsubt) : 0;
     stride = ((bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR) * TGSIZ_CHAR;
@@ -4626,33 +4627,33 @@ gmaybitsub(VREG *left, VREG *right, TYPE *t)
     vrfree(left);
     vrfree(right);
 
-    tmp = vrget();
-    codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, -1, R_SP);
-    code0(P_HLRZ, tmp, tmp);
-    code8(P_LSH, tmp, -6);
-    code1(P_AND, tmp, 077);
-    bitlab = newlabel();
-    done = newlabel();
-    code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
-    code6(P_JRST, (VREG *)NULL, bitlab);
-    vrfree(tmp);
+    /* A MAYBITPTR expression can legitimately combine a recovered S=1
+    ** pointer with an ordinary native pointer of the same C type.  Normalize
+    ** each operand independently to S=1 before subtraction; assuming both
+    ** operands already have the same runtime representation loses subword
+    ** positions after a void-pointer round trip.
+    */
+    for (off = -1; off <= 0; ++off)
+        {
+        v = vrget();
+        codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, off, R_SP);
+        code0(P_HLRZ, v, v);
+        code8(P_LSH, v, -6);
+        code1(P_AND, v, 077);
+        done = newlabel();
+        code8(P_CAI+POF_ISSKIP+POS_SKPN, v, 1);
+        code6(P_JRST, (VREG *)NULL, done);
+        vrfree(v);
 
-    l = vrget();
-    r = vrget();
-    codemdx(P_MOVE, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
-    codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
-    vrlowiden(l);
-    code0(P_SUBBP, l, r);
-    if (previous && previous->Pop == P_SUBBP)
-        previous->Pbsize = nsize;
-    vrnarrow(l = VR2(l));
-    codemdx(P_MOVEM, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
-    vrfree(l);
-    vrfree(r);
-    code6(P_JRST, (VREG *)NULL, done);
-    flushcode();
+        v = vrget();
+        codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, off, R_SP);
+        code10(P_PTRCNV, v, (SYMBOL *)NULL, 1, -nsize);
+        codemdx(P_MOVEM, vrtoreal(v), (SYMBOL *)NULL, off, R_SP);
+        vrfree(v);
+        flushcode();
+        codlabel(done);
+        }
 
-    codlabel(bitlab);
     l = vrget();
     r = vrget();
     codemdx(P_MOVE, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
@@ -4672,9 +4673,7 @@ gmaybitsub(VREG *left, VREG *right, TYPE *t)
     codemdx(P_MOVEM, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
     vrfree(l);
     vrfree(r);
-    flushcode();
 
-    codlabel(done);
     res = vrget();
     res->Vrtype = ptrdifftype;
     codemdx(P_MOVE, vrtoreal(res), (SYMBOL *)NULL, -1, R_SP);
@@ -4682,6 +4681,7 @@ gmaybitsub(VREG *left, VREG *right, TYPE *t)
     stackoffset -= 2;
     return res;
 }
+
 
 static int
 vlatype_v11(TYPE *t)
@@ -5054,14 +5054,23 @@ gcastptr(VREG *r, TYPE *tfrom, TYPE *tto)
     int fsiz, tsiz;
 
     /* Erasing the pointed-to type must leave one canonical opaque form.
-    ** A TF_MAYBITPTR value may arrive either as a native byte pointer or as
-    ** KCC's S=1 logical bit address.  Preserve S=1 and NULL; convert every
-    ** native form to S=1 before the value becomes an ordinary void *.
+    ** A non-character subword pointer must become self-describing before
+    ** its pointed-to type is erased.  TF_MAYBITPTR may already hold either
+    ** a native byte pointer or KCC's S=1 logical bit address; an ordinary
+    ** exact-width byte pointer is native.  Preserve S=1 and NULL, and convert
+    ** every native form to S=1 before the value becomes an ordinary void *.
     **
     ** The value is spilled because codlabel() may flush the virtual-register
     ** state.  Never return a VREG which lived across such a control-flow join.
     */
-    if (tismaybitptr(tfrom) && tto != NULL && tto->Tspec == TS_PTR
+    if ((tismaybitptr(tfrom)
+         || (tisbytepointer(tfrom) && tfrom->Tsubt != NULL
+             && tisinteg(tfrom->Tsubt)
+             && tbitsize(tfrom->Tsubt) > 0
+             && tbitsize(tfrom->Tsubt) < TGSIZ_WORD
+             && !(tischar(tfrom->Tsubt)
+                  && tbitsize(tfrom->Tsubt) == TGSIZ_CHAR)))
+      && tto != NULL && tto->Tspec == TS_PTR
       && tto->Tsubt != NULL && tto->Tsubt->Tspec == TS_VOID) {
         VREG *tmp, *v;
         SYMBOL *done;
