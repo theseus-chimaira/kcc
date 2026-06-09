@@ -7973,6 +7973,60 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem)
     return 1;
 }
 
+/* GCALL_MEMCPY1 - Inline a one-byte memcpy call.
+**
+** KCC's freestanding environment must not acquire a libc dependency merely
+** because the source spells memcpy (the test headers map __builtin_memcpy to
+** it).  A known length of one byte has no overlap distinction and can be
+** emitted directly with one LDB/DPB pair.  Return the original destination,
+** exactly as memcpy does.  Return NULL when the call is not this case.
+*/
+static VREG *
+gcall_memcpy1(NODE *n)
+{
+    NODE *args[4];
+    VREG *dst, *src, *val;
+    int nargs;
+
+    if (n == NULL || n->Nleft == NULL || n->Nleft->Nop != Q_IDENT
+      || strcmp(n->Nleft->Nid->Sname, "memcpy") != 0
+      || n->Nleft->Nid->Sclass != SC_EXTREF)
+        return NULL;
+
+    nargs = 0;
+    gccabi_collect_args(n->Nright, args, &nargs);
+    if (nargs != 3 || args[2]->Nop != N_ICONST || args[2]->Niconst != 1
+      || !tisbytepointer(args[0]->Ntype)
+      || !tisbytepointer(args[1]->Ntype)
+      || elembsize(args[0]->Ntype) != TGSIZ_CHAR
+      || elembsize(args[1]->Ntype) != TGSIZ_CHAR)
+        return NULL;
+
+    dst = genexpr(args[0]);
+    src = genexpr(args[1]);
+    if (dst == NULL || src == NULL)
+        {
+        if (dst) vrfree(dst);
+        if (src) vrfree(src);
+        return NULL;
+        }
+
+    (void) vrstoreal(dst, src);
+    val = vrget();
+    val->Vrtype = chartype;
+    code0(P_LDB, val, src);
+    code0(P_DPB, val, dst);
+    vrfree(val);
+    vrfree(src);
+    dst->Vrtype = n->Ntype;
+
+    /* This call no longer reaches the external symbol.  Keep the symbol
+    ** reference count consistent so CCOUT does not emit a dead .extern. */
+    if (n->Nleft->Nid->Srefs > 0)
+        --n->Nleft->Nid->Srefs;
+    return dst;
+}
+
 /* GCCABI_DIRECT_TAIL_OK - Check for a register-only direct tail call. */
 static int
 gccabi_direct_tail_ok(NODE *n)
@@ -8117,6 +8171,11 @@ gcall (NODE* n)
     int directtail;
 
     calladdr = NULL;
+
+    /* Inline the smallest freestanding memcpy before the generic call path
+    ** spills registers and constructs an ABI argument block. */
+    if ((r = gcall_memcpy1(n)) != NULL)
+        return r;
 
     if (n->Nleft->Ntype->Tspec != TS_FUNCT)
 	int_error ("gcall: non-function %N", n);
