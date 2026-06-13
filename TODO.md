@@ -48,11 +48,13 @@ KA10, KI10, and KS10.
 - [x] Re-audit code generation added by the compatibility and language work.
   Packed aggregate copies now stream byte pointers instead of repeatedly
   recomputing them with `ADJBP`; small constant byte-pointer adjustments use
-  `IBP` on PDP-6/KA10/KI10 while KS10/KL10 keep native `ADJBP`.  Representative
+  `IBP` on PDP-6/KA10/KI10 while KS10/KL10 keep native `ADJBP`.  Simple named
+  DImode assignments store the live pair directly instead of pushing it,
+  reconstructing the destination address, and reloading another pair; KI10 and
+  later use `DMOVEM`, while PDP-6/KA10 expand it to two `MOVEM`s.  Representative
   exact-width, DImode ABI, packed-value, aggregate, and mixed-call paths were
-  rechecked.  Compiler executable size did not increase, and measured compiler
-  RSS did not regress.  Do not add allocator/control-flow complexity merely to
-  remove the remaining one-instruction exact-18 return copy.
+  rechecked.  Do not add allocator/control-flow complexity merely to remove the
+  remaining one-instruction exact-18 return copy.
 
 ## PDP-10 target completion
 

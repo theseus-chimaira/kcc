@@ -266,6 +266,7 @@ static VREG *gpackedcopyreg(NODE *, VREG *, TYPE *);
 static void gasm(NODE *), gjffo(NODE *);
 static void gdimemload(VREG *, VREG *, TYPE *, int);
 static void gdimemstore(VREG *, VREG *);
+static int gdimodirectstore(VREG *, NODE *);
 static void gdimove(VREG *, VREG *);
 static VREG *gdimode_from_int(VREG *, TYPE *, TYPE *, NODE *);
 static void gretmove(TYPE *, VREG *, VREG *);
@@ -935,6 +936,90 @@ gdimemstore(VREG *reg, VREG *ra)
         codestr(buf, n);
     }
     vrfree(ra);
+}
+
+
+/* Store a DImode pair directly to a simple named lvalue.
+**
+** This avoids the general address-register path, which can force the pair
+** through the stack while the lvalue address is materialized.  A Q_IDENT has
+** no addressing side effects, so the original pair can remain live and serve
+** as the value of the assignment expression.
+**
+** Signed DImode uses KCC/GCC's 71-bit memory representation: bit 35 of the
+** low word mirrors the high-word sign while the live AC pair keeps that bit
+** clear.  Normalize only around the store, then restore the live low half.
+*/
+static int
+gdimodirectstore(VREG *reg, NODE *nod)
+{
+    SYMBOL *s, *msym;
+    INT off;
+    int hi, lo, n, index;
+    char buf[40];
+
+    if (nod->Nop != Q_IDENT || !reg || !reg->Vrtype
+      || !tisdimode(reg->Vrtype))
+        return 0;
+
+    s = nod->Nid;
+    msym = NULL;
+    off = 0;
+    index = 0;
+
+    switch (s->Sclass) {
+    case SC_AUTO:
+        if (vlabase_v11(s) != NULL)
+            return 0;
+        off = autooff_v11(s);
+        index = frameindex_v11();
+        break;
+
+    case SC_ARG:
+        off = argoff_v11(s);
+        index = frameindex_v11();
+        break;
+
+    case SC_ISTATIC:
+        msym = s->Ssym;
+        break;
+
+    case SC_XEXTREF:
+    case SC_EXLINK:
+    case SC_EXTDEF:
+    case SC_EXTREF:
+    case SC_INTDEF:
+    case SC_INTREF:
+    case SC_INLINK:
+        msym = s;
+        break;
+
+    default:
+        return 0;
+    }
+
+    (void) vrstoreal(reg, VR2(reg));
+    hi = vrreal(reg);
+    lo = vrreal(VR2(reg));
+    flushcode();
+
+    if (!tisunsign(reg->Vrtype)) {
+        n = kccfmt(buf, sizeof(buf), "\tTLZ\t%o,0400000\n", lo);
+        codestr(buf, n);
+        n = kccfmt(buf, sizeof(buf), "\tTLNE\t%o,0400000\n", hi);
+        codestr(buf, n);
+        n = kccfmt(buf, sizeof(buf), "\t TLO\t%o,0400000\n", lo);
+        codestr(buf, n);
+    }
+
+    codemdx(P_DMOVEM, hi, msym, off, index);
+    flushcode();
+
+    if (!tisunsign(reg->Vrtype)) {
+        n = kccfmt(buf, sizeof(buf), "\tTLZ\t%o,0400000\n", lo);
+        codestr(buf, n);
+    }
+    return 1;
 }
 
 
@@ -3150,6 +3235,12 @@ gassign(NODE *n)
 	    {
 	    int ar, hi, lo, nout, aflags;
 	    char buf[160];
+
+            if (gdimodirectstore(r1, nod)) {
+                if (volat)
+                    flushcode();
+                return r1;
+            }
 
 	    code0(P_PUSH, VR_SP, r1);
 	    code0(P_PUSH, VR_SP, VR2(r1));
