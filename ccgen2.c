@@ -5878,6 +5878,8 @@ gincdec(NODE *n, int inc, int pre)
 		    int_error("gincdec: 0-size reg ptr %N", n);
 		if (tisbytepointer(n->Ntype))
 		    {
+		    int steps;
+
 		    if (!pre)
 			{
 			r = vrget();
@@ -5885,15 +5887,70 @@ gincdec(NODE *n, int inc, int pre)
 			code00(P_MOVE, r->Vrloc, n->Nid->Sreg);
 			}
 
-		    /* ADJBP needs separate count/result and pointer operands.
-		    ** Use KCC's reserved scratch AC and flush around the
-		    ** sequence so register coalescing cannot make them alias.
+		    /* A positive small constant adjustment needs no count/result
+		    ** scratch register.  Generate IBP directly instead of first
+		    ** constructing MOVE AC16,n / ADJBP AC16,p and hoping the
+		    ** peepholer can recover the simpler form.  This also lets the
+		    ** function prologue omit the otherwise unnecessary AC16 save.
+		    ** Keep the same profitability rule as foldadjbp().
 		    */
-		    flushcode();
-		    codr1(P_MOVE, R_SCRREG, inc * size);
-		    code00(P_ADJBP, R_SCRREG, n->Nid->Sreg);
-		    code00(P_MOVE, n->Nid->Sreg, R_SCRREG);
-		    flushcode();
+		    steps = (int)size;
+		    if (inc > 0 && steps > 0
+		      && (steps == 1 || (tgcpu <= TGCPU_KI && steps <= 3)))
+			while (steps-- > 0)
+			    code00(P_IBP, 0, n->Nid->Sreg);
+		    else if (inc < 0 && tgcpu <= TGCPU_KI && steps > 0)
+			{
+			int bits = elembsize(n->Ntype);
+			int bpw = bits > 0 ? TGSIZ_WORD / bits : 0;
+			int trail = bpw > 0 ? (bpw - (steps % bpw)) % bpw : 99;
+
+			/* For a known local byte-pointer format, move the address
+			** backwards by whole words without touching P/S, then walk
+			** forward to the preceding byte with IBP.  Keep the pointer
+			** in real stack memory while changing its right half so this
+			** also works on PDP-6, whose accumulators are not low-core
+			** memory operands.  AC16 is already preserved by the function
+			** prologue for negative byte-pointer adjustment.
+			*/
+			if (bpw > 0 && trail <= 5)
+			    {
+			    int words = (steps + bpw - 1) / bpw;
+
+			    code00(P_PUSH, R_SP, n->Nid->Sreg);
+			    flushcode();
+			    ++stackoffset;
+			    codemdx(P_HRRZ, R_SCRREG, (SYMBOL *)NULL, 0, R_SP);
+			    codr1(P_SUB, R_SCRREG, words);
+			    codemdx(P_HRRM, R_SCRREG, (SYMBOL *)NULL, 0, R_SP);
+			    flushcode();
+			    code00(P_POP, R_SP, n->Nid->Sreg);
+			    --stackoffset;
+			    while (trail-- > 0)
+				code00(P_IBP, 0, n->Nid->Sreg);
+			    }
+			else
+			    {
+			    flushcode();
+			    codr1(P_MOVE, R_SCRREG, inc * size);
+			    code00(P_ADJBP, R_SCRREG, n->Nid->Sreg);
+			    code00(P_MOVE, n->Nid->Sreg, R_SCRREG);
+			    flushcode();
+			    }
+			}
+		    else
+			{
+			/* General ADJBP needs separate count/result and pointer
+			** operands.  Use KCC's reserved scratch AC and flush
+			** around the sequence so register coalescing cannot make
+			** them alias.
+			*/
+			flushcode();
+			codr1(P_MOVE, R_SCRREG, inc * size);
+			code00(P_ADJBP, R_SCRREG, n->Nid->Sreg);
+			code00(P_MOVE, n->Nid->Sreg, R_SCRREG);
+			flushcode();
+			}
 
 		    if (pre)
 			{

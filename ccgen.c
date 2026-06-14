@@ -18,7 +18,7 @@ extern void ridlsym(SYMBOL *);
 extern void vlaclear_v12(void);				/* CCSYM */
 extern SYMBOL *newlabel(void);
 extern void freelabel(SYMBOL *);
-extern INT sizearray(TYPE *), sizetype(TYPE *);		/* CCSYM */
+extern INT sizearray(TYPE *), sizetype(TYPE *), sizeptobj(TYPE *);	/* CCSYM */
 extern int elembsize(TYPE *);
 extern void code5(int, VREG *), 
 	code6(int, VREG *, SYMBOL *), codemdx(int, int, SYMBOL *, INT, int), 
@@ -697,7 +697,20 @@ fn_needs_scrreg(NODE *root)
 	     op == N_POSTINC || op == N_POSTDEC) &&
 	    n->Ntype && tisbytepointer(n->Ntype) &&
 	    n->Nleft && Register_Id(n->Nleft))
-	    return 1;
+	    {
+	    int steps = (int)sizeptobj(n->Ntype);
+
+	    /* gincdec() emits small positive register byte-pointer steps as
+	    ** IBP directly, so those trees do not touch the reserved AC16.
+	    ** Negative and larger adjustments still use ADJBP and remain
+	    ** conservative here.
+	    */
+	    if ((op == N_PREINC || op == N_POSTINC) && steps > 0
+	      && (steps == 1 || (tgcpu <= TGCPU_KI && steps <= 3)))
+		;
+	    else
+		return 1;
+	    }
 
 	if ((op == Q_PLUS || op == Q_MINUS ||
 	     op == Q_ASPLUS || op == Q_ASMINUS) &&
