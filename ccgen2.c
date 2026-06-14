@@ -4699,10 +4699,9 @@ gmaybitadjust(VREG *ptr, VREG *count, TYPE *t, int neg)
 static VREG *
 gmaybitsub(VREG *left, VREG *right, TYPE *t)
 {
-    VREG *v, *l, *r, *res;
-    SYMBOL *done;
+    VREG *tmp, *l, *r, *res;
+    SYMBOL *bitlab, *done;
     INT bits, stride, nsize;
-    int off;
 
     bits = (t != NULL && t->Tsubt != NULL) ? tbitsize(t->Tsubt) : 0;
     stride = ((bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR) * TGSIZ_CHAR;
@@ -4718,33 +4717,41 @@ gmaybitsub(VREG *left, VREG *right, TYPE *t)
     vrfree(left);
     vrfree(right);
 
-    /* A MAYBITPTR expression can legitimately combine a recovered S=1
-    ** pointer with an ordinary native pointer of the same C type.  Normalize
-    ** each operand independently to S=1 before subtraction; assuming both
-    ** operands already have the same runtime representation loses subword
-    ** positions after a void-pointer round trip.
+    /* Pointers into one C array have one representation.  Native exact-width
+    ** arrays retain their native byte size, while packed members use KCC's
+    ** S=1 logical bit address.  Do not canonicalize native pointers to S=1:
+    ** that changes a 16-bit native element stride into the packed 18-bit
+    ** stride and therefore changes pointer subtraction semantics.
     */
-    for (off = -1; off <= 0; ++off)
-        {
-        v = vrget();
-        codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, off, R_SP);
-        code0(P_HLRZ, v, v);
-        code8(P_LSH, v, -6);
-        code1(P_AND, v, 077);
-        done = newlabel();
-        code8(P_CAI+POF_ISSKIP+POS_SKPN, v, 1);
-        code6(P_JRST, (VREG *)NULL, done);
-        vrfree(v);
+    tmp = vrget();
+    codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, -1, R_SP);
+    code0(P_HLRZ, tmp, tmp);
+    code8(P_LSH, tmp, -6);
+    code1(P_AND, tmp, 077);
+    bitlab = newlabel();
+    done = newlabel();
+    code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
+    code6(P_JRST, (VREG *)NULL, bitlab);
+    vrfree(tmp);
 
-        v = vrget();
-        codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, off, R_SP);
-        code10(P_PTRCNV, v, (SYMBOL *)NULL, 1, -nsize);
-        codemdx(P_MOVEM, vrtoreal(v), (SYMBOL *)NULL, off, R_SP);
-        vrfree(v);
-        flushcode();
-        codlabel(done);
-        }
+    /* Native byte-pointer representation. */
+    l = vrget();
+    r = vrget();
+    codemdx(P_MOVE, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
+    codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
+    vrlowiden(l);
+    code0(P_SUBBP, l, r);
+    if (previous && previous->Pop == P_SUBBP)
+        previous->Pbsize = nsize;
+    vrnarrow(l = VR2(l));
+    codemdx(P_MOVEM, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
+    vrfree(l);
+    vrfree(r);
+    code6(P_JRST, (VREG *)NULL, done);
+    flushcode();
 
+    /* Logical packed representation. */
+    codlabel(bitlab);
     l = vrget();
     r = vrget();
     codemdx(P_MOVE, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
@@ -4764,7 +4771,9 @@ gmaybitsub(VREG *left, VREG *right, TYPE *t)
     codemdx(P_MOVEM, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
     vrfree(l);
     vrfree(r);
+    flushcode();
 
+    codlabel(done);
     res = vrget();
     res->Vrtype = ptrdifftype;
     codemdx(P_MOVE, vrtoreal(res), (SYMBOL *)NULL, -1, R_SP);
@@ -5144,15 +5153,11 @@ gcastptr(VREG *r, TYPE *tfrom, TYPE *tto)
 {
     int fsiz, tsiz;
 
-    /* Erasing the pointed-to type must leave one canonical opaque form.
-    ** A non-character subword pointer must become self-describing before
-    ** its pointed-to type is erased.  TF_MAYBITPTR may already hold either
-    ** a native byte pointer or KCC's S=1 logical bit address; an ordinary
-    ** exact-width byte pointer is native.  Preserve S=1 and NULL, and convert
-    ** every native form to S=1 before the value becomes an ordinary void *.
-    **
-    ** The value is spilled because codlabel() may flush the virtual-register
-    ** state.  Never return a VREG which lived across such a control-flow join.
+    /* Erasing the pointed-to type must preserve the pointer representation.
+    ** A TF_MAYBITPTR value is self-describing: ordinary exact-width arrays
+    ** use their native byte size, while packed members use S=1.  Converting
+    ** native exact-width pointers to S=1 here loses their native element
+    ** stride and breaks arithmetic after a void-pointer round trip.
     */
     if ((tismaybitptr(tfrom)
          || (tisbytepointer(tfrom) && tfrom->Tsubt != NULL
@@ -5163,38 +5168,53 @@ gcastptr(VREG *r, TYPE *tfrom, TYPE *tto)
                   && tbitsize(tfrom->Tsubt) == TGSIZ_CHAR)))
       && tto != NULL && tto->Tspec == TS_PTR
       && tto->Tsubt != NULL && tto->Tsubt->Tspec == TS_VOID) {
+        if (r)
+            r->Vrtype = tto;
+        return r ? r : (VREG *)-1;
+    }
+
+    /* A void pointer produced from an ordinary native byte pointer already
+    ** contains the complete byte pointer.  If its encoded S field matches
+    ** the destination type, preserve it verbatim; otherwise retain the
+    ** historical word-to-byte reconstruction path below.
+    */
+    if (tfrom != NULL && tfrom->Tspec == TS_PTR
+      && tfrom->Tsubt != NULL && tfrom->Tsubt->Tspec == TS_VOID
+      && tisbytepointer(tto) && !tismaybitptr(tto)) {
         VREG *tmp, *v;
-        SYMBOL *done;
+        SYMBOL *convert, *done;
 
         if (!r)
             return (VREG *)-1;
-        fsiz = elembsize(tfrom);
-        if (!fsiz)
-            fsiz = TGSIZ_CHAR;
+        tsiz = elembsize(tto);
+        if (!tsiz)
+            tsiz = TGSIZ_CHAR;
 
         code0(P_PUSH, VR_SP, r);
         ++stackoffset;
         vrfree(r);
-
+        convert = newlabel();
         done = newlabel();
+
         tmp = vrget();
-        codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, 0, R_SP);
-        code6(P_JUMP+POS_SKPE, tmp, done);       /* NULL stays NULL. */
-        code0(P_HLRZ, tmp, tmp);
+        codemdx(P_HLRZ, vrtoreal(tmp), (SYMBOL *)NULL, 0, R_SP);
         code8(P_LSH, tmp, -6);
         code1(P_AND, tmp, 077);
-        code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
-        code6(P_JRST, (VREG *)NULL, done);      /* Already canonical S=1. */
+        code8(P_CAI+POF_ISSKIP+POS_SKPE, tmp, tsiz);
+        code6(P_JRST, (VREG *)NULL, convert);  /* Convert only mismatched S. */
         vrfree(tmp);
+        code6(P_JRST, (VREG *)NULL, done);      /* Matching native S survives. */
+        flushcode();
 
+        codlabel(convert);
         v = vrget();
         codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
-        code10(P_PTRCNV, v, (SYMBOL *)NULL, 1, -fsiz);
+        pitopc(v, tsiz, 0, 0);                  /* Historical conversion. */
         codemdx(P_MOVEM, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
         vrfree(v);
         flushcode();
-        codlabel(done);
 
+        codlabel(done);
         r = vrget();
         r->Vrtype = tto;
         codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
@@ -5225,13 +5245,13 @@ gcastptr(VREG *r, TYPE *tfrom, TYPE *tto)
         done = newlabel();
 
         tmp = vrget();
-        codemdx(P_MOVE, vrtoreal(tmp), (SYMBOL *)NULL, 0, R_SP);
-        code6(P_JUMP+POS_SKPE, tmp, done);       /* NULL stays NULL. */
-        code0(P_HLRZ, tmp, tmp);
+        codemdx(P_HLRZ, vrtoreal(tmp), (SYMBOL *)NULL, 0, R_SP);
         code8(P_LSH, tmp, -6);
         code1(P_AND, tmp, 077);
         code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, 1);
-        code6(P_JRST, (VREG *)NULL, done);      /* Canonical S=1 survives. */
+        code6(P_JRST, (VREG *)NULL, done);      /* Logical S=1 survives. */
+        code8(P_CAI+POF_ISSKIP+POS_SKPN, tmp, tsiz);
+        code6(P_JRST, (VREG *)NULL, done);      /* Same native size survives. */
         vrfree(tmp);
 
         v = vrget();
