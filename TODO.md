@@ -51,7 +51,10 @@ KA10, KI10, and KS10.
   `IBP` on PDP-6/KA10/KI10 while KS10/KL10 keep native `ADJBP`.  Simple named
   DImode assignments store the live pair directly instead of pushing it,
   reconstructing the destination address, and reloading another pair; KI10 and
-  later use `DMOVEM`, while PDP-6/KA10 expand it to two `MOVEM`s.  Representative
+  later use `DMOVEM`, while PDP-6/KA10 expand it to two `MOVEM`s.  Constant
+  negative arithmetic on ordinary native byte pointers now uses a PDP-6-safe
+  whole-word address decrement plus forward `IBP`s on PDP-6/KA10/KI10 instead
+  of `%ADJBPH`; KS10/KL10 retain native `ADJBP`.  Representative
   exact-width, DImode ABI, packed-value, aggregate, and mixed-call paths were
   rechecked.  Do not add allocator/control-flow complexity merely to remove the
   remaining one-instruction exact-18 return copy.

@@ -215,6 +215,7 @@ static VREG *gassign(NODE *),
 	*garithop(int, VREG *, VREG *, int),
 	*gptrop(int, VREG *, VREG *, TYPE *, TYPE *),
 	*gptraddend(TYPE *, NODE *),
+	*gbyteptrconstminus(VREG *, TYPE *, INT),
 	*gmaybitadjust(VREG *, VREG *, TYPE *, int),
 	*gmaybitsub(VREG *, VREG *, TYPE *),
 	*gptrcanoncmp(VREG *, TYPE *),
@@ -4163,6 +4164,22 @@ gbinary(NODE *n)
 		}
 	    else					/* Case 3: ptr-num */
 		{
+		/* On PDP-6/KA10/KI10, a constant negative adjustment of an
+		** ordinary native byte pointer is much cheaper than the software
+		** ADJBP helper.  Keep this deliberately local: the count must be
+		** a positive compile-time constant and the pointer representation
+		** must be a normal native byte pointer, not a packed/logical or
+		** representation-polymorphic pointer.
+		*/
+		if (optgen && tgcpu <= TGCPU_KI && n->Nright->Nop == N_ICONST
+		  && n->Nright->Niconst > 0 && tisbytepointer(n->Nleft->Ntype)
+		  && !tisbitptr(n->Nleft->Ntype)
+		  && !tispackedptr(n->Nleft->Ntype)
+		  && !tismaybitptr(n->Nleft->Ntype)) {
+		    r1 = genexpr(n->Nleft);
+		    return gbyteptrconstminus(r1, n->Nleft->Ntype,
+			n->Nright->Niconst);
+		}
 		r1 = genexpr(n->Nleft);				/* Make ptr */
 		r2 = gptraddend(n->Nleft->Ntype, n->Nright);	/* Make num */
 		return gptrop(n->Nop, r1, r2,
@@ -4505,6 +4522,46 @@ garithop(int op, struct vreg * r1, struct vreg * r2, int ts)
 	    vrfree(r2);
 	}
     return r1;
+}
+
+/* GBYTEPTRCONSTMINUS - Subtract a positive constant from a native byte ptr.
+**
+** Early PDP-10 CPUs have no hardware ADJBP.  For an ordinary byte pointer,
+** moving back N bytes can be expressed as a whole-word address decrement
+** followed by at most bytes-per-word-1 forward IBPs.  Keep the pointer in
+** real stack memory while changing its right half so the sequence is also
+** valid on PDP-6, whose accumulators are not low-core memory operands.
+**
+** The caller deliberately excludes packed/logical and representation-
+** polymorphic pointers; those require their existing general paths.
+*/
+static VREG *
+gbyteptrconstminus(VREG *p, TYPE *pt, INT count)
+{
+    INT steps, words;
+    int bits, bpw, trail;
+
+    bits = elembsize(pt);
+    bpw = bits > 0 ? TGSIZ_WORD / bits : 0;
+    steps = sizeptobj(pt) * count;
+    if (bpw <= 0 || steps <= 0)
+        return p;
+
+    words = (steps + bpw - 1) / bpw;
+    trail = (int)(words * bpw - steps);
+
+    code0(P_PUSH, VR_SP, p);
+    flushcode();
+    ++stackoffset;
+    codemdx(P_HRRZ, R_SCRREG, (SYMBOL *)NULL, 0, R_SP);
+    codr1(P_SUB, R_SCRREG, words);
+    codemdx(P_HRRM, R_SCRREG, (SYMBOL *)NULL, 0, R_SP);
+    flushcode();
+    code0(P_POP, VR_SP, p);
+    --stackoffset;
+    while (trail-- > 0)
+        code00(P_IBP, 0, vrtoreal(p));
+    return p;
 }
 
 /* GPTROP - Generate code for pointer arithmetic operations.
