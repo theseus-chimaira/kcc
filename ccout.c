@@ -1895,10 +1895,16 @@ outadjbp_body (void)
     ** Entry:  AC1  = byte pointer
     **         AC16 = signed byte count
     ** Exit:   AC1  = adjusted byte pointer
-    ** Clobbers AC13, AC14, AC15, AC16.
+    ** Preserves AC13, AC14, AC15; clobbers AC16.
     */
     fprintf(out, "\tJUMPE\t1,%%ADJX%o\n", n);
     fprintf(out, "\tJUMPE\t16,%%ADJX%o\n", n);
+    /* Preserve the helper's fixed scratch ACs here rather than at every
+    ** call site.  This costs the same push/pop traffic at run time, but
+    ** emits the six save/restore instructions only once per module. */
+    outstr("\tPUSH\t17,13\n");
+    outstr("\tPUSH\t17,14\n");
+    outstr("\tPUSH\t17,15\n");
     outstr("\tPUSH\t17,1\n");
     fprintf(out, "\tJUMPL\t16,%%ADJN%o\n", n);
     fprintf(out, "%%ADJP%o:\tIBP\t0(17)\n", n);
@@ -1940,6 +1946,9 @@ outadjbp_body (void)
     fprintf(out, "\tAOJL\t16,%%ADNI%o\n", n);
     outstr("\tSUB\t17,[2,,2]\n");
     fprintf(out, "%%ADJR%o:\tPOP\t17,1\n", n);
+    outstr("\tPOP\t17,15\n");
+    outstr("\tPOP\t17,14\n");
+    outstr("\tPOP\t17,13\n");
     fprintf(out, "%%ADJX%o:\n", n);
 }
 
@@ -1953,18 +1962,6 @@ simadjbp (PCODE *p)
     if ((p->Ptype & ~PTF_SKIPPED) != PTV_IMMED) {
         srcreg = (((p->Ptype & PTF_ADRMODE) == PTA_REGIS) ? p->Pr2 : -1);
 	npush = 0;
-	if (p->Preg != 13) {
-	    outstr("\tPUSH\t17,13\n");
-	    ++npush;
-	}
-	if (p->Preg != 14) {
-	    outstr("\tPUSH\t17,14\n");
-	    ++npush;
-	}
-	if (p->Preg != 15) {
-	    outstr("\tPUSH\t17,15\n");
-	    ++npush;
-	}
 	if (p->Preg != 1) {
 	    outstr("\tPUSH\t17,1\n");
 	    ++npush;
@@ -2018,24 +2015,11 @@ simadjbp (PCODE *p)
 	outadjsp(-2);
 	if (p->Preg != 1)
 	    outstr("\tPOP\t17,1\n");
-
-	if (p->Preg != 15)
-	    outstr("\tPOP\t17,15\n");
-	if (p->Preg != 14)
-	    outstr("\tPOP\t17,14\n");
-	if (p->Preg != 13)
-	    outstr("\tPOP\t17,13\n");
 	return;
     }
 
     n = p->Pvalue;
     if (n < 0) {
-	if (p->Preg != 13)
-	    outstr("\tPUSH\t17,13\n");
-	if (p->Preg != 14)
-	    outstr("\tPUSH\t17,14\n");
-	if (p->Preg != 15)
-	    outstr("\tPUSH\t17,15\n");
 	if (p->Preg != 1) {
 	    outstr("\tPUSH\t17,1\n");
 	    fprintf(out, "\tSETM\t1,%o\n", p->Preg);
@@ -2054,12 +2038,6 @@ simadjbp (PCODE *p)
 	    fprintf(out, "\tSETM\t%o,1\n", p->Preg);
 	    outstr("\tPOP\t17,1\n");
 	}
-	if (p->Preg != 15)
-	    outstr("\tPOP\t17,15\n");
-	if (p->Preg != 14)
-	    outstr("\tPOP\t17,14\n");
-	if (p->Preg != 13)
-	    outstr("\tPOP\t17,13\n");
 	return;
     }
 

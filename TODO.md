@@ -54,7 +54,12 @@ KA10, KI10, and KS10.
   later use `DMOVEM`, while PDP-6/KA10 expand it to two `MOVEM`s.  Constant
   negative arithmetic on ordinary native byte pointers now uses a PDP-6-safe
   whole-word address decrement plus forward `IBP`s on PDP-6/KA10/KI10 instead
-  of `%ADJBPH`; KS10/KL10 retain native `ADJBP`.  Representative
+  of `%ADJBPH`; KS10/KL10 retain native `ADJBP`.  The early-CPU `%ADJBPH`
+  fallback preserves its fixed AC13--AC15 scratch registers inside the shared
+  helper rather than duplicating six save/restore instructions at every call
+  site; one-call modules are size-neutral and modules with multiple general
+  adjustments become smaller without changing run-time push/pop traffic.
+  Representative
   exact-width, DImode ABI, packed-value, aggregate, and mixed-call paths were
   rechecked.  Do not add allocator/control-flow complexity merely to remove the
   remaining one-instruction exact-18 return copy.
