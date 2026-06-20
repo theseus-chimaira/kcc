@@ -59,7 +59,18 @@ KA10, KI10, and KS10.
   helper rather than duplicating six save/restore instructions at every call
   site; one-call modules are size-neutral and modules with multiple general
   adjustments become smaller without changing run-time push/pop traffic.
-  Representative
+  Runtime-classified S=1 exact-width packed-pointer scalar loads/stores now
+  retain one one-bit pointer and stream it with IBP/ILDB instead of rebuilding
+  base+i with ADJBP for every bit.  Internal fixed-size packed scalar and
+  bit-field loads/stores likewise retain one native byte pointer across their
+  fragments instead of reconstructing it for each address unit.  Aligned
+  packed aggregate materialization and assignment now stream source and
+  destination byte pointers for both discarded and used results, including
+  large chained assignments, while preserving the original destination as the
+  expression value where required.  Arbitrary-bit-offset nested packed
+  aggregate values, stores, and used copies now likewise keep one pinned
+  source/destination byte pointer and step it with `IBP`, avoiding repeated
+  base+byte reconstruction and early-CPU `%ADJBPH` calls.  Representative
   exact-width, DImode ABI, packed-value, aggregate, and mixed-call paths were
   rechecked.  Do not add allocator/control-flow complexity merely to remove the
   remaining one-instruction exact-18 return copy.
