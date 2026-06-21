@@ -1,93 +1,86 @@
-# KCC for PDP-10
+# KCC
 
-KCC is a C compiler targeting the PDP-10 family. This tree is the maintained
-DAIMOS-oriented KCC port and is intended to remain useful on small and
-historical PDP-10 systems while interoperating with the modern PDP-10 toolchain.
+KCC IS THE PDP-10 C COMPILER USED BY THE DAIMOS TOOLCHAIN.
 
-The compiler supports PDP-6, KA10, KI10, KL10, and KS10 target selection, plus
-target variants needed by supported operating environments. Generated source
-uses the PDP-10 assembler toolchain installed below `PDP10_PREFIX`.
+THE COMPILER TARGETS THE PDP-6, KA10, KI10, KL10, AND KS10 FAMILIES AND
+SUPPORTS TARGET-SPECIFIC CODE GENERATION NEEDED BY THE SUPPORTED PDP-10
+ENVIRONMENTS.
 
-## Project layout
+THE PROJECT FAVORS CORRECT CODE GENERATION, SMALL COMPILER AND RUN-TIME MEMORY
+USE, AND COMPATIBILITY WITH THE COMMON PDP-10 C ABI.
 
-- `cc*.c`, `cc*.h`: compiler front end, optimizer, register allocator, and code
-  generator.
-- `runtime/`: target runtime assembly and compiler-private helper fragments.
-- `TODO.md`: remaining implementation, audit, compatibility, and optimization
-  work plus design constraints which must be preserved.
-- `LICENSE`: project license.
+## TREE
 
-Compiler regression tests do not live in this repository. They are maintained
-in `pdp10-c-testkit`, under `tests/kcc-regression`, so KCC, GCC, and shared
-PDP-10 C behavior are tested from one test project.
+COMPILER SOURCES ARE IN THE PROJECT ROOT.
 
-## Build
+RUNTIME CONTAINS TARGET-SPECIFIC ASSEMBLY HELPERS USED BY GENERATED CODE.
 
-Set `PDP10_PREFIX` to the installed PDP-10 toolchain prefix and run:
+LICENSE CONTAINS THE PROJECT LICENSE.
 
-```sh
-make
-```
+README.MD DESCRIBES THE PROJECT.
 
-The host compiler defaults to `gcc` and can be overridden with `CC`. The build
-requires a C99-capable host compiler; this is a host-build requirement and does
-not change the language modes accepted by KCC itself.
+TODO.MD CONTAINS OPEN WORK ONLY.
 
-Useful targets are:
+STATUS.MD IS THE SOLE DOCUMENT FOR CURRENT IMPLEMENTATION STATE.
 
-```text
-make                 build KCC and verify runtime source presence
-make asm             self-compile compiler sources to PDP-10 assembly
-make install         install KCC and its runtime below PDP10_PREFIX
-make install-runtime install only the runtime assembly
-make clean           remove host objects, self-compiled assembly, and KCC
-make source-tar      create a source archive from committed files
-```
+COMPILER REGRESSION TESTS BELONG IN PDP-C-TESTKIT, NOT IN THIS REPOSITORY.
 
-Tests are run from `pdp10-c-testkit`, not through this Makefile.
+## BUILD
 
-## PDP-10 C ABI
+THE HOST BUILD REQUIRES A C99 COMPILER.
 
-The canonical DAIMOS PDP-10 C ABI uses four argument registers and four return
-registers. AC0 through AC7 are call-clobbered; the remaining ABI-preserved
-register state is restored by normal KCC-generated callees. KCC accepts its
-historical `-r7` setting; incompatible register-ABI selections are rejected.
+BUILD KCC WITH:
 
-For a normal call, the first four argument words are passed in AC1 through AC4.
-Additional words are passed on the stack. Multiword arguments consume
-consecutive argument positions. A hidden structure-result pointer occupies
-AC1, shifting user arguments by one word.
+    MAKE
 
-Scalar results use AC1. Multiword and aggregate return conventions use the
-canonical register/result rules shared with the DAIMOS PDP-10 GCC port. Code
-which mixes old stack-only KCC objects with the canonical ABI is unsupported;
-rebuild all C objects and C-callable assembly when migrating an old system.
+BUILD PDP-10 ASSEMBLY FROM THE COMPILER SOURCES WITH:
 
-The DAIMOS process entry contract supplies `argc` in AC1 and `argv` in AC2.
-The startup code passes those values directly to `main`; its result is returned
-through AC1 to `exit`.
+    MAKE ASM
 
-Compiler-private runtime helpers may use internal conventions when they are not
-externally C-callable. Such helpers do not alter the public C ABI.
+INSTALL KCC AND ITS RUNTIME BELOW PDP10_PREFIX WITH:
 
-## Compatibility policy
+    MAKE INSTALL PDP10_PREFIX=/PATH
 
-KCC and PDP-10 GCC should share source and ABI behavior where that is practical,
-but KCC is not to be redesigned merely to imitate GCC. Prefer, in order:
+THE NORMAL DAIMOS TOOLCHAIN USES PDP10_PREFIX AS THE INSTALLATION PREFIX.
 
-1. correct test classification and shared headers;
-2. a well-defined common language and ABI subset;
-3. explicit adapters where native representations differ;
-4. small compiler improvements which are independently useful;
-5. compiler redesign only when required for correctness, not compatibility
-   cosmetics.
+## TARGET SELECTION
 
-Compiler bugs exposed by valid source must be fixed in the compiler rather than
-hidden by source-side workarounds.
+KCC SUPPORTS PDP-6, KA10, KI10, KL10, AND KS10 TARGET SELECTION.
 
-## Testing
+THE PDP-6 TARGET IS THE PORTABLE BASE FOR DAIMOS CODE THAT MUST RUN ON THE
+EARLIEST SUPPORTED PROCESSOR.
 
-Use the separate `pdp10-c-testkit` repository. The imported KCC regression
-suite can be run with its dedicated KCC regression target, while the normal
-matrix compares KCC, GCC, and other supported compilers where tests are
-semantically comparable.
+KL10 NON-ZERO-SECTION CODE REQUIRES A COMPILER BUILT WITH MULTI_SECTION
+SUPPORT.  THE NORMAL BUILD DOES NOT SILENTLY SUBSTITUTE SECTION-ZERO CODE FOR
+THAT TARGET.
+
+## ABI
+
+THE DAIMOS PDP-10 C ABI USES FOUR ARGUMENT REGISTERS AND FOUR RETURN REGISTERS.
+AC0 THROUGH AC7 ARE CALL-CLOBBERED.
+
+THE FIRST FOUR ARGUMENT WORDS USE AC1 THROUGH AC4.  ADDITIONAL ARGUMENT WORDS
+USE THE STACK.  MULTIWORD ARGUMENTS CONSUME CONSECUTIVE ARGUMENT POSITIONS.
+
+SCALAR RESULTS USE AC1.  MULTIWORD AND AGGREGATE RESULTS FOLLOW THE COMMON
+PDP-10 ABI RULES USED BY DAIMOS C TOOLCHAINS.
+
+THE DAIMOS PROCESS ENTRY CONTRACT SUPPLIES ARGC IN AC1 AND ARGV IN AC2.
+
+OLD STACK-ONLY KCC OBJECTS ARE NOT ABI-COMPATIBLE WITH THE CURRENT REGISTER
+ABI.  REBUILD C OBJECTS AND C-CALLABLE ASSEMBLY WHEN MOVING OLD SOFTWARE TO
+THE CURRENT ABI.
+
+## POLICY
+
+VALID SOURCE THAT EXPOSES A COMPILER OR CODE-GENERATOR BUG MUST BE FIXED IN
+KCC.  DO NOT HIDE COMPILER DEFECTS WITH SOURCE-SIDE WORKAROUNDS.
+
+PREFER, IN ORDER:
+
+1. CORRECTNESS.
+2. LOWER COMPILER AND RUN-TIME RAM USE.
+3. EXECUTION SPEED.
+4. SMALLER DISK SIZE.
+
+AVOID FEATURE CREEP AND TARGET-SPECIFIC COMPLEXITY WITHOUT A DEMONSTRATED NEED.
