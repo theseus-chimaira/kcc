@@ -44,9 +44,13 @@ asm self-asm: $(ASMS)
 
 runtime: $(RUNTIME)
 
-install: kcc install-runtime
+install:
+	$(MAKE) clean
+	$(MAKE) all
 	$(INSTALL) -d $(DESTDIR)$(BINDIR)
 	$(INSTALL) -m 755 kcc $(DESTDIR)$(BINDIR)/kcc
+	cmp kcc $(DESTDIR)$(BINDIR)/kcc
+	$(MAKE) install-runtime
 
 install-runtime: runtime
 	$(INSTALL) -d $(DESTDIR)$(KCCLIBDIR)
