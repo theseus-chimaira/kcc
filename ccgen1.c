@@ -1382,7 +1382,9 @@ greturn (NODE *n)
 		else
 		    code0 (P_DMOVE, VR_RETVAL, r);
                 if (!tisunsign(n->Ntype)) {
-                    code8(P_TLZ, VR_RETDBL, 0400000L);
+                    /* KCC keeps live DImode low35-canonical.  Returning it
+                    ** only needs to copy the high sign into the ABI bit.
+                    */
                     code8(P_TLN+POF_ISSKIP+POS_SKPE, VR_RETVAL, 0400000L);
                     code8(P_TLO, VR_RETDBL, 0400000L);
                 }

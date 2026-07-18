@@ -623,7 +623,7 @@ flushcode(void)
 	    for (i = mincode; i < maxcode; ++i)
 		{
 		p = &codes[i & (MAXCODE-1)];
-		if (p->Pop == P_MOVE
+		if ((p->Pop == P_MOVE || p->Pop == P_DMOVE)
 		  && (p->Ptype & ~PTF_SKIPPED) == PTA_REGIS
 		  && p->Preg == p->Pr2 && !prevskips(p))
 		    p->Pop = P_NOP;
@@ -1091,6 +1091,25 @@ flushcode(void)
 		    q->Pop = P_NOP;
 		    ++i;
 		    }
+		}
+
+	/* Some of the final folds above can themselves create exact no-ops.
+	** Sweep once more immediately before output.  This remains bounded by
+	** the existing peephole buffer and carries no state between flushes.
+	*/
+	if (optobj)
+	    for (i = mincode; i < maxcode; ++i)
+		{
+		p = &codes[i & (MAXCODE-1)];
+		if ((p->Pop == P_MOVE || p->Pop == P_DMOVE)
+		  && (p->Ptype & ~PTF_SKIPPED) == PTA_REGIS
+		  && p->Preg == p->Pr2 && !prevskips(p))
+		    p->Pop = P_NOP;
+		else if ((p->Pop == P_ADD || p->Pop == P_SUB
+		       || p->Pop == P_IOR || p->Pop == P_XOR)
+		  && (p->Ptype & ~PTF_SKIPPED) == PTV_IMMED
+		  && p->Pvalue == 0 && !prevskips(p))
+		    p->Pop = P_NOP;
 		}
 
 	prvskip = (previous && isskip(previous->Pop))	/* If prev was skip, */

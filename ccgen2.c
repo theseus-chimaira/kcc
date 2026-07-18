@@ -130,13 +130,17 @@ gccabi_dimode_normalize_reg(int lo)
 void
 gccabi_dimode_encode_regs(int hi, int lo)
 {
-    char buf[112];
+    char buf[80];
     int n;
+
+    /* Callers pass KCC's canonical high36:low35 internal pair.  Encoding
+    ** for the external ABI therefore only has to duplicate the high sign
+    ** into bit 35 of the low word.
+    */
     n = kccfmt(buf, sizeof(buf),
-        "\tTLZ\t%o,0400000\n"
         "\tTLNE\t%o,0400000\n"
         "\t TLO\t%o,0400000\n",
-        lo, hi, lo);
+        hi, lo);
     codestr(buf, n);
 }
 
@@ -921,8 +925,9 @@ gdimemstore(VREG *reg, VREG *ra)
      * GCC-compatible low-word sign copying was added.
      */
     if (reg->Vrtype && !tisunsign(reg->Vrtype)) {
-        n = kccfmt(buf, sizeof(buf), "\tTLZ\t%o,0400000\n", lo);
-        codestr(buf, n);
+        /* Live signed DImode pairs are already canonical high36:low35.
+        ** Only copy the high sign into the external memory representation.
+        */
         n = kccfmt(buf, sizeof(buf), "\tTLNE\t%o,0400000\n", hi);
         codestr(buf, n);
         n = kccfmt(buf, sizeof(buf), "\t TLO\t%o,0400000\n", lo);
@@ -1005,8 +1010,9 @@ gdimodirectstore(VREG *reg, NODE *nod)
     flushcode();
 
     if (!tisunsign(reg->Vrtype)) {
-        n = kccfmt(buf, sizeof(buf), "\tTLZ\t%o,0400000\n", lo);
-        codestr(buf, n);
+        /* The live pair is already canonical; encode only the duplicated
+        ** memory sign bit, then clear it again after the store below.
+        */
         n = kccfmt(buf, sizeof(buf), "\tTLNE\t%o,0400000\n", hi);
         codestr(buf, n);
         n = kccfmt(buf, sizeof(buf), "\t TLO\t%o,0400000\n", lo);
@@ -2303,11 +2309,9 @@ gdimodeshift(int op, VREG *r1, VREG *r2, int ts)
     if (!direct_ashc)
         {
         n = kccfmt(buf, sizeof(buf),
-            "\tTLZ\t%o,0400000\n"
             "\tTRNE\t%o,1\n"
             "\t TLO\t%o,0400000\n"
             "\tLSH\t%o,-1\n",
-            lo,
             hi,
             lo,
             hi);
@@ -3262,24 +3266,22 @@ gassign(NODE *n)
 		nout = kccfmt(buf, sizeof(buf),
 		    "\tDMOVE\t%o,-1(17)\n"
 		    "\tSUB\t17,[2,,2]\n"
-                    "\tTLZ\t%o,0400000\n"
                     "\tTLNE\t%o,0400000\n"
                     "\t TLO\t%o,0400000\n"
 		    "\tDMOVEM\t%o,0(%o)\n"
                     "\tTLZ\t%o,0400000\n",
-		    hi, lo, hi, lo, hi, ar, lo);
+		    hi, lo, hi, lo, ar, lo);
 	    else
 		nout = kccfmt(buf, sizeof(buf),
 		    "\tMOVE\t%o,-1(17)\n"
 		    "\tMOVE\t%o,0(17)\n"
 		    "\tSUB\t17,[2,,2]\n"
-                    "\tTLZ\t%o,0400000\n"
                     "\tTLNE\t%o,0400000\n"
                     "\t TLO\t%o,0400000\n"
 		    "\tMOVEM\t%o,0(%o)\n"
 		    "\tMOVEM\t%o,1(%o)\n"
                     "\tTLZ\t%o,0400000\n",
-		    hi, lo, lo, hi, lo, hi, ar, lo, ar, lo);
+		    hi, lo, hi, lo, ar, lo, ar, lo);
 	    codestr(buf, nout);
 	    stackoffset -= 2;
 	    vrfree(ra);
@@ -5567,7 +5569,6 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 		if (bits == TGSIZ_WORD)
 		    {
 		    (void) vrstoreal(r, VR2(r));
-		    code8(P_TLZ, VR2(r), 0400000L);
 		    code8(P_TRN+POF_ISSKIP+POS_SKPE, r, 1);
 		    code8(P_TLO, VR2(r), 0400000L);
 		    }
@@ -5759,6 +5760,14 @@ gintwiden(VREG *r, TYPE *tfrom, TYPE *tto, NODE *n)
     */
     if (n && n->Nop == N_CAST
       && tbitsize(n->Ntype) < tbitsize(n->Nleft->Ntype))
+	return r;
+
+    /* Representation-polymorphic exact-width loads are assembled as an
+    ** unsigned bit stream and normalized to their declared signed type by
+    ** gmaybitloaddepth() before control returns here.  Do not sign-extend
+    ** that already-normalized value a second time during integer promotion.
+    */
+    if (n && n->Nop == N_PTR && maybitptrderef(n))
 	return r;
 
     if (tbitsize(tto) > tbitsize(tfrom))
@@ -8424,7 +8433,9 @@ gccabi_tail_regs(void)
             else if (cum == GCCABI_ARG_REGS - 1)
                 lowreg = GCCABI_ARG_REGS;
             if (lowreg) {
-                gccabi_dimode_normalize_reg(lowreg);
+                /* The private compatibility stack image contains KCC's
+                ** canonical low35 form, so encode it directly for the ABI.
+                */
                 if (cum < GCCABI_ARG_REGS - 1) {
                     gccabi_dimode_encode_regs(cum + 1, lowreg);
                 } else {
@@ -8858,7 +8869,7 @@ gfnarg(NODE *n)
 	case 2:
 	    reg = genexpr(n);
             if (tisdimode(n->Ntype) && !tisunsign(n->Ntype)) {
-                code8(P_TLZ, VR2(reg), 0400000L);
+                /* Internal signed DImode is already low35-canonical. */
                 code8(P_TLN+POF_ISSKIP+POS_SKPE, reg, 0400000L);
                 code8(P_TLO, VR2(reg), 0400000L);
             }
