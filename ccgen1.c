@@ -77,6 +77,7 @@ static int cbfind(struct constbind *, int, SYMBOL *);
 static void cbset(struct constbind *, int *, SYMBOL *, INT);
 static void cbsubst(NODE *, struct constbind *, int);
 static NODE *cbfold(NODE *, struct constbind *, int);
+static void cbprepass(NODE *, struct constbind *);
 static int cbbranchsafe(NODE *, struct constbind *, int);
 static int cbifkeep(NODE *, struct constbind *, int);
 static int dsedeadonce(NODE *);
@@ -157,6 +158,12 @@ cbsubst(NODE *n, struct constbind *b, int nb)
     if (n->Nop == Q_IDENT) {
         i = cbfind(b, nb, n->Nid);
         if (i >= 0) {
+            /* This identifier occurrence disappears from the generated
+            ** program.  Keep Srefs in step with the rewritten tree so the
+            ** later cheap dead-store test can see a now-unread local.
+            */
+            if (n->Nid != NULL && n->Nid->Srefs > 0)
+                --n->Nid->Srefs;
             n->Nop = N_ICONST;
             n->Niconst = b[i].val;
             n->Nflag &= ~(NF_LVALUE | NF_STKREF | NF_GLOBAL);
@@ -201,6 +208,54 @@ cbfold(NODE *n, struct constbind *b, int nb)
         return n;
     cbsubst(n, b, nb);
     return evalexpr(n);
+}
+
+/* CBPREPASS - Expose straight-line constants before statement emission.
+**
+** The normal one-pass generator used to discover that later reads were
+** constants only after it had already emitted the defining stores.  Walk the
+** same statement list once first, using the existing bounded constant-binding
+** table, so eliminated identifier reads reduce Srefs before DSEDEADONCE sees
+** their definitions.  This mutates only the existing tree and adds no
+** whole-function dataflow state.
+*/
+static void
+cbprepass(NODE *n, struct constbind *binds)
+{
+    int nbind = 0;
+    NODE *st;
+    SYMBOL *bsym;
+
+    for (; n != NULL; n = n->Nright) {
+        if (n->Nop != N_STATEMENT)
+            return;
+        st = n->Nleft;
+        if (st == NULL)
+            continue;
+        if (st->Nop == N_DATA) {
+            nbind = 0;
+            continue;
+        }
+
+        bsym = NULL;
+        if (st->Nop == Q_ASGN && st->Nleft != NULL
+          && st->Nleft->Nop == Q_IDENT && cbtrack(st->Nleft->Nid)) {
+            bsym = st->Nleft->Nid;
+            st->Nright = cbfold(st->Nright, binds, nbind);
+        } else if (st->Nop == Q_IF) {
+            st->Nleft = cbfold(st->Nleft, binds, nbind);
+        } else if (st->Nop == Q_RETURN) {
+            st->Nright = cbfold(st->Nright, binds, nbind);
+        }
+
+        if (bsym != NULL && st->Nright != NULL
+          && st->Nright->Nop == N_ICONST)
+            cbset(binds, &nbind, bsym, st->Nright->Niconst);
+        else if (st->Nop == Q_IF && cbifkeep(st, binds, nbind))
+            ;
+        else
+            nbind = 0;
+    }
 }
 
 /* Return nonzero if executing N cannot invalidate any current binding.
@@ -361,6 +416,8 @@ genstmt(NODE *n)
 	    genadata(n->Nleft);		/* Yep, do them */
 	    n = n->Nright;		/* then move on to real statements */
 	}
+	if (optgen)
+	    cbprepass(n, binds);
 	for(beg = n; n != NULL; n = n->Nright) {
 	    if(n->Nop != N_STATEMENT)
 		int_error("genstmt: bad stmt %N", n);
