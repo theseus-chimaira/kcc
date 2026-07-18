@@ -613,6 +613,27 @@ flushcode(void)
 
     if (mincode < maxcode)
 	{
+	/* First discard exact local no-ops which may have been created by
+	** earlier peephole rewrites.  CODE00 rejects MOVE R,R when it is
+	** first emitted, but register retargeting can create one later.
+	** Keep an instruction which is the target of a preceding skip: the
+	** physical instruction slot is then part of the control flow.
+	*/
+	if (optobj)
+	    for (i = mincode; i < maxcode; ++i)
+		{
+		p = &codes[i & (MAXCODE-1)];
+		if (p->Pop == P_MOVE
+		  && (p->Ptype & ~PTF_SKIPPED) == PTA_REGIS
+		  && p->Preg == p->Pr2 && !prevskips(p))
+		    p->Pop = P_NOP;
+		else if ((p->Pop == P_ADD || p->Pop == P_SUB
+		       || p->Pop == P_IOR || p->Pop == P_XOR)
+		  && (p->Ptype & ~PTF_SKIPPED) == PTV_IMMED
+		  && p->Pvalue == 0 && !prevskips(p))
+		    p->Pop = P_NOP;
+		}
+
 	/* Late halfword fold.  A full-word AND which keeps only the left
 	** half is emitted as TRZ by CCOUT, too late for the ordinary
 	** peephole passes to combine it with the preceding MOVE.  Do the
@@ -624,6 +645,62 @@ flushcode(void)
 		{
 		p = &codes[i & (MAXCODE-1)];
 		q = &codes[(i+1) & (MAXCODE-1)];
+
+		/* Idempotent bit clearing is sometimes requested independently by
+		** two DImode normalization paths.  An immediately repeated TLZ on
+		** the same AC with the same mask cannot change the value again.
+		*/
+		if (p->Pop == P_TLZ && q->Pop == P_TLZ
+		  && (p->Ptype & ~PTF_SKIPPED) == PTA_RCONST
+		  && (q->Ptype & ~PTF_SKIPPED) == PTA_RCONST
+		  && p->Preg == q->Preg && p->Pvalue == q->Pvalue
+		  && !prevskips(p) && !prevskips(q))
+		    {
+		    q->Pop = P_NOP;
+		    ++i;
+		    continue;
+		    }
+
+		/* Applying the exact signed-narrow extension idiom twice is also
+		** idempotent.  This is intentionally an exact six-instruction
+		** match: it needs no value tracking and cannot cross control flow.
+		**
+		**   TRNE R,sign       TRNE R,sign
+		**    TDOA R,[-width]   TDOA R,[-width]
+		**    ANDI R,width-1    ANDI R,width-1
+		*/
+		if (i + 5 < maxcode && !prevskips(p))
+		    {
+		    PCODE *a2, *a3, *b1, *b2, *b3;
+
+		    a2 = q;
+		    a3 = &codes[(i+2) & (MAXCODE-1)];
+		    b1 = &codes[(i+3) & (MAXCODE-1)];
+		    b2 = &codes[(i+4) & (MAXCODE-1)];
+		    b3 = &codes[(i+5) & (MAXCODE-1)];
+		    if (p->Pop == P_TRN+POF_ISSKIP+POS_SKPE
+		      && a2->Pop == P_TRO+POF_ISSKIP+POS_SKPA
+		      && a3->Pop == P_AND
+		      && b1->Pop == p->Pop && b2->Pop == a2->Pop
+		      && b3->Pop == a3->Pop
+		      && (p->Ptype & ~PTF_SKIPPED) == PTA_RCONST
+		      && (a2->Ptype & ~PTF_SKIPPED) == PTA_RCONST
+		      && (a3->Ptype & ~PTF_SKIPPED) == PTV_IMMED
+		      && (b1->Ptype & ~PTF_SKIPPED) == PTA_RCONST
+		      && (b2->Ptype & ~PTF_SKIPPED) == PTA_RCONST
+		      && (b3->Ptype & ~PTF_SKIPPED) == PTV_IMMED
+		      && p->Preg == a2->Preg && p->Preg == a3->Preg
+		      && p->Preg == b1->Preg && p->Preg == b2->Preg
+		      && p->Preg == b3->Preg
+		      && p->Pvalue == b1->Pvalue
+		      && a2->Pvalue == b2->Pvalue
+		      && a3->Pvalue == b3->Pvalue)
+			{
+			b1->Pop = P_NOP;
+			b2->Pop = P_NOP;
+			b3->Pop = P_NOP;
+			}
+		    }
 	if (q->Pop == P_JRST)
 	    optjrst(q);
 		if (p->Pop == P_MOVE && q->Pop == P_AND
