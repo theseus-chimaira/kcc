@@ -1961,6 +1961,55 @@ simadjbp (PCODE *p)
 
     if ((p->Ptype & ~PTF_SKIPPED) != PTV_IMMED) {
         srcreg = (((p->Ptype & PTF_ADRMODE) == PTA_REGIS) ? p->Pr2 : -1);
+
+        /* KA10 and later can read accumulators through ordinary effective
+        ** addresses.  Only PDP-6 needs the conservative two-word stack
+        ** marshal below.  Move the simulated ADJBP operands directly into
+        ** the helper ABI registers when that cannot destroy an AC16-based
+        ** pointer before it is read.
+        */
+        if (tgcpu != TGCPU_PDP6
+          && !(p->Preg == 1 && (srcreg == R_SCRREG
+            || p->Pindex == R_SCRREG))) {
+            npush = 0;
+            if (p->Preg != 1) {
+                outstr("\tPUSH\t17,1\n");
+                ++npush;
+            }
+            q = *p;
+            q.Pop = P_MOVE;
+            q.Preg = 1;
+            if (p->Preg == 1)
+                outstr("\tMOVE\t16,1\n");
+            if ((q.Ptype & PTF_ADRMODE) == PTA_BYTEPOINT
+              && q.Pindex == R_SP && q.Pptr == NULL) {
+                outstr("\tMOVEI\t1,");
+                outnum(q.Poffset - npush);
+                outstr("(17)\n");
+                outstr("\tHRLI\t1,");
+                outnum(q.Pbsize);
+                outnl();
+            } else {
+                if (q.Pindex == R_SP && q.Pbsize == 0)
+                    q.Poffset -= npush;
+                outinstr(&q);
+            }
+            if (p->Preg != 1 && p->Preg != R_SCRREG)
+                fprintf(out, "\tMOVE\t16,%o\n", p->Preg);
+            if (asmdialect == ASM_GAS) {
+                outstr("\tPUSHJ\t17,%ADJBPH\n");
+                simadjbp_ref = 1;
+            } else {
+                fprintf(out, "\tPUSHJ\t17,%s\n", crtsnam[CRT_ADJBP]);
+                ++crtref[CRT_ADJBP];
+            }
+            if (p->Preg != 1) {
+                fprintf(out, "\tMOVE\t%o,1\n", p->Preg);
+                outstr("\tPOP\t17,1\n");
+            }
+            return;
+        }
+
 	npush = 0;
 	if (p->Preg != 1) {
 	    outstr("\tPUSH\t17,1\n");
