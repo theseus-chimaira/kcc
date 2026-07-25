@@ -45,7 +45,7 @@ static char *ahmacs (void), *octcpy (char *, unsigned INT);
 static void simptrcnv (PCODE *), simsmove (PCODE *),
 	simufltr (PCODE *), simfltr (PCODE *), simfix (PCODE *),
 	simdsngl (PCODE *),
-	simuidiv (PCODE *), simsidiv (PCODE *), simsubbp (PCODE *), simdfix (PCODE *),
+	simuidiv (PCODE *), simsidiv (PCODE *), outsidiv_helpers (void), simsubbp (PCODE *), simdfix (PCODE *),
 	simdmovx (PCODE *),
 	simadjsp (PCODE *), simadjbp (PCODE *), simdfop (PCODE *),
 	outadjsp (INT), outdmovn (int);
@@ -236,6 +236,7 @@ enum { crtsyms CRT_N };		/* Define the CRT_ indices plus count */
 
 static int crtref[CRT_N];		/* Table of CRT sym reference counts */
 static int simadjbp_ref;		/* Need one local GAS PDP-6 ADJBP helper */
+static INT simsidiv_helper_mask;	/* Signed-IDIV edge helpers, one bit/register pair */
 #define crtsym(idx, sym) sym,
 static char *crtsnam[CRT_N] = { crtsyms };	/* Table of CRT symbol names */
 #undef crtsym
@@ -255,6 +256,7 @@ outinit (void)
     for (i = CRT_N; --i >= 0;)	/* Reset reference counts */
 	crtref[i] = 0;
     simadjbp_ref = 0;
+    simsidiv_helper_mask = 0;
 
     /*
      * These two runtime symbols are ALWAYS implicitly referenced;
@@ -409,6 +411,7 @@ outdone (int mainf)
 	    outadjbp_body ();
 	    outstr ("\tPOPJ\t17,\n");
 	}
+        outsidiv_helpers ();
 	makprefile ();
 	outdecl ();
 	outnl ();
@@ -417,6 +420,7 @@ outdone (int mainf)
 
     outnl ();
     codeseg ();				/* make sure in code segment */
+    outsidiv_helpers ();
 
     outstr ("\n\tLIT\n");
 
@@ -2661,6 +2665,45 @@ simsmove (PCODE *p)
 ** No Divide behavior.
 */
 static void
+outsidiv_helper (int rq)
+{
+    PCODE q;
+    int rr = rq + 1;
+    int sav = (rq == 015 || rr == 015) ? 014 : 015;
+
+    fprintf(out, "%%SIDH%o:\tPUSH\t17,0%o\n", rq, sav);
+    fprintf(out, "\tPUSH\t17,0%o\n", R_SCRREG);
+    fprintf(out, "\tMOVM\t%o,0%o\n", sav, R_SCRREG);
+    fprintf(out, "\tMOVE\t%o,[0400000000000]\n", rq);
+    fprintf(out, "\tMOVE\t%o,0%o\n", R_SCRREG, sav);
+
+    memset(&q, 0, sizeof(q));
+    q.Pop = P_UIDIV;
+    q.Preg = rq;
+    q.Ptype = PTA_REGIS;
+    q.Pr2 = R_SCRREG;
+    simuidiv(&q);
+
+    outstr("\tSKIPL\t0(17)\n");
+    fprintf(out, "\t MOVN\t%o,%o\n", rq, rq);
+    fprintf(out, "\tSKIPE\t%o\n", rr);
+    fprintf(out, "\t MOVN\t%o,%o\n", rr, rr);
+    outadjsp(-1);
+    fprintf(out, "\tPOP\t17,0%o\n", sav);
+    outstr("\tPOPJ\t17,\n");
+}
+
+static void
+outsidiv_helpers (void)
+{
+    int rq;
+
+    for (rq = 1; rq < R_SCRREG - 1; ++rq)
+        if (simsidiv_helper_mask & ((INT)1 << rq))
+            outsidiv_helper(rq);
+}
+
+static void
 simsidiv (PCODE *p)
 {
     PCODE q;
@@ -2668,7 +2711,6 @@ simsidiv (PCODE *p)
     int rr = rq + 1;
     static int sidiv_label = 0;
     int lab = sidiv_label++;
-    int sav = 015;
     INT divisor;
 
     if ((p->Ptype & PTF_ADRMODE) == PTA_RCONST)
@@ -2691,44 +2733,26 @@ simsidiv (PCODE *p)
             }
         }
 
-    if (rq == sav || rr == sav)
-	sav = 014;
-
     q = *p;
     q.Pop = P_MOVE;
     q.Preg = R_SCRREG;
-    outinstr (&q);			/* scratch = divisor */
+    outinstr(&q);
 
-    fprintf (out, "\tCAMN\t%o,[0400000000000]\n", rq);
-    fprintf (out, "\t JRST\t%%SIDN%o\n", lab);
+    fprintf(out, "\tCAMN\t%o,[0400000000000]\n", rq);
+    fprintf(out, "\t JRST\t%%SIDE%o\n", lab);
     if ((p->Ptype & PTF_ADRMODE) == PTA_RCONST) {
-        fprintf (out, "\tIDIVI\t%o,", rq);
-        outnum (p->Pvalue);
-        outnl ();
+        fprintf(out, "\tIDIVI\t%o,", rq);
+        outnum(p->Pvalue);
+        outnl();
     } else
-        fprintf (out, "\tIDIV\t%o,0%o\n", rq, R_SCRREG);
-    fprintf (out, "\tJRST\t%%SIDD%o\n", lab);
-
-    fprintf (out, "%%SIDN%o:\tPUSH\t17,0%o\n", lab, sav);
-    fprintf (out, "\tPUSH\t17,0%o\n", R_SCRREG);
-    fprintf (out, "\tMOVM\t%o,0%o\n", sav, R_SCRREG);
-    fprintf (out, "%%SIDP%o:\tMOVE\t%o,[0400000000000]\n", lab, rq);
-    fprintf (out, "\tMOVE\t%o,0%o\n", R_SCRREG, sav);
-
-    q = *p;
-    q.Pop = P_UIDIV;
-    q.Preg = rq;
-    q.Ptype = PTA_REGIS;
-    q.Pr2 = R_SCRREG;
-    simuidiv (&q);
-
-    fprintf (out, "\tSKIPL\t0(17)\n");
-    fprintf (out, "\t MOVN\t%o,%o\n", rq, rq);
-    fprintf (out, "\tSKIPE\t%o\n", rr);
-    fprintf (out, "\t MOVN\t%o,%o\n", rr, rr);
-    outadjsp (-1);
-    fprintf (out, "\tPOP\t17,0%o\n", sav);
-    fprintf (out, "%%SIDD%o:\n", lab);
+        fprintf(out, "\tIDIV\t%o,0%o\n", rq, R_SCRREG);
+    fprintf(out, "\tJRST\t%%SIDD%o\n", lab);
+    fprintf(out, "%%SIDE%o:\tPUSHJ\t17,%%SIDH%o\n", lab, rq);
+    fprintf(out, "%%SIDD%o:\n", lab);
+    if (rq > 0 && rq < R_SCRREG - 1)
+        simsidiv_helper_mask |= ((INT)1 << rq);
+    else
+        int_error("simsidiv: unsupported quotient register");
 }
 
 /* SIMUIDIV - Output expansion of P_UIDIV unsigned division "instruction".
