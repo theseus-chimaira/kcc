@@ -2376,9 +2376,34 @@ simdsngl (PCODE *p)
 **	ADD R+1,$BPADn (A)	ADD R+1, (A)
 */
 static void
+outsubbpindex (int siz, int bytes_per_word, int first_e, const char *addr)
+{
+    int mul;
+
+    /* Valid E fields are first_e, first_e-S, ... .  Let
+    ** d = first_e-E = index*S.  Since every valid d is below 36,
+    ** floor(d*ceil(64/S)/64) is exactly index: rounding can add less
+    ** than 36/64, so it can never reach the next integer.  This replaces
+    ** the linear CAIN/MOVEI search for every known byte size 1..36.
+    */
+    fprintf(out, "\tHLRZ\t15,%s\n", addr);
+    outstr("\tLSH\t15,-014\n");
+    outstr("\tANDI\t15,077\n");
+    if (bytes_per_word <= 1) {
+        outstr("\tSETZ\t15,\n");
+        return;
+    }
+    outstr("\tMOVN\t15,15\n");
+    fprintf(out, "\tADDI\t15,0%o\n", first_e);
+    mul = (64 + siz - 1) / siz;
+    fprintf(out, "\tIMULI\t15,0%o\n", mul);
+    outstr("\tLSH\t15,-06\n");
+}
+
+static void
 simsubbp (PCODE *p)
 {
-    int siz, typ, bytes_per_word, first_e, i;
+    int siz, typ, bytes_per_word, first_e;
     int oldop, oldreg;
     const char *idxsep;
 
@@ -2437,45 +2462,26 @@ simsubbp (PCODE *p)
 	** in real stack memory while this expansion decomposes them.  This
 	** also makes every numeric constant below explicitly octal for DAS.
 	*/
-	outadjsp (4);
-	fprintf (out, "\tMOVEM\t%o,-03(17)\n", p->Preg);
-	outstr ("\tMOVEM\t16,-02(17)\n");
-	outstr ("\tMOVEM\t15,-01(17)\n");
+	outadjsp (3);
+	fprintf (out, "\tMOVEM\t%o,-02(17)\n", p->Preg);
+	outstr ("\tMOVEM\t16,-01(17)\n");
+	outstr ("\tMOVEM\t15,00(17)\n");
 
-	fprintf (out, "\tMOVE\t%o,-03(17)\n", p->Preg + 1);
+	fprintf (out, "\tMOVE\t%o,-02(17)\n", p->Preg + 1);
 	fprintf (out, "\tANDI\t%o,0777777\n", p->Preg + 1);
-	fprintf (out, "\tMOVE\t%o,-02(17)\n", p->Preg);
+	fprintf (out, "\tMOVE\t%o,-01(17)\n", p->Preg);
 	fprintf (out, "\tANDI\t%o,0777777\n", p->Preg);
-	fprintf (out, "\tMOVEM\t%o,00(17)\n", p->Preg);
-	fprintf (out, "\tSUB\t%o,00(17)\n", p->Preg + 1);
+	fprintf (out, "\tSUB\t%o,%o\n", p->Preg + 1, p->Preg);
 	if (bytes_per_word != 1)
 	    fprintf (out, "\tIMULI\t%o,0%o\n", p->Preg + 1, bytes_per_word);
 
-	outstr ("\tHLRZ\t15,-03(17)\n");
-	outstr ("\tLSH\t15,-014\n");
-	outstr ("\tANDI\t15,077\n");
-	fprintf (out, "\tMOVEI\t%o,00\n", p->Preg);
-	for (i = 1; i < bytes_per_word; ++i)
-	    {
-	    fprintf (out, "\tCAIN\t15,0%o\n", first_e - (siz * i));
-	    fprintf (out, "\t MOVEI\t%o,0%o\n", p->Preg, i);
-	    }
-	fprintf (out, "\tMOVEM\t%o,00(17)\n", p->Preg);
-	fprintf (out, "\tADD\t%o,00(17)\n", p->Preg + 1);
+	outsubbpindex(siz, bytes_per_word, first_e, "-02(17)");
+	fprintf (out, "\tADD\t%o,15\n", p->Preg + 1);
 
-	outstr ("\tHLRZ\t15,-02(17)\n");
-	outstr ("\tLSH\t15,-014\n");
-	outstr ("\tANDI\t15,077\n");
-	fprintf (out, "\tMOVEI\t%o,00\n", p->Preg);
-	for (i = 1; i < bytes_per_word; ++i)
-	    {
-	    fprintf (out, "\tCAIN\t15,0%o\n", first_e - (siz * i));
-	    fprintf (out, "\t MOVEI\t%o,0%o\n", p->Preg, i);
-	    }
-	fprintf (out, "\tMOVEM\t%o,00(17)\n", p->Preg);
-	fprintf (out, "\tSUB\t%o,00(17)\n", p->Preg + 1);
-	outstr ("\tMOVE\t15,-01(17)\n");
-	outadjsp (-4);
+	outsubbpindex(siz, bytes_per_word, first_e, "-01(17)");
+	fprintf (out, "\tSUB\t%o,15\n", p->Preg + 1);
+	outstr ("\tMOVE\t15,00(17)\n");
+	outadjsp (-3);
 	return;
 	}
 
