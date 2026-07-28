@@ -1267,6 +1267,21 @@ outinstr (PCODE *p)
 
     int big, i, opr;
 
+    /* Some late rewrites represent a zero immediate as an immediate
+    ** indexed address rather than PTV_IMMED, so the ordinary peephole
+    ** no-op sweep cannot see it.  Drop exact unskipped identity operations
+    ** here rather than adding another optimizer state or pass.
+    */
+    if (optobj && !(p->Ptype & PTF_SKIPPED)
+      && (p->Pop == P_ADD || p->Pop == P_SUB
+       || p->Pop == P_IOR || p->Pop == P_XOR)
+      && (p->Ptype & PTF_IMM)) {
+        if (((p->Ptype & PTF_ADRMODE) == PTA_RCONST && p->Pvalue == 0)
+          || ((p->Ptype & PTF_ADRMODE) == PTA_MINDEXED
+           && p->Pptr == NULL && p->Pindex == 0 && p->Poffset == 0))
+            return;
+    }
+
     outtab ();				/* Start instruction output w/ tab */
     if (p->Ptype & PTF_SKIPPED)		/* Indent skipped-over instr */
 	outc (' ');
@@ -1996,7 +2011,12 @@ simadjbp (PCODE *p)
             } else {
                 if (q.Pindex == R_SP && q.Pbsize == 0)
                     q.Poffset -= npush;
-                outinstr(&q);
+                /* The helper ABI receives its pointer in AC1.  If the
+                ** original pointer is already AC1, this marshaling MOVE is
+                ** an exact no-op created below the peephole layer.
+                */
+                if ((q.Ptype & PTF_ADRMODE) != PTA_REGIS || q.Pr2 != 1)
+                    outinstr(&q);
             }
             if (p->Preg != 1 && p->Preg != R_SCRREG)
                 fprintf(out, "\tMOVE\t16,%o\n", p->Preg);
