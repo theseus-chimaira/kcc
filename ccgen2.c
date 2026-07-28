@@ -4089,21 +4089,24 @@ gbinary(NODE *n)
 	return r1;
 	}
 
-    /* Reuse an identical side-effect-free indexed fetch in a simple
-    ** one-word integer operation.  This is deliberately tree-local CSE:
-    ** no value table, basic-block walk, or persistent data-flow state.
+    /* Reuse an identical side-effect-free operand in a simple one-word
+    ** integer operation.  This is deliberately tree-local CSE: no value
+    ** table, basic-block walk, or persistent data-flow state.
     **
-    **     p[i] + p[i]     -> load p[i] once; LSH R,1
+    **     x + x     -> evaluate x once; LSH R,1
+    **     x & x     -> evaluate x once
+    **     x | x     -> evaluate x once
+    **     x ^ x     -> evaluate x once; SETZ R,
+    **     x - x     -> evaluate x once; SETZ R,
     **
-    ** Restrict the fold to dereferences and operators for which using the
-    ** same loaded value is exact.  Addition uses a one-bit logical shift;
-    ** for defined signed additions and for modulo unsigned arithmetic this is
-    ** identical to x+x, while avoiding an unsafe MOVE/ADD-R,R peephole path.
+    ** gsamepure() rejects side effects, so this also covers identical
+    ** non-volatile dereferences without duplicating their load.  Evaluate
+    ** the operand once even for the zero-result folds; besides keeping this
+    ** transformation conservative, that preserves any ordinary memory
+    ** access represented by the expression.
     */
     if (optgen && sizetype(n->Ntype) == 1 && tisinteg(n->Ntype)
-      && n->Nleft && n->Nright
-      && n->Nleft->Nop == N_PTR && n->Nright->Nop == N_PTR
-      && gsamepure(n->Nleft, n->Nright)) {
+      && n->Nleft && n->Nright && gsamepure(n->Nleft, n->Nright)) {
         switch (n->Nop) {
         case Q_PLUS:
             r1 = genexpr(n->Nleft);
@@ -4112,6 +4115,12 @@ gbinary(NODE *n)
         case Q_ANDT:
         case Q_OR:
             return genexpr(n->Nleft);
+        case Q_XORT:
+        case Q_MINUS:
+            r1 = (n->Nflag & NF_RETEXPR) ? vrretget() : vrget();
+            r1->Vrtype = n->Ntype;
+            code5(P_SETZ, r1);
+            return r1;
         default:
             ;
         }
@@ -4219,6 +4228,54 @@ gbinary(NODE *n)
               r1, n->Nright->Niconst);
         return r1;
         }
+
+    /* A terminal register subtraction with the subtrahend already in AC1
+    ** can negate AC1 and add the minuend directly.  Both operands are fixed
+    ** register identifiers, so no side effect or address evaluation is
+    ** reordered.
+    **
+    **     return b - a;     MOVE T,2      MOVN 1,1
+    **                       SUB  T,1  ->  ADD  1,2
+    **                       MOVE 1,T
+    */
+    if (optgen && (n->Nflag & NF_RETEXPR) && n->Nop == Q_MINUS
+      && sizetype(n->Ntype) == 1 && tisinteg(n->Ntype)
+      && Register_Id(n->Nleft) && Register_Id(n->Nright)
+      && n->Nright->Nid->Sreg == R_RETVAL) {
+        r1 = genexpr(n->Nright);
+        code0(P_MOVN, r1, r1);
+        r2 = genexpr(n->Nleft);
+        code0(P_ADD, r1, r2);
+        return r1;
+    }
+
+    /* A terminal one-word commutative operation can operate directly on an
+    ** incoming value already held in the ABI return accumulator.  Restrict
+    ** this to register operands so no address calculation, call, or memory
+    ** side effect is reordered.  Unsigned multiply is deliberately excluded:
+    ** its PDP-10 MUL path needs a register pair.
+    */
+    if (optgen && (n->Nflag & NF_RETEXPR)
+      && sizetype(n->Ntype) == 1 && tisinteg(n->Ntype)
+      && Register_Id(n->Nleft) && Register_Id(n->Nright)
+      && (n->Nleft->Nid->Sreg == R_RETVAL
+       || n->Nright->Nid->Sreg == R_RETVAL)
+      && (n->Nop == Q_PLUS || n->Nop == Q_ANDT || n->Nop == Q_OR
+       || n->Nop == Q_XORT
+       || (n->Nop == Q_MPLY && !tspisunsigned(n->Ntype->Tspec)))) {
+        NODE *retop, *other;
+
+        if (n->Nleft->Nid->Sreg == R_RETVAL) {
+            retop = n->Nleft;
+            other = n->Nright;
+        } else {
+            retop = n->Nright;
+            other = n->Nleft;
+        }
+        r1 = genexpr(retop);
+        r2 = genexpr(other);
+        return garithop(n->Nop, r1, r2, n->Ntype->Tspec);
+    }
 
     /* No pointer arithmetic involved, can just generate arithmetic stuff.
     ** Normally we generate the left operand first, but if the right operand
