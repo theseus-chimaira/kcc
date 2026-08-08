@@ -84,7 +84,7 @@ extern void symdump(SYMBOL *, char *), typedump(void), nodedump(NODE *);
 static void cindfiles(int *, char ***);
 static void showcpu(clock_t);
 static void coptimize(char *), cdebug(char *), csidebug(char *),
-	ctargmach(char *), cportlev(char *), cwarnlev(char *),
+	ctargmach(char *), ctargcpu(char *, int), cportlev(char *), cwarnlev(char *),
 	casmdialect(char *), cverbose(char *), settgcpu(int);
 
 static int cswitch(char *, int *, char ***), cfile(char *),
@@ -105,7 +105,10 @@ char mainname[FNAMESIZE]
 /* = {0} */
 ;	/* Name of module containing "main" */
 
-static char *savname = NULL;		/* Pointer to desired -o filename */
+static char *savname = NULL;		/* Pointer to desired linked output filename */
+static char *drvoutname = NULL;		/* -o/-O compiler-driver output */
+static int exactasmout = 0;		/* -S output name is exact */
+static int marchexplicit = 0;		/* -march given explicitly */
 static int vrbarg = 0;			/* Patch 1 to show args on outmsgs */
 static int sourcebytewidth = 7;		/* FW 2A(47) */
 
@@ -304,7 +307,19 @@ main (int argc, char **argv)
 	    }
 	}
 
-    /* Now finalize after all switches scanned */
+    /* Now finalize after all switches scanned.  -o is the hosted spelling
+    ** and -O is the native SIXBIT-safe spelling.  For -S the name is exact;
+    ** for -c it names the assembler/object basename; while linking it names
+    ** the final executable as before.
+    */
+    if (drvoutname != NULL) {
+	if (link)
+	    savname = drvoutname;
+	else {
+	    savofnam = drvoutname;
+	    exactasmout = !assemble;
+	}
+    }
 
     settgcpu(tgcpu);
 
@@ -479,6 +494,39 @@ cswitch (char *s, int *aac, char ***aav)
     {
     char*	t;			/* KAR-3/91, fix bug in -L lib path */
 
+    /* Conventional compiler-driver spellings used by simple Makefiles.
+    ** Keep these as a thin interface layer; they map onto existing KCC
+    ** semantics and do not imply GCC language or optimizer behavior.
+    */
+    if (!strncmp(s, "-std=", 5)) {
+	cportlev(s + 5);
+	return 1;
+    }
+    if (!strncmp(s, "-march=", 7)) {
+	ctargcpu(s + 7, 0);
+	marchexplicit = 1;
+	return 1;
+    }
+    if (!strncmp(s, "-mcpu=", 6)) {
+	ctargcpu(s + 6, 1);
+	return 1;
+    }
+    if (!strcmp(s, "-O0")) {
+	coptimize("");
+	return 1;
+    }
+    if (!strcmp(s, "-O1") || !strcmp(s, "-O2")
+      || !strcmp(s, "-Os") || !strcmp(s, "-OS")) {
+	coptimize("all");
+	return 1;
+    }
+    if (!strcmp(s, "-O")) {
+	**aav = NULL;
+	++(*aav);
+	if (--(*aac) <= 0 || (drvoutname = **aav) == NULL)
+	    jerr("No filename arg for -O");
+	return 1;
+    }
 
     while (*++s)
 	{
@@ -595,11 +643,22 @@ cswitch (char *s, int *aac, char ***aav)
 		insert_all_files = (char) ~0; // FW KCC-NT
 		return 1;
 
-	    case 'I':			/* -I<path> Add an #include "" path */
+	    case 'I':			/* -I<path> or -I <path>: both include forms */
 
-		if (nincpaths < MAXINCDIR-1)
-		    incpaths[nincpaths++] = ++s; /* Remember the search path */
-		else
+		if (s[1] != '\0')
+		    t = ++s;
+		else {
+		    **aav = NULL;
+		    ++(*aav);
+		    if (--(*aac) <= 0 || (t = **aav) == NULL) {
+			jerr("No pathname arg for -I");
+			return 1;
+		    }
+		}
+		if (nincpaths < MAXINCDIR-1 && nhfpaths < MAXINCDIR-1) {
+		    incpaths[nincpaths++] = t;
+		    hfpaths[nhfpaths++] = t;
+		} else
 		    jerr("More than %d -I paths", MAXINCDIR);
 
 		return 1;
@@ -645,20 +704,16 @@ cswitch (char *s, int *aac, char ***aav)
 		stksz = atoi(++s);
 		return 1;
 
-	    case 'o':			/* -o=<filename> Loader: output file */
+	    case 'o':			/* -o FILE: conventional driver output */
 		if (s[1] == '=')
-		    s += 2;	/* -o <filename> Permit old syntax */
-		else
-		    {
-		    **aav = NULL;	/* Flush this arg */
-		    ++(*aav);		/* Point to next one */
-
-		    if (--(*aac) <= 0 || (s = **aav) == 0)
+		    drvoutname = s + 2;
+		else {
+		    **aav = NULL;
+		    ++(*aav);
+		    if (--(*aac) <= 0 || (drvoutname = **aav) == NULL)
 			jerr("No filename arg for -o");
-		    }
-
-		savname = s;
-		return 1;		/*  Can flush arg from switch list */
+		}
+		return 1;
 
 	    case 'P':			/* -Pfoo or -P=foo portability level */
 
@@ -1086,6 +1141,37 @@ ctargmach(char * s)
 	jerr("KL10 non-zero-section target requires MULTI_SECTION compiler build");
 #endif
     settgcpu(tgcpu);
+}
+
+/* CTARGCPU - Parse -march= and -mcpu= CPU names.
+** -march selects the permitted instruction-set profile.  -mcpu is a tuning
+** hint; until KCC has a distinct tuning model it affects code generation only
+** when no explicit -march was supplied.
+*/
+static void
+ctargcpu(char *s, int tune)
+{
+    int i, cpu = 0, arch = 0;
+
+    for (i = 0; ctgmtab[i].name != NULL; ++i)
+	if (ctgmtab[i].fladdr == &tgcpu && !strcmp(s, ctgmtab[i].name)) {
+	    cpu = (int)ctgmtab[i].flval;
+	    break;
+	}
+    for (i = 0; ctgarchtab[i].name != NULL; ++i)
+	if (ctgarchtab[i].fladdr == &tgarch && !strcmp(s, ctgarchtab[i].name)) {
+	    arch = (int)ctgarchtab[i].flval;
+	    break;
+	}
+    if (cpu == 0 || arch == 0) {
+	jerr("Unknown CPU target \"%s\"", s);
+	return;
+    }
+    if (!tune || !marchexplicit) {
+	tgcpu = cpu;
+	tgarch = arch;
+	settgcpu(tgcpu);
+	}
 }
 
 static void
@@ -1613,7 +1699,9 @@ files (char *fname)
 
     cp = (asmdialect == ASM_GAS) ? ".s" : ".mac";
 
-    if (savofnam != NULL)
+    if (savofnam != NULL && exactasmout)
+	estrcpy(outfname, savofnam);
+    else if (savofnam != NULL)
 	{
 	char *tfnam, *ptr;
 

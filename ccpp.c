@@ -656,6 +656,7 @@ ppinit(void)
 
     /* Enter special macro pre-definitions into symbol table. */
     mdefstr("__COMPILER_KCC__", MACF_KCC, NULL);
+    mdefstr("__PDP10__", MACF_ATOM, "1");
     mdefstr("__LONG_LONG_71BIT__", MACF_ATOM, "1");
     mdefstr("__LINE__",		MACF_LINE, NULL);
     mdefstr("__FILE__",		MACF_FILE, NULL);
@@ -5471,7 +5472,20 @@ cinctry(int n, char ** ptab, char * f2, char * f, FILE ** fp)
 	{
 	if (!*ptab || !**ptab)		/* If we hit enforced stop, */
 	    return 1;			/* always done now. */
+#if HOST_UNIX
+	{
+	    size_t plen = strlen(*ptab);
+	    if (plen != 0 && (*ptab)[plen-1] != '/'
+	      && strchr(*ptab, '+') == NULL) {
+		char *q = estrcpy(f2, *ptab);
+		*q++ = '/';
+		estrcpy(q, f);
+	    } else
+		fstrcpy(f2, *ptab, f);
+	}
+#else
 	fstrcpy(f2, *ptab, f);		/* Build filename to try */
+#endif
 	if ((*fp = fopen(f2, "r")) != NULL)
 	    return 1;			/* Won! */
 	}
