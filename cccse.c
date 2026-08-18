@@ -197,7 +197,17 @@ foldmove(struct pcode * p)
     if ((s = findcse(r, p, 0)) != 0)
     {   if (op == P_HRRZ  ||  op == P_HLRZ)
 	    code00(P_HRRZ, r, s);
-        else
+        else if (op == P_SETZ && r != s) {
+            /* A zero CSE may come from a conditional jump: the source
+            ** register is known to be zero only on the current edge.
+            ** Feeding the replacement MOVE back through the ordinary
+            ** register retargeter can move that edge-specific fact across
+            ** the jump and discard the copy to the real destination.
+            ** SETM is the same register-to-register value transfer, but
+            ** CODE00 deliberately leaves it out of changereg optimization.
+            */
+            code00(P_SETM, r, s);
+        } else
 	    code00(P_MOVE, r, s);
     }
 }
