@@ -106,7 +106,7 @@ char mainname[FNAMESIZE]
 ;	/* Name of module containing "main" */
 
 static char *savname = NULL;		/* Pointer to desired linked output filename */
-static char *drvoutname = NULL;		/* -o/-O compiler-driver output */
+static char *drvoutname = NULL;		/* -o compiler-driver output */
 static int exactasmout = 0;		/* -S output name is exact */
 static int marchexplicit = 0;		/* -march given explicitly */
 static int vrbarg = 0;			/* Patch 1 to show args on outmsgs */
@@ -521,10 +521,7 @@ cswitch (char *s, int *aac, char ***aav)
 	return 1;
     }
     if (!strcmp(s, "-O")) {
-	**aav = NULL;
-	++(*aav);
-	if (--(*aac) <= 0 || (drvoutname = **aav) == NULL)
-	    jerr("No filename arg for -O");
+	coptimize("all");
 	return 1;
     }
 
