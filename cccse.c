@@ -26,6 +26,7 @@ extern int vrreal (VREG *);
 
 /* Internal functions */
 static int findcse(int, PCODE *, int);
+static int folddivpair(VREG *);
 static void flushreg(int), flushtarget(int);
 static int chgpush(PCODE *), stktop(PCODE *), 
 	   safematch(PCODE *, int), match(PCODE *, int);
@@ -212,6 +213,106 @@ foldmove(struct pcode * p)
     }
 }
 
+/* FOLDDIVPAIR - Reuse the other result of an earlier identical IDIV.
+**
+** FINDCSE can match IDIV directly when both divisors have the same address
+** form.  GBINARY commonly copies a variable numerator and divisor into new
+** temporary ACs for each / or % expression, however.  The two IDIVs then
+** have different register operands even though those registers were loaded
+** from the same unchanged source ACs.
+**
+** Recognize only that small, explicit register-copy pattern.  Both IDIVs
+** must be immediately preceded by MOVE copies from identical source ACs;
+** the source values and the wanted half of the older IDIV pair must remain
+** unchanged between the divisions.  Control-flow boundaries are rejected.
+** This lets quotient followed by remainder, and remainder followed by
+** quotient, share the PDP-10 IDIV pair without making alias assumptions.
+**
+** On success the three instructions computing the newer division are
+** removed and the AC containing the wanted result from the older pair is
+** returned.
+*/
+static int
+folddivpair(struct vreg *vr)
+{
+    PCODE *ndiv, *nden, *nnum, *p, *odiv, *oden, *onum, *scan;
+    int nr, half, oldres, nsrc, dsrc, lim;
+
+    ndiv = previous;
+    nr = vrreal(vr);
+    if (ndiv == NULL || (ndiv->Pop != P_IDIV && ndiv->Pop != P_UIDIV)
+      || (ndiv->Ptype & PTF_ADRMODE) != PTA_REGIS)
+	return 0;
+
+    if (nr == ndiv->Preg)
+	half = 0;
+    else if (nr == ndiv->Preg + 1)
+	half = 1;
+    else
+	return 0;
+
+    nden = before(ndiv);
+    nnum = nden ? before(nden) : NULL;
+    if (nden == NULL || nnum == NULL
+      || nden->Pop != P_MOVE || nnum->Pop != P_MOVE
+      || (nden->Ptype & PTF_ADRMODE) != PTA_REGIS
+      || (nnum->Ptype & PTF_ADRMODE) != PTA_REGIS
+      || nden->Preg != ndiv->Pr2 || nnum->Preg != ndiv->Preg
+      || prevskips(nnum) || prevskips(nden) || prevskips(ndiv))
+	return 0;
+
+    nsrc = nnum->Pr2;
+    dsrc = nden->Pr2;
+
+    for (p = before(nnum), lim = 0; p != NULL && lim < MAXCSE;
+      p = before(p), ++lim) {
+	if (prevskips(p) || isskip(p->Pop) || dropsout(p))
+	    return 0;
+	if (p->Pop != ndiv->Pop
+	  || (p->Ptype & PTF_ADRMODE) != PTA_REGIS)
+	    continue;
+
+	odiv = p;
+	oden = before(odiv);
+	onum = oden ? before(oden) : NULL;
+	if (oden == NULL || onum == NULL
+	  || oden->Pop != P_MOVE || onum->Pop != P_MOVE
+	  || (oden->Ptype & PTF_ADRMODE) != PTA_REGIS
+	  || (onum->Ptype & PTF_ADRMODE) != PTA_REGIS
+	  || oden->Preg != odiv->Pr2 || onum->Preg != odiv->Preg
+	  || onum->Pr2 != nsrc || oden->Pr2 != dsrc
+	  || prevskips(onum) || prevskips(oden) || prevskips(odiv))
+	    continue;
+
+	/* IDIV destroys its result pair.  If a source value lives in that
+	** pair, the later MOVE from that AC cannot represent the same input. */
+	if (nsrc == odiv->Preg || nsrc == odiv->Preg + 1
+	  || dsrc == odiv->Preg || dsrc == odiv->Preg + 1)
+	    continue;
+
+	oldres = odiv->Preg + half;
+	for (scan = after(odiv); scan != NULL && scan != nnum;
+	  scan = after(scan)) {
+	    if (prevskips(scan) || isskip(scan->Pop) || dropsout(scan))
+		break;
+	    if (rrchg(scan, nsrc) || rrchg(scan, dsrc)
+	      || rrchg(scan, oldres))
+		break;
+	}
+	if (scan != nnum)
+	    continue;
+
+	/* NNUM and NDEN are pure register copies used only to set up NDIV.
+	** Removing all three preserves the older IDIV pair intact. */
+	nnum->Pop = P_NOP;
+	nden->Pop = P_NOP;
+	ndiv->Pop = P_NOP;
+	fixprev();
+	return oldres;
+    }
+    return 0;
+}
+
 /*
 ** Ditto for P_IDIV, needs register argument to tell what to fold.
 ** We take the register as a vreg for caller's convenience, but it must
@@ -222,7 +323,7 @@ void
 folddiv(struct vreg * vr)
 {
     int r = vrreal(vr), s;
-    if ((s = findcse(r, previous, 0)) != 0)
+    if ((s = folddivpair(vr)) != 0 || (s = findcse(r, previous, 0)) != 0)
 	code00(P_MOVE, r, s);
 }
 
@@ -558,12 +659,17 @@ findcse(int r, struct pcode * p, int safedouble)
 	*/
 
 	case P_IDIV:	case P_UIDIV:
-/* 3/92 SPR-9774 avoid faulty register-pair opt when one is '/' and the
- * the other is '%', as in a[x%y][x/y]; Later, fix ismod[] in cccse.c
- */
-#if SYS_CSI
-    return 0;
-#endif
+	    /* IDIV changes a register pair, but MATCH() has special pair-aware
+	    ** handling which must inspect the remainder register's match state
+	    ** before invalidating it.  Flushing Preg+1 here made the ismod[]
+	    ** path unreachable and was the root of SPR-9774's disabled CSE.
+	    ** MATCH() performs the required invalidation after saving that state.
+	    */
+	    if ((r = safematch(q, q->Pop)) != 0)
+		matchedto[r]++;
+	    q = before(q);
+	    continue;
+
 	case P_DFMP:	case P_DFDV:	case P_DFSB:	case P_DFAD:
 	case P_DMOVE:	case P_DMOVN:
 	    flushreg(q->Preg + 1);
