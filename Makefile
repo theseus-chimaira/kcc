@@ -44,9 +44,7 @@ asm self-asm: $(ASMS)
 
 runtime: $(RUNTIME)
 
-install:
-	$(MAKE) clean
-	$(MAKE) all
+install: all
 	$(INSTALL) -d $(DESTDIR)$(BINDIR)
 	$(INSTALL) -m 755 kcc $(DESTDIR)$(BINDIR)/kcc
 	cmp kcc $(DESTDIR)$(BINDIR)/kcc
