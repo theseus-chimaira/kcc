@@ -918,7 +918,8 @@ genfunct (NODE* n)
 
     genretinit(n->Nright);
     genstmt (n->Nright);		/* Generate code for body */
-    if (fnabidirect && (_reg_count > 0 || fnsavescr))
+    if (!isr && !fnvla_v11 &&
+        (maxauto > 0 || _reg_count > 0 || fnsavescr || fnargregs > 0))
 	genretepilog(n->Nreg);
     endcode ();				/* Wrap up code */
 

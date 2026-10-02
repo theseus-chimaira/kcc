@@ -1522,15 +1522,21 @@ greturn (NODE *n)
     genretepilog(i);
     }
 
-/* GENRETINIT - Set up a shared epilogue for direct ABI-register functions.
-** Such functions save call-preserved parameter registers in the prologue.
-** Sharing their restore sequence avoids duplicating it at every return.
+/* GENRETINIT - Set up a shared epilogue for fixed-frame functions.
+** Any normal, non-VLA function that has real frame teardown work can share
+** that teardown among all returns.  A one-instruction POPJ-only leaf is left
+** alone: adding a common label there would cost one extra word overall.
+**
+** VLA functions are deliberately excluded because return paths may arrive
+** with different dynamic stack depths; their epilogue first restores SP from
+** the fixed-frame anchor and remains on the historical direct-return path.
 */
 void
 genretinit(NODE *body)
 {
-    retlabel = (fnabidirect && (_reg_count > 0 || fnsavescr))
-	? newlabel() : NULL;
+    retlabel = (!isr && !fnvla_v11 &&
+        (maxauto > 0 || _reg_count > 0 || fnsavescr || fnargregs > 0))
+        ? newlabel() : NULL;
     retfall = retlabel ? laststmt(body) : NULL;
     if (retfall && retfall->Nop != Q_RETURN)
 	retfall = NULL;
