@@ -524,6 +524,10 @@ cswitch (char *s, int *aac, char ***aav)
 	coptimize("all");
 	return 1;
     }
+    if (!strncmp(s, "-O=", 3)) {
+	coptimize(s + 3);
+	return 1;
+    }
 
     while (*++s)
 	{

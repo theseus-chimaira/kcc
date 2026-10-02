@@ -1227,6 +1227,52 @@ indbodywrites(NODE *n, SYMBOL *iv)
     return indbodywrites(n->Nleft, iv) || indbodywrites(n->Nright, iv);
 }
 
+/* INDBODYBRANCHES - Does a loop body contain control flow that can merge
+** different register-spill states?
+**
+** The induction-pointer optimization deliberately keeps one VREG live across
+** the complete loop body.  The ordinary statement generator predates that
+** optimization and assumes no VREG is live across statement-level branches.
+** A call in only one arm of an IF can therefore spill the induction VREG on
+** that arm and leave the common continuation with an unmatched stack restore.
+**
+** Keep the optimization away from statement-level merge points.  Preserve
+** the existing terminal IF optimization ("if (...) continue/break/goto"),
+** because gif() lowers those directly to one conditional jump and creates no
+** branch join.  This is a correctness precondition, not a profitability test.
+*/
+static int
+indbodybranches(NODE *n)
+{
+    NODE *thenpart, *elsepart;
+
+    if (n == NULL)
+        return 0;
+    switch (n->Nop) {
+    case Q_IF:
+        if (n->Nright == NULL)
+            return 1;
+        thenpart = n->Nright->Nleft;
+        elsepart = n->Nright->Nright;
+        if (elsepart == NULL && thenpart != NULL
+          && (thenpart->Nop == Q_CONTINUE || thenpart->Nop == Q_BREAK
+              || thenpart->Nop == Q_GOTO))
+            return indbodybranches(n->Nleft);
+        return 1;
+    case Q_FOR:
+    case Q_WHILE:
+    case Q_DO:
+    case Q_SWITCH:
+        return 1;
+    default:
+        break;
+    }
+    if (n->Nop == Q_IDENT || n->Nop == N_ICONST || n->Nop == N_FCONST
+      || n->Nop == N_PCONST || n->Nop == N_SCONST || n->Nop == N_VCONST)
+        return 0;
+    return indbodybranches(n->Nleft) || indbodybranches(n->Nright);
+}
+
 /* INDLOOPMATCH - Match the deliberately narrow strength-reduction case:
 **
 **     for (i = 0; i < constant; ++i) ... array[i] ...
@@ -1273,7 +1319,7 @@ indloopmatch(NODE *n, NODE **basep, SYMBOL **basesp)
            && lhs->Nid == iv && incr->Nright
            && incr->Nright->Nop == N_ICONST && incr->Nright->Niconst == 1))
         return 0;
-    if (indbodywrites(n->Nright, iv))
+    if (indbodywrites(n->Nright, iv) || indbodybranches(n->Nright))
         return 0;
     budget = 1024;
     if (!indfindref(n->Nright, iv, basep, basesp, &budget))
