@@ -175,7 +175,17 @@ pnegreg(int r, PCODE *p)
 		pushneg (p->Pr2, before (p))) return 1;
 	    break;			/* neg of either op works */
 
-	case P_IDIV: case P_UIDIV:
+	case P_UIDIV:
+	    /* Unsigned quotient/remainder is not odd under two's-complement
+	    ** negation: in general (-u) % d != -(u % d), and likewise for
+	    ** quotient.  Pushing a later MOVN backward through UIDIV therefore
+	    ** changes C semantics.  This was exposed by DAS opcode-table indexing,
+	    ** where 2 - (mid % 3) selected the adjacent packed opcode after the
+	    ** remainder negation was incorrectly moved to the dividend.
+	    */
+	    return 0;
+
+	case P_IDIV:
 	    if (p->Preg + 1 == r) r--;	/* negate dividend for remainder */
 	    break;
 
