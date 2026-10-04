@@ -2001,10 +2001,12 @@ simadjbp (PCODE *p)
             if (p->Preg == 1)
                 outstr("\tMOVE\t16,1\n");
             if ((q.Ptype & PTF_ADRMODE) == PTA_BYTEPOINT
-              && q.Pindex == R_SP && q.Pptr == NULL) {
+              && q.Pptr == NULL) {
                 outstr("\tMOVEI\t1,");
-                outnum(q.Poffset - npush);
-                outstr("(17)\n");
+                outnum(q.Poffset - (q.Pindex == R_SP ? npush : 0));
+                if (q.Pindex != 0)
+                    fprintf(out, "(%o)", q.Pindex);
+                outnl();
                 outstr("\tHRLI\t1,");
                 outnum(q.Pbsize);
                 outnl();
@@ -2045,11 +2047,12 @@ simadjbp (PCODE *p)
         if (srcreg >= 0)
             ;                           /* Marshal the source AC below. */
 	else if ((q.Ptype & PTF_ADRMODE) == PTA_BYTEPOINT
-	  && q.Pindex == R_SP
 	  && q.Pptr == NULL) {
 	    fprintf(out, "\tMOVEI\t%o,", q.Preg);
-	    outnum(q.Poffset - npush);
-	    outstr("(17)\n");
+	    outnum(q.Poffset - (q.Pindex == R_SP ? npush : 0));
+	    if (q.Pindex != 0)
+		fprintf(out, "(%o)", q.Pindex);
+	    outnl();
 	    fprintf(out, "\tHRLI\t%o,", q.Preg);
 	    outnum(q.Pbsize);
 	    outnl();
