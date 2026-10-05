@@ -870,6 +870,13 @@ sameaddr(struct pcode * p, struct pcode * q, INT stkoffset)
 	return (p->Pdouble2 == q->Pdouble2);
 
     case PTA_RCONST:
+        /* Immediate and direct-memory constants are not the same value.
+        ** MOVEI R,056 forms the constant/address 056; MOVE R,056 loads the
+        ** contents of memory word 056.  MINDEXED/BYTEPOINT already preserve
+        ** this distinction above, but RCONST historically forgot it, allowing
+        ** CSE to reuse a memory load as a later pointer constant.
+        */
+        if ((p->Ptype & PTF_IMM) != (q->Ptype & PTF_IMM)) return 0;
 	return (p->Pvalue == q->Pvalue);
     case PTA_PCONST:
 	return (   p->Pptr == q->Pptr
