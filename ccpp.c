@@ -30,8 +30,10 @@ INT pconst(void);		/* CCSTMT to parse constant expr */
 extern
 char *estrcpy(char *, char *),
 	*fstrcpy(char *, char *, char *);	/* CCASMB */
+#if !HOST_DAIMOS
 extern
 int symval(char *, char *, int);		/* CCASMB */
+#endif
 extern
 int nextoken(void);			/* CCLEX  */
 extern
@@ -701,8 +703,10 @@ ppinit(void)
 	}
     if (clevkcc)
 	{
+#if !HOST_DAIMOS
 	mdefstr("_KCCsymfnd", MACF_SYMF, NULL);
 	mdefstr("_KCCsymval", MACF_SYMV, NULL);
+#endif
 	}
 }
 
@@ -3282,10 +3286,16 @@ static
 tlist_t
 mexpsym(struct symbol * sym, int hs)
 {
-    tlist_t tl, tl2;
+    tlist_t tl;
+#if !HOST_DAIMOS
+    tlist_t tl2;
+#endif
     struct macframe mf;		/* Current macro frame */
-    int i, parens, symv, fixed;
+    int i, parens, fixed;
+#if !HOST_DAIMOS
+    int symv;
     char *cp1, *cp2;
+#endif
 
 #if DEBUG_PP
     if (debpp)
@@ -3380,6 +3390,7 @@ mexpsym(struct symbol * sym, int hs)
 		    }
 		return tl;
 
+#if !HOST_DAIMOS
 	    case MACF_SYMF:
 		if (1) symv = 0;	/* Set flag 0 for existence, */
 else
@@ -3411,6 +3422,7 @@ else
 	(void) sltostr(tlpcur(tl2), cp2, (int)sizeof(sbuf)-(cp2 -sbuf));
 	return tlimake(symval(cp1, cp2, symv), 0);
 	}
+#endif /* !HOST_DAIMOS */
 
     default:
 	int_error("mexpsym: bad mac val: %d", mf.mf_nargs);

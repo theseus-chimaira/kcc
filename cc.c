@@ -57,12 +57,16 @@ flagent_t;
 extern void dbginit(void);				/* CCDBUG */
 extern void outpghdr(void);				/* CCOUT */
 extern void outstr (char *);				/* CCOUT */
+#if !HOST_DAIMOS
 extern void savesymtab(SYMBOL *);			/* CCSYM */
+#endif
 extern SYMBOL *symfidstr(char *);			/* CCSYM */
+#if !HOST_DAIMOS
 extern int asmb(char *, char *, char *);		/* CCASMB */
 extern void runlink(int, int, char **, char *, char *);	/* CCASMB */
 #ifdef __COMPILER_KCC__
 extern char *execargs(int *, char ***);			/* CCASMB */
+#endif
 #endif
 extern char *fnparse(char *, char *, char *, char *, char *);  /* CCASMB */
 extern char *estrcpy(char *, char *);			/* CCASMB */
@@ -218,7 +222,7 @@ main (int argc, char **argv)
 
     if (argc <= 1)			/* No command line? */
 	{
-#ifdef __COMPILER_KCC__
+#if defined(__COMPILER_KCC__) && !HOST_DAIMOS
 	nextprog = execargs(&argc, &argv);	/* Try getting from RPG/CCL */
 #endif
 	if (argc > 1)
@@ -346,11 +350,15 @@ main (int argc, char **argv)
 	}
 
     if (asmfiles || link || nextprog)
+#if !HOST_DAIMOS
 	runlink(link,			/* Whether to invoke loader or not */
 		argc-1, argv+1,		/* Loader args (.REL files) */
 		(savname ? savname	/* Loader arg: output file name */
 			 : mainname),
 		nextprog);		/* Chained program to invoke next */
+#else
+	jerr("Native DAIMOS KCC currently supports compile-to-assembly only");
+#endif
 
     return (toterrs ? EXIT_FAILURE : EXIT_SUCCESS);
 }
@@ -727,7 +735,11 @@ cswitch (char *s, int *aac, char ***aav)
 		return 1;
 
 	    case 'p':			/* -p   Bliss Profiler (link locals)*/
+#if HOST_DAIMOS
+		jerr("BLISS profiling is not available in native DAIMOS KCC");
+#else
 		csidebug("bprof");	/* changed 9/8/90 MVS */
+#endif
 		break;
 
 	    case 'q':			/* -q	Conditional compilation */
@@ -1045,13 +1057,17 @@ cdebug(char * s)
 static
 flagent_t csidebtab[] =
     {
+#if !HOST_DAIMOS
     {"ddt",	&ldddtf,    1},	/* link in DDT object debugger */
     {"debug", 	&debcsi,    KCC_DBG_SDBG}, /* use KCC Source Level Debugger */
     {"bprof",  	&profbliss, 1},	/* use Benny Jones' Bliss Profiler */
     {"sprof",  	&debcsi,    KCC_DBG_SPRF}, /* use KCC Statement Profiler */
     {"fnprof", 	&debcsi,    KCC_DBG_FPRF}, /* use KCC Function Profiler */
+#endif
     {"nullptr",	&debcsi,    KCC_DBG_NULL}, /* use null pointer detection */
+#if !HOST_DAIMOS
     {"fndbg",  	&debcsi,    KCC_DBG_FDBG}, /* KCCDBG function-level only */
+#endif
     {NULL, 	NULL,	    0}				// FW KCC-NT
     };
 
@@ -1236,7 +1252,9 @@ settgcpu(int cpu)
 */
 static flagent_t casmtab[] = {
 	{"gas",	&asmdialect, ASM_GAS},	/* GNU as style */
+#if !HOST_DAIMOS
 	{"macro", &asmdialect, ASM_MACRO}, /* DEC MACRO/FAIL style */
+#endif
 	{NULL,	NULL,	0}
 };
 
@@ -1462,10 +1480,12 @@ module_loop:
 
 	switch (abs (debcsi))
 	    {
+#if !HOST_DAIMOS
 	    case KCC_DBG_SDBG :
 	    case KCC_DBG_FDBG :
 		savesymtab (minsym->Snext); /* generate debug symtab */
 		break;
+#endif
 
 
 	    default:
@@ -1495,8 +1515,12 @@ module_loop:
 #endif
 
 	if (!nerrors && assemble)
+#if !HOST_DAIMOS
 	    asmdflg = asmb ((savofnam ? savofnam : inpfmodule),
 		(char *) NULL, outfname); /* and this. */
+#else
+	    jerr("Native DAIMOS KCC cannot invoke DAS yet");
+#endif
 
 	if ((delete && asmdflg != 0) && (!mlist))
 	    remove (outfname);

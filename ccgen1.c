@@ -1628,11 +1628,13 @@ genretepilog(int i)
 
     code8 (P_ADJSP, VR_SP, -stackoffset); /* flush local vars from stk */
 
+#if !HOST_DAIMOS
     if (profbliss)
 	{				/* for BLISS profiler */
 	flushcode ();
 	outepilog (curfn);		/* added 09/15/89 by MVS */
 	}
+#endif
 
     if (isr)				/* FW 2A(52) */
 	{

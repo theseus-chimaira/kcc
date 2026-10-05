@@ -18,12 +18,14 @@
  * Mapping function between SC_xxx and SCDB_xxx values
  */
 
+#if !HOST_DAIMOS
 static char scmap[] = {
 	0
 #define scdef(a,b) ,b
 	scdefs
 #undef  scdef
 };
+#endif
 
 /* Exported functions - Symbol stuff */
 void savesymtab(SYMBOL *);		/* CC */
@@ -1082,12 +1084,14 @@ ridlsym(struct symbol * prevptr)
 
     switch (abs (debcsi))
 	{
+#if !HOST_DAIMOS
 	case KCC_DBG_SDBG:
 	case KCC_DBG_FDBG:		    /* FW 2A(42) PPS4575 */
 
 	    if (curfn && beg->Snext)
 		savesymtab(beg->Snext);		/* save local symbol table */
 	    break;
+#endif
 
 
 	default:
@@ -1920,6 +1924,13 @@ findctype1(int tsp, INT flags, unsigned INT siz, struct type *proto,
 	    return t;		/* Found identical existing type! */
 
     /* Not found, have to make up a new one */
+#if HOST_DAIMOS
+    {
+	t = (TYPE *) calloc (1, sizeof(TYPE));
+	if (t == NULL)
+	    jerr("Out of memory for types table\n");
+    }
+#else
 #if !DEBUG_KCC	/* 9/91 shrink KCC */
     if (abs (debcsi) == KCC_DBG_SDBG || abs (debcsi) == KCC_DBG_FDBG)
 #endif		/* 2/92 fixes KCCDBG */
@@ -1939,6 +1950,7 @@ findctype1(int tsp, INT flags, unsigned INT siz, struct type *proto,
 	if (t == NULL)
 	    jerr("Out of memory for types table\n");
 	}
+#endif
 #endif
 
     if (++maxtype >= MAXTYPE)
@@ -1969,6 +1981,11 @@ newvlatype_v11(INT flags, TYPE *subt)
 {
     TYPE *t;
 
+#if HOST_DAIMOS
+    t = (TYPE *) calloc(1, sizeof(TYPE));
+    if (t == NULL)
+        jerr("Out of memory for types table\n");
+#else
 #if !DEBUG_KCC
     if (abs(debcsi) == KCC_DBG_SDBG || abs(debcsi) == KCC_DBG_FDBG)
 #endif
@@ -1988,6 +2005,7 @@ newvlatype_v11(INT flags, TYPE *subt)
         if (t == NULL)
             jerr("Out of memory for types table\n");
         }
+#endif
 #endif
 
     if (++maxtype >= MAXTYPE)
@@ -2563,6 +2581,7 @@ typedump()
 }
 #endif
 
+#if !HOST_DAIMOS
 static
 int	    nchars = 0;
 static
@@ -3195,3 +3214,4 @@ outsymtab (void)
     nchars = 0;
     symindex = 0;
 }
+#endif /* !HOST_DAIMOS */

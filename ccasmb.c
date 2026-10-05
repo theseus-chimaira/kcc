@@ -71,14 +71,16 @@ char	    stats_parse = 0;
 
 /* Exported routines */
 
-int	    asmb (char *, char *, char *);
 char*	    fnparse (char *, char *, char *, char *, char *);
 int	    fnxisrel (char *);
-void	    runlink (int, int, char **, char *, char *);
-int	    symval (char *fnam, char *sym, int valf);
 char*	    estrcpy (char *, char *);
 char*	    fstrcpy (char *, char *, char *);
 INT	    sixbit (char *);
+#if !HOST_DAIMOS
+int	    symval (char *fnam, char *sym, int valf);
+int	    asmb (char *, char *, char *);
+void	    runlink (int, int, char **, char *, char *);
+#endif
 
 /* Imported routines */
 
@@ -108,30 +110,26 @@ int	    forkexec (struct frkxec *f);
 
 /* Internal routines */
 
-static
-char*	    gtmpfile (char *);
-static
-int*	    stmpfile (char *, char *, char *);
-static
-int*	    maktflink (int, char **, char *, char *),
-	    crsfunv (char *, long),
-	    hackfork (char *, int *, int, int, int),
-	    ldsymfile (char *);
-static
-char*	    eputn (char *, char *, int),
-	   *eputdec (char *, int),
-	   *eputdec3 (char *, int),
-	   *eputtmpnam (char *, char *, int);
+#if !HOST_DAIMOS
+static int crsfunv (char *, long), ldsymfile (char *);
+static char *gtmpfile (char *);
+static int *stmpfile (char *, char *, char *);
+static int *maktflink (int, char **, char *, char *),
+           hackfork (char *, int *, int, int, int);
+static char *eputn (char *, char *, int),
+            *eputdec (char *, int),
+            *eputdec3 (char *, int),
+            *eputtmpnam (char *, char *, int);
+#endif
 
 #if DEBUG_KCC	/* 8/91 KCC size */
 static
 int	    tdebug = 0;	/* Set non-zero to print out tmpcor args */
 #endif
 
-static
-char*	    asmtfptr = NULL;	/* Assembler tmpcor file contents */
-static
-int	    asmtflen = 0;	/* Length not including trailing NUL */
+#if !HOST_DAIMOS
+static char *asmtfptr = NULL;	/* Assembler tmpcor file contents */
+static int asmtflen = 0;	/* Length not including trailing NUL */
 
 /* BP7 - macro to convert a char ptr into a 7-bit byte pointer */
 
@@ -212,6 +210,7 @@ eputtmpnam(char *d, char *name, int pid)
     d = eputn(d, name, 3);
     return estrcpy(d, ".TMP");
 }
+#endif /* !HOST_DAIMOS */
 
 /*
 Description of COMPIL (or RPG) argument passing mechanism.
@@ -260,6 +259,7 @@ be SYS:LINK.EXE if LINK is to be invoked next.
  *		Returns -1 if error, 0 if arguments successfully stored.
  */
 
+#if !HOST_DAIMOS
 int
 asmb (char *m, char *f1, char *f2)
     {
@@ -861,6 +861,7 @@ hackfork (char* pgmname, int* argblk, int blklen, int stoffset, int chainf)
 	return 1;
 #endif
 }
+#endif /* !HOST_DAIMOS */
 
 
 /*
@@ -1101,6 +1102,7 @@ rad50 (char * str)
     return val;
 }
 
+#if !HOST_DAIMOS
 /* SYMVAL - Implements _KCCsymval ("filename", "symbol").
 **	Called by CCPP to evaluate as a macro expansion.
 **	Returns the value of the symbol as looked up in "filename".
@@ -1590,5 +1592,6 @@ crsfunv (char * tabp, long flen)
     return ep - ( (struct sfent
     *)tabp); /* Return # entries we got */
 }
+#endif /* !HOST_DAIMOS */
 
 

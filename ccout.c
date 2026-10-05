@@ -41,7 +41,9 @@ static int makprefile (void); /* KAR-2/92, create ENTRY list in side .MAC */
 
 /* Internal Functions */
 static void outrj6 (unsigned INT);
+#if !HOST_DAIMOS
 static char *ahmacs (void), *octcpy (char *, unsigned INT);
+#endif
 static void simptrcnv (PCODE *), simsmove (PCODE *),
 	simufltr (PCODE *), simfltr (PCODE *), simfix (PCODE *),
 	simdsngl (PCODE *),
@@ -53,8 +55,11 @@ static void outadjbp_body (void);
 static void outmpdbl (INT *, int), outpreamble (void),
 	outlpnum (unsigned INT, int), outinstr (PCODE *),
 	outrawnum (unsigned INT), outpnum (unsigned INT), outop (int), outreg (int),
-	outpti (int, INT), outaddress (PCODE *), outasmh (void),
+	outpti (int, INT), outaddress (PCODE *),
 	outlpnum (unsigned INT, int);
+#if !HOST_DAIMOS
+static void outasmh (void);
+#endif
 static int fltpow2 (double), outdecl (void),
 	   obplh (INT, INT *, int), bumpaddr (PCODE *), gasbplhval (int);
 static int directop (int);
@@ -353,6 +358,9 @@ static
 void
 outpreamble (void)
 {
+#if HOST_DAIMOS
+    outstr ("\t.text\n");
+#else
     if (asmdialect == ASM_GAS)
 	{
 	outstr ("\t.text\n");
@@ -374,6 +382,7 @@ outpreamble (void)
      */
 
     outasmh ();
+#endif
     }
 
 /*
@@ -385,6 +394,7 @@ outpreamble (void)
 void
 outdone (int mainf)
     {
+#if !HOST_DAIMOS
     register int i;
     register SYMBOL *s;
     static char old_mainf = 0;
@@ -394,6 +404,9 @@ outdone (int mainf)
 	mainf = 0;
     else
 	old_mainf = mainf;
+#else
+    (void)mainf;
+#endif
 
     
     /* KAR-1/92, output string for filename */
@@ -402,6 +415,20 @@ outdone (int mainf)
     if (debcsi == KCC_DBG_NULL)
 	outfile ();
 
+#if HOST_DAIMOS
+    outnl ();
+    codeseg ();
+    if (simadjbp_ref) {
+	outstr ("%ADJBPH:\n");
+	outadjbp_body ();
+	outstr ("\tPOPJ\t17,\n");
+    }
+    outsidiv_helpers ();
+    makprefile ();
+    outdecl ();
+    outnl ();
+    return;
+#else
     if (asmdialect == ASM_GAS)
 	{
 	outnl ();
@@ -445,6 +472,7 @@ outdone (int mainf)
 
     switch (abs (debcsi))
 	{
+#if !HOST_DAIMOS
 	void	    outsymtab (void);
 
 
@@ -452,6 +480,7 @@ outdone (int mainf)
 	case KCC_DBG_FDBG:		    /* FW 2A (42) PPS4575 */
 	    outsymtab ();
 	    break;
+#endif
 
 
 	default:
@@ -512,7 +541,8 @@ outdone (int mainf)
 
     outnl ();
     outnl ();
-}
+#endif
+    }
 
 /* OUTDECL - Output assembler external & internal declarations at end
 **	of compiling a module (translation unit).
@@ -603,6 +633,7 @@ makprefile (void)
     return (nexfs);
 }
 
+#if !HOST_DAIMOS
 /*
 ** KCC Assembler Header output
 **
@@ -666,6 +697,7 @@ static char segfai[] = "\
 	RELOC	0	\n\
 	RELOC	400000	\n";
 
+#if !HOST_DAIMOS
 static char segkdb[] = "\
 	DEFINE %%CODE <RELOC>\n\
 	DEFINE %%DATA <RELOC>\n\n\
@@ -695,6 +727,7 @@ static char segsp[] = "\
 	PUSHJ	17,KD$SPL\n\
 	RELOC	0	\n\
 	RELOC	400000	\n";
+#endif
 
 /* OCTCPY - Append an unsigned octal constant to an in-memory string.
 ** Values larger than one octal digit get a leading zero so DAS, whose
@@ -733,6 +766,7 @@ ahmacs (void)
     */
     beg = cp = (char *)codes;
 
+#if !HOST_DAIMOS
     if (profbliss)			/* profiling switch for CSI */
 	cp = estrcpy (cp, "\t.REQUIRE BLI:PROFIL.REL\n");
     /*
@@ -758,6 +792,10 @@ ahmacs (void)
 	    default:
 		int_error ("ahmacs: invalid debcsi %d", debcsi);
 	    }
+#else
+    if (debcsi == KCC_DBG_NULL)
+	cp = estrcpy (cp, "\t.REQUEST SYS:KCCDBG.REL\n");
+#endif
 
     /*
      * Make request for standard C library.
@@ -774,15 +812,19 @@ ahmacs (void)
 
     /* Add machine-dependent macro definitions */
 
+#if !HOST_DAIMOS
     if (profbliss)			    /* added 09/15/89 by MVS */
 	cp = estrcpy (cp, "\tOPDEF\tPROF. [37B8]\n");
+#endif
 
+#if !HOST_DAIMOS
     if (debcsi)				    /* source debugger UUO's */
 	{
 	cp = estrcpy (cp, "\tOPDEF\tDEBUGP [37B8]\n");
 	cp = estrcpy (cp, "\tOPDEF\tDEBUGS [37B8]\n");
 	cp = estrcpy (cp, "\tOPDEF\tDEBUGE [37B8]\n");
 	}
+#endif
 
     /*
      * Try to purge MACRO pseudo-ops that we'll never need and that
@@ -794,6 +836,7 @@ PURGE IFE,IFN,IFG,IFGE,IFL,IFLE,IFDEF,IFNDEF,IFIDN,IFDIF\n\n");
 
     /* Code and data segmentation setup and %%DATA/%%CODE macro definition */
 
+#if !HOST_DAIMOS
     switch (debcsi)
 	{
 	case 0 :			/* no debugger or profiler */
@@ -817,6 +860,9 @@ PURGE IFE,IFN,IFG,IFGE,IFL,IFLE,IFDEF,IFNDEF,IFIDN,IFDIF\n\n");
 	    cp = estrcpy (cp, segfnp);
 	    break;
 	}
+#else
+    cp = estrcpy (cp, segfai);
+#endif
 
     if (mlist)
 	cp = estrcpy (cp, "\n\tSP=17");
@@ -837,6 +883,7 @@ PURGE IFE,IFN,IFG,IFGE,IFL,IFLE,IFDEF,IFNDEF,IFIDN,IFDIF\n\n");
 
     return beg;			/* No luck, just re-generate each time */
 }
+#endif /* !HOST_DAIMOS */
 
 /*
 ** Data segmentation.

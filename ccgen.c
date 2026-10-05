@@ -838,8 +838,10 @@ genfunct (NODE* n)
 	    }
 	}
 
+#if !HOST_DAIMOS
     if (profbliss)			/* for BLISS profiler */
 	outprolog (curfn);		/* added 09/15/89 by MVS */
+#endif
 
     if (n->Nreg <= R_PRESERVE_COUNT)	/* Reg linkage */
 	{

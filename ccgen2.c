@@ -8625,7 +8625,11 @@ gcall (NODE* n)
      * NOTE: profiling precludes tail recursion: MVS 09/20/89
      */
 
+#if HOST_DAIMOS
+    if (!fnvla_v11)			/* VLA frame must be unwound normally */
+#else
     if (!profbliss && !fnvla_v11)	/* VLA frame must be unwound normally */
+#endif
 	{
 	if ((n->Nflag & NF_RETEXPR) && (directtail || narg == 0))
 	    {

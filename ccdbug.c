@@ -24,6 +24,30 @@
 #include "cc.h"
 #include "ccgen.h"
 
+#if HOST_DAIMOS
+
+NODE *
+debug_node(NODE *n, int this_line, int stmt_number, int calltype)
+{
+    (void)this_line;
+    (void)stmt_number;
+    (void)calltype;
+    return n;
+}
+
+void
+code_debugcall(NODE *n)
+{
+    (void)n;
+}
+
+void
+dbginit(void)
+{
+}
+
+#else
+
 extern void  outstr(char *);			/* CCOUT */
 extern void  codgolab(SYMBOL *);		/* CCCODE */
 extern SYMBOL *creatsym(char *);		/* CCSYM */
@@ -292,4 +316,6 @@ static char *otoa(int i)
 	}
     return &buff[j+1];
 }
+
+#endif /* HOST_DAIMOS */
 
