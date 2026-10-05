@@ -17,7 +17,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#if !__MSDOS__ && !HOST_UNIX					// FW KCC-NT
+#if !__MSDOS__ && !HOST_UNIX && !HOST_DAIMOS			// FW KCC-NT
 #include <muuo.h>	/* KAR-8/92, needed for set_level(); PPS 4516 */
 #endif
 
@@ -92,7 +92,7 @@ static int cswitch(char *, int *, char ***), cfile(char *),
 static int chkmacname(char *);
 static void parcswi(char *, flagent_t *, int);
 static char *cmpname(char *, char *);
-#if !__MSDOS__ && !HOST_UNIX
+#if !__MSDOS__ && !HOST_UNIX && !HOST_DAIMOS
 static int set_level (int level); /* KAR-8/92, support leveled headers PPS 4516 */
 #endif
 
@@ -164,7 +164,7 @@ static const _char7 *debugscreen = "\n\
 int
 main (int argc, char **argv)
     {
-#ifdef __COMPILER_KCC__
+#if defined(__COMPILER_KCC__) && !HOST_DAIMOS
     extern int JOBERR;
 #endif
     int ac;			/* temp copy of argc */
@@ -176,12 +176,12 @@ main (int argc, char **argv)
 
     /* KAR-3/92, changed to use new version number specification */
     /* Set up CSI version number. See kcchst.h */
-#ifdef __COMPILER_KCC__
+#if defined(__COMPILER_KCC__) && !HOST_DAIMOS
     _version(REV);
 #endif
     ver_str = REV;
 
-    #if defined (__COMPILER_KCC__)
+    #if defined (__COMPILER_KCC__) && !HOST_DAIMOS
         /* Clear out .JBERR */
     JOBERR = EXIT_SUCCESS;
     #elif  __MSDOS__
@@ -192,7 +192,7 @@ main (int argc, char **argv)
     ** All are either initially 0, or given default values in CCDATA.
     */
     link = assemble = delete = 1;
-#if HOST_UNIX
+#if HOST_UNIX || HOST_DAIMOS
     link = assemble = delete = 0;
 #endif
 
@@ -259,7 +259,7 @@ main (int argc, char **argv)
 	else
 	    ++nfiles;		/* Assume a filename spec */
 
-#if !__MSDOS__ && !HOST_UNIX
+#if !__MSDOS__ && !HOST_UNIX && !HOST_DAIMOS
 		/* KAR-8/92, support for leveled header files; PPS 4516 */
 		/* but not for KCCDOS.                                  */
 
@@ -293,7 +293,7 @@ main (int argc, char **argv)
 	default: /* error assume level 0 */
 	    break;
 	}
-#endif /* !__MSDOS__ && !HOST_UNIX */
+#endif /* !__MSDOS__ && !HOST_UNIX && !HOST_DAIMOS */
 
     /* Get the string rep. of the version */
     if (mlist)
@@ -1623,7 +1623,7 @@ files (char *fname)
 
     estrcpy (inpfname, fname);		/* Try filename as given */
 
-#if __MSDOS__ || HOST_UNIX		/* FW 2A(47) */
+#if __MSDOS__ || HOST_UNIX || HOST_DAIMOS	/* native/host ANSI fopen */
     in = fopen (inpfname, "r");
 #else
     switch (sourcebytewidth)		/* FW 2A(47) */
@@ -1646,7 +1646,7 @@ files (char *fname)
 	{
 	estrcpy (inpfname, cname);	/* then constructed filename */
 
-#if __MSDOS__ || HOST_UNIX		/* FW 2A(47) */
+#if __MSDOS__ || HOST_UNIX || HOST_DAIMOS	/* native/host ANSI fopen */
 	in = fopen (inpfname, "r");
 #else
 	switch (sourcebytewidth)	/* FW 2A(47) */
@@ -1779,7 +1779,7 @@ files (char *fname)
  *	source needs compiling (is newer than binary).
  */
 
-#if __MSDOS__ || HOST_UNIX	/* 4/92 avoid non-ANSI stat() */
+#if __MSDOS__ || HOST_UNIX || HOST_DAIMOS	/* use ANSI stat() */
 #define stats stat	/* just use stat() */
 #else
 extern
@@ -1857,7 +1857,7 @@ showcpu (clock_t otim)
 	     (int) tline, secs, (INT)((tline*60.0)/secs));
     }
 
-#if !__MSDOS__ && !HOST_UNIX
+#if !__MSDOS__ && !HOST_UNIX && !HOST_DAIMOS
 /*
  * KAR-8/92, added to check the current level KCC is running on
  * and use the leveled header file directories. (PPS 4516)

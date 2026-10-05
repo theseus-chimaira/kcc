@@ -5472,7 +5472,7 @@ cinctry(int n, char ** ptab, char * f2, char * f, FILE ** fp)
 	{
 	if (!*ptab || !**ptab)		/* If we hit enforced stop, */
 	    return 1;			/* always done now. */
-#if HOST_UNIX
+#if HOST_UNIX || HOST_DAIMOS
 	{
 	    size_t plen = strlen(*ptab);
 	    if (plen != 0 && (*ptab)[plen-1] != '/'

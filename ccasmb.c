@@ -15,18 +15,18 @@
 #include <sys/types.h>			/* For stat(), for symval stuff */
 #include <sys/stat.h>
 
-#if !__MSDOS__ && !HOST_UNIX					// FW KCC-NT
+#if !__MSDOS__ && !HOST_UNIX && !HOST_DAIMOS			// FW KCC-NT
  #include <sys/file.h>			/* For open() */
 #endif
 
 #include <errno.h>			/* For strerror */
 #include <string.h>			/* For strchr etc */
 
-#if !__MSDOS__ && !HOST_UNIX					// FW KCC-NT
+#if !__MSDOS__ && !HOST_UNIX && !HOST_DAIMOS			// FW KCC-NT
  #include <frkxec.h>			/* New stuff */
 #endif
 
-#if __MSDOS__ || HOST_UNIX		/* 4/92 avoid non-ANSI stat() */
+#if __MSDOS__ || HOST_UNIX || HOST_DAIMOS	/* use ANSI stat() */
  #define stats stat			/* just use stat() function */
 static char stats_parse = 0;
 #else
@@ -50,7 +50,7 @@ char	    stats_parse = 0;
 
 #include <stdio.h>
 
-#if !__MSDOS__ && !HOST_UNIX					// FW KCC-NT
+#if !__MSDOS__ && !HOST_UNIX && !HOST_DAIMOS			// FW KCC-NT
  #define _getpid(_pid)  ((MUUO_VAL("PJOB", &_pid)), _pid)
 
  #include <muuo.h>	/* For TMPCOR etc */
@@ -82,7 +82,7 @@ INT	    sixbit (char *);
 
 /* Imported routines */
 
-#if !SYS_CSI && !HOST_UNIX /* KAR-3/92, removed LIBC dependency, use ANSI calls */
+#if !SYS_CSI && !HOST_UNIX && !HOST_DAIMOS
 
 extern
 int	    open (char *path, int flags),		/* , int mode)?? */
@@ -135,8 +135,8 @@ int	    asmtflen = 0;	/* Length not including trailing NUL */
 
 /* BP7 - macro to convert a char ptr into a 7-bit byte pointer */
 
-#if __MSDOS__ || HOST_UNIX
-#if HOST_UNIX
+#if __MSDOS__ || HOST_UNIX || HOST_DAIMOS
+#if HOST_UNIX || HOST_DAIMOS
 extern int getpid(void);
 #define _getpid(_pid)  getpid()
 #else
@@ -200,7 +200,7 @@ eputdec3(char *d, int v)
 static char *
 eputtmpnam(char *d, char *name, int pid)
 {
-#if HOST_UNIX
+#if HOST_UNIX || HOST_DAIMOS
     (void)pid;
     d = eputdec3(d, getpid() & 0777);
 #elif !__MSDOS__
@@ -458,7 +458,7 @@ gtmpfile(char *name)
     char tmpfile[20];		/* For DSK:nnnNAM.TMP */
     int pid = 0;
 
-#if !HOST_UNIX
+#if !HOST_UNIX && !HOST_DAIMOS
     /* See if TMPCOR UUO has anything for us */
 	{
 	INT argblk[2];
@@ -825,7 +825,7 @@ static
 int
 hackfork (char* pgmname, int* argblk, int blklen, int stoffset, int chainf)
     {
-#if !__MSDOS__ && !HOST_UNIX					// FW KCC-NT
+#if !__MSDOS__ && !HOST_UNIX && !HOST_DAIMOS			// FW KCC-NT
     struct
     frkxec	fx;
 
@@ -848,13 +848,13 @@ hackfork (char* pgmname, int* argblk, int blklen, int stoffset, int chainf)
 #endif
 
 #else
-#if HOST_UNIX
+#if HOST_UNIX || HOST_DAIMOS
     (void) argblk;
     (void) blklen;
     (void) stoffset;
     (void) chainf;
 #endif
-#if HOST_UNIX
+#if HOST_UNIX || HOST_DAIMOS
     if (vrbld)
 	fprintf(outmsgs, "Not invoking %s on this host\n", pgmname);
 #endif
@@ -1280,7 +1280,7 @@ ldsymfile (char * fnam)
 }
 
 
-#if !__MSDOS__ && !HOST_UNIX	/* 4/92 avoid non-ANSI stat () (use LIBCA) */
+#if !__MSDOS__ && !HOST_UNIX && !HOST_DAIMOS
 
 static void ppnprs (struct _filespec
 *f, char *beg, char *end);

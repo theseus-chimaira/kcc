@@ -18,7 +18,7 @@
 
 #include "c-env.h"		/* Get OS defs locally, not from <c-env.h> */
 
-#if (SYS_T20|SYS_10X|SYS_T10|SYS_CSI|SYS_WTS|SYS_ITS)==0
+#if !HOST_DAIMOS && (SYS_T20|SYS_10X|SYS_T10|SYS_CSI|SYS_WTS|SYS_ITS)==0
 #error KCC cannot run on this system!
 #endif
 
@@ -36,7 +36,9 @@
 ** as the Assembler Header file.
 */
 #ifndef SWI_HFPATH		/* Define path for standard header dir */
-#if HOST_UNIX
+#if HOST_DAIMOS
+#define SWI_HFPATH "/OPTION/BASE/INCLUDE/", "/SYSTEM/INCLUDE/"
+#elif HOST_UNIX
 #define SWI_HFPATH "./include/", "/usr/local/lib/kcc/include/"
 #elif SYS_T20
 #define SWI_HFPATH "C:"
@@ -58,7 +60,9 @@
 #endif   /*   defined   */
 
 #ifndef SWI_HFSYPATH		/* Default path for <sys/ > files */
-#if HOST_UNIX
+#if HOST_DAIMOS
+#define SWI_HFSYPATH "/OPTION/BASE/INCLUDE/SYS/", "/SYSTEM/INCLUDE/SYS/"
+#elif HOST_UNIX
 #define SWI_HFSYPATH "./include/sys/", "/usr/local/lib/kcc/include/sys/"
 #elif SYS_10X
 #define SWI_HFSYPATH "<CSYS>"
@@ -79,7 +83,9 @@
 **	Same principle as for the header file location.
 */
 #ifndef SWI_LIBPATH		/* Define library file prefix */
-#if HOST_UNIX
+#if HOST_DAIMOS
+#define SWI_LIBPATH "/OPTION/BASE/LIB/LIB+.A"
+#elif HOST_UNIX
 #define SWI_LIBPATH "lib+.REL"
 #elif SYS_T20
 #define SWI_LIBPATH "C:LIB+.REL"
@@ -103,7 +109,9 @@
 #endif
 
 #ifndef SWI_TGSYS		/* Specify default target system */
-#if SYS_T20
+#if HOST_DAIMOS
+#define SWI_TGSYS TGSYS_NULL
+#elif SYS_T20
 #define SWI_TGSYS TGSYS_TOPS20
 #elif SYS_T10+SYS_CSI
 #define SWI_TGSYS TGSYS_TOPS10

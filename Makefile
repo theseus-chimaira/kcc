@@ -1,6 +1,11 @@
 CC ?= gcc
 KCC ?= ./kcc
 KCC_SELF_FLAGS ?= -P=stdc+kcc -DHOST_UNIX=1 -Iself/include/ -Hself/include/
+PDP10_PREFIX ?= $(PREFIX)
+PDP10_DAS ?= $(PDP10_PREFIX)/bin/das
+NATIVE_BUILD_DIR ?= build-native-v1
+NATIVE_KCCFLAGS ?= -Pgnu99 -O -x=pdp6 -m=gas
+NATIVE_CPPFLAGS ?= -DHOST_DAIMOS=1 -DHOST_UNIX=0 -Iself/include/ -Hself/include/
 
 CFLAGS += -std=c99 -funsigned-char
 LDFLAGS ?=
@@ -19,6 +24,8 @@ SRCS = \
 	ccnode.c ccout.c ccpp.c ccreg.c ccstmt.c ccsym.c cctype.c ccopt.c
 OBJS = $(SRCS:.c=.o)
 ASMS = $(SRCS:.c=.s)
+NATIVE_ASMS = $(SRCS:%.c=$(NATIVE_BUILD_DIR)/%-v1.s)
+NATIVE_OBJS = $(SRCS:%.c=$(NATIVE_BUILD_DIR)/%-v1.dobj)
 
 RUNTIME = \
 	$(RUNTIMEDIR)/pdp6rt-adjbp.s $(RUNTIMEDIR)/pdp6rt-kdfad.s \
@@ -41,6 +48,19 @@ kcc: $(OBJS)
 ccgen.o ccgen1.o ccgen2.o: cc.h ccgen.h
 
 asm self-asm: $(ASMS)
+
+native-asm: $(NATIVE_ASMS)
+
+native-objects: $(NATIVE_OBJS)
+
+$(NATIVE_BUILD_DIR):
+	mkdir -p $@
+
+$(NATIVE_BUILD_DIR)/%-v1.s: %.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/%-v1.dobj: $(NATIVE_BUILD_DIR)/%-v1.s
+	$(PDP10_DAS) -F -C -O $@ $<
 
 runtime: $(RUNTIME)
 
@@ -66,5 +86,6 @@ uninstall:
 
 clean:
 	$(RM) $(ASMS) $(OBJS) kcc
+	$(RM) -r $(NATIVE_BUILD_DIR)
 
-.PHONY: all asm self-asm runtime install install-runtime uninstall clean
+.PHONY: all asm self-asm native-asm native-objects runtime install install-runtime uninstall clean

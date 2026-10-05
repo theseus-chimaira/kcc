@@ -18,6 +18,9 @@
         ** They should always be enclosed in ifndefs so users can override
         ** the site defaults if they know what they're doing.
         */
+#ifndef HOST_DAIMOS
+# define HOST_DAIMOS 0
+#endif
 #ifndef HOST_UNIX
 # if defined(__linux__) || defined(__unix__)
 #  define HOST_UNIX 1

@@ -1134,7 +1134,7 @@ gizconst(NODE *e)
 	case N_CAST:
 	    if (e->Ncast == CAST_NONE)
 		return gizconst(e->Nleft); /*Most trivial cast just pass on */
-	    else if (e->Ncast != CAST_PT_PT)
+	    else if (e->Ncast != CAST_PT_PT && e->Ncast != CAST_IT_PT)
 		return CT_NOTCON;	/* Not a constant */
 	    /* Drop through to check for ptr (most likely cast) */
 
@@ -1166,7 +1166,21 @@ gizptr(NODE *n)
     int i;
     TYPE *t;
 
-    switch (n->Nop) {
+	switch (n->Nop) {
+	case N_PCONST:
+	    /* The parser folds an explicit (void *)0 null pointer constant
+	    ** into N_PCONST before an assignment conversion may wrap it in a
+	    ** CAST_PT_PT node.  Preserve zero as a link-time constant instead
+	    ** of falling back to a runtime initializer.
+	    */
+	    if (n->Niconst == 0) {
+		pv.pv_id = NULL;
+		pv.pv_off = 0;
+		pv.pv_bsize = 0;
+		return CT_ADDR;
+	    }
+	    return CT_NOTCON;
+
 	case N_COMPLIT:
 	    /* A file-scope compound literal is a static unnamed object.
 	    ** Queue its initializer on the existing literal list the first
@@ -1188,6 +1202,23 @@ gizptr(NODE *n)
 
 	case N_CAST:
 	    switch ((int) n->Ncast) {
+		case CAST_IT_PT:
+		    /* A null pointer constant remains the all-zero pointer in
+		    ** every KCC pointer representation.  This case matters for
+		    ** hosted bootstrap builds because the self-host <stddef.h>
+		    ** spells NULL as (void *)0.  Treating that as non-constant
+		    ** forced GIZEXPR to emit a historical .LINK constructor.
+		    */
+		    if (n->Nleft != NULL
+		      && (n->Nleft->Nop == N_ICONST || n->Nleft->Nop == N_PCONST)
+		      && n->Nleft->Niconst == 0) {
+			pv.pv_id = NULL;
+			pv.pv_off = 0;
+			pv.pv_bsize = 0;
+			return CT_ADDR;
+		    }
+		    return CT_NOTCON;
+
 		case CAST_PT_PT:	/* Only ptr-ptr supported */
 		    i = gizptr(n->Nleft);	/* Get values for operand */
 		    if (i == CT_FUNC		/* Function addr?  If so, */
