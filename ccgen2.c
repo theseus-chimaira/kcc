@@ -3262,6 +3262,10 @@ gassign(NODE *n)
 	    hi = vrreal(r2);
 	    lo = vrreal(VR2(r2));
 	    flushcode();
+	    /* Keep the reloaded DImode pair as hi:lo through the encoded
+	    ** memory store.  The format argument order must match that pair;
+	    ** otherwise the low AC is used as the DMOVEM/MOVEM high word.
+	    */
 	    if (tgcpu >= TGCPU_KI)
 		nout = kccfmt(buf, sizeof(buf),
 		    "\tDMOVE\t%o,-1(17)\n"
@@ -3270,7 +3274,7 @@ gassign(NODE *n)
                     "\t TLO\t%o,0400000\n"
 		    "\tDMOVEM\t%o,0(%o)\n"
                     "\tTLZ\t%o,0400000\n",
-		    hi, lo, hi, lo, ar, lo);
+		    hi, hi, lo, hi, ar, lo);
 	    else
 		nout = kccfmt(buf, sizeof(buf),
 		    "\tMOVE\t%o,-1(17)\n"
@@ -3281,7 +3285,7 @@ gassign(NODE *n)
 		    "\tMOVEM\t%o,0(%o)\n"
 		    "\tMOVEM\t%o,1(%o)\n"
                     "\tTLZ\t%o,0400000\n",
-		    hi, lo, hi, lo, ar, lo, ar, lo);
+		    hi, lo, hi, lo, hi, ar, lo, ar, lo);
 	    codestr(buf, nout);
 	    stackoffset -= 2;
 	    vrfree(ra);
