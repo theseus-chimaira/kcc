@@ -91,14 +91,20 @@ enum systype {
 #endif
 #ifndef CPOOLSIZE	/* CCLEX: Size of string literal char pool */
 /* 5/91 make dynamic later, see cclex if 0...endif */
- #if __MSDOS__
+ #if HOST_DAIMOS
+  #define CPOOLSIZE 4096
+ #elif __MSDOS__
   #define CPOOLSIZE 6000
  #else
   #define CPOOLSIZE 16000
  #endif
 #endif
 #ifndef THASHSIZE	/* CCSYM: Size of type hash table */
+#if HOST_DAIMOS
+ #define THASHSIZE 509	/* Native bootstrap: buckets only, types are dynamic */
+#else
  #define THASHSIZE 2557	/* primes for better hash */
+#endif
 #endif
 #ifndef MAXTYPE	     /* CCSYM: # types possible if DEBUG_KCC, else calloced */
  #define MAXTYPE 2557	/* must be same as THASHSIZE if DEBUG_KCC */
@@ -107,7 +113,11 @@ enum systype {
  #define IDENTSIZE 32
 #endif
 #ifndef MAXHSH		/* CCSYM: Symbol hashtable size */
+#if HOST_DAIMOS
+ #define MAXHSH (1<<9)	/* Native bootstrap: symbols themselves are dynamic */
+#else
  #define MAXHSH (1<<12)	/*	(4096) Must be a power of 2! */
+#endif
 #endif
 #ifndef MAXNODE		/* CCSTMT: # of nodes in initial static table */
  #define MAXNODE 100	/* 5/91 changed 4000 to 100, see PPS 4232 */
