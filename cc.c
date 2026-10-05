@@ -70,11 +70,16 @@ extern char *execargs(int *, char ***);			/* CCASMB */
 #endif
 extern char *fnparse(char *, char *, char *, char *, char *);  /* CCASMB */
 extern char *estrcpy(char *, char *);			/* CCASMB */
+#if !KCC_PHASE_CPP
 extern NODE *extdef(void), *tntdef(void);		/* CCDECL */
+#endif
 extern void syminit(void), ppinit(void), lexinit(void), initpar(void),
 	outinit(void), outdone(int),
 	ppdefine(int, char **, int, char **), passthru(FILE *),
 	gencode(NODE *);
+#if KCC_PHASE_CPP
+extern int ppstream_write(FILE *);
+#endif
 extern void errfopen (char *, char *);			/* CCERR */
 extern int fclose (FILE *);
 extern char *fnparse(char *, char *, char *, char *, char *);
@@ -197,6 +202,10 @@ main (int argc, char **argv)
     */
     link = assemble = delete = 1;
 #if HOST_UNIX || HOST_DAIMOS
+    link = assemble = delete = 0;
+#endif
+#if KCC_PHASE_CPP
+    prepf = 1;
     link = assemble = delete = 0;
 #endif
 
@@ -1349,13 +1358,17 @@ static
 int
 cfile (char *arg)
     {
+#if !KCC_PHASE_CPP
     int		mainflg;		/* Set if module contains "main" */
+#endif
     int		asmdflg = -2;		/* Set to result of assembly attempt */
     clock_t	startime = (clock_t)0;
+#if !KCC_PHASE_CPP
     extern
     int		nsert_file (char *f, int insert_flag);
     int		save_fline;
     int		save_tline;
+#endif
 
 
     if (!vrbsta)
@@ -1374,10 +1387,11 @@ cfile (char *arg)
 	outpghdr();
 	}
 
+#if !KCC_PHASE_CPP
 module_loop:
-
     save_fline = fline;
     save_tline = tline;
+#endif
 
     if (!prepf && !vrbsta)
 	{
@@ -1393,6 +1407,16 @@ module_loop:
     ppdefine (npreundef,preundefs,	/*  then can do initial -U undefs */
 	     npredef, predefs);		/*   and initial -D definitions */
 
+#if KCC_PHASE_CPP
+    /*
+     * Split native KCPP stops at the cooked preprocessor-token boundary.
+     * Diagnostics stay on stderr/outmsgs; stdout is reserved for KPT4.
+     */
+    if (ppstream_write(stdout) != 0)
+	jerr("Could not write KCC preprocessor token stream");
+    fclose(in);
+    return -2;
+#else
     if (module_pragma)
 	{
 	fline = save_fline;		/* ppinit() reset fline */
@@ -1540,6 +1564,7 @@ module_loop:
 	showcpu (startime);		/* or say how much cpu we used */
 
     return asmdflg;			/* Return assembly result */
+#endif /* !KCC_PHASE_CPP */
     }
 
 /* Auxiliary - returns true if main() was defined in this module */
@@ -1572,6 +1597,17 @@ files (char *fname)
     char	rname[FNAMESIZE];	/* Name of .REL binary file */
     char	ext[FNAMESIZE];		/* Temp to hold parsed extension */
 
+    /*
+     * All filename components and the reconstructed source name use the
+     * historical fixed FNAMESIZE representation.  Reject an unrepresentable
+     * path before fnparse()/estrcpy() can overrun those buffers.
+     */
+    if (strlen(fname) >= FNAMESIZE)
+	{
+	jerr("Filename too long (maximum %d characters): %s",
+		FNAMESIZE - 1, fname);
+	return 0;
+	}
 
     /*
     ** Parse filename into its various pieces, mainly to get module name.
@@ -1603,6 +1639,12 @@ files (char *fname)
 	estrcpy (cname, fname);	/* Found .C, just copy filename */
     else
 	{
+	if (strlen(inpfdir) + strlen(inpfmodule) + strlen(inpfsuf) + 2
+	    >= FNAMESIZE)
+	    {
+	    jerr("Source filename too long after adding .c: %s", fname);
+	    return 0;
+	    }
 #if __MSDOS__
 	estrcpy (estrcpy (estrcpy (estrcpy (cname,	/* Rebuild filename */
 		inpfsuf), inpfdir), inpfmodule), ".c");
@@ -1647,7 +1689,9 @@ files (char *fname)
 
     estrcpy (inpfname, fname);		/* Try filename as given */
 
-#if __MSDOS__ || HOST_UNIX || HOST_DAIMOS	/* native/host ANSI fopen */
+#if KCC_PHASE_CORE
+    in = fopen(inpfname, "rb");
+#elif __MSDOS__ || HOST_UNIX || HOST_DAIMOS	/* native/host ANSI fopen */
     in = fopen (inpfname, "r");
 #else
     switch (sourcebytewidth)		/* FW 2A(47) */
@@ -1668,6 +1712,10 @@ files (char *fname)
     
     if (in == NULL)
 	{
+#if KCC_PHASE_CORE
+	errfopen("token input", inpfname);
+	return 0;
+#else
 	estrcpy (inpfname, cname);	/* then constructed filename */
 
 #if __MSDOS__ || HOST_UNIX || HOST_DAIMOS	/* native/host ANSI fopen */
@@ -1694,6 +1742,7 @@ files (char *fname)
 	    errfopen("input", inpfname);
 	    return 0;
 	    }
+#endif
 	}
 
 #if DEBUG_KCC		/* 5/91 KCC size */

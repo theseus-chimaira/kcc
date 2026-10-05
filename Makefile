@@ -26,6 +26,42 @@ OBJS = $(SRCS:.c=.o)
 ASMS = $(SRCS:.c=.s)
 NATIVE_ASMS = $(SRCS:%.c=$(NATIVE_BUILD_DIR)/%-v1.s)
 NATIVE_OBJS = $(SRCS:%.c=$(NATIVE_BUILD_DIR)/%-v1.dobj)
+NATIVE_CPP_PHASE_ASM = $(NATIVE_BUILD_DIR)/ccppout-v1.s
+NATIVE_CPP_PHASE_OBJ = $(NATIVE_BUILD_DIR)/ccppout-v1.dobj
+NATIVE_CORE_PHASE_ASM = $(NATIVE_BUILD_DIR)/ccppin-v1.s
+NATIVE_CORE_PHASE_OBJ = $(NATIVE_BUILD_DIR)/ccppin-v1.dobj
+NATIVE_CPP_DRIVER_ASM = $(NATIVE_BUILD_DIR)/cc-cpp-v1.s
+NATIVE_CPP_DRIVER_OBJ = $(NATIVE_BUILD_DIR)/cc-cpp-v1.dobj
+NATIVE_CPP_OUT_ASM = $(NATIVE_BUILD_DIR)/ccout-cpp-v1.s
+NATIVE_CPP_OUT_OBJ = $(NATIVE_BUILD_DIR)/ccout-cpp-v1.dobj
+NATIVE_CPP_ERR_ASM = $(NATIVE_BUILD_DIR)/ccerr-cpp-v1.s
+NATIVE_CPP_ERR_OBJ = $(NATIVE_BUILD_DIR)/ccerr-cpp-v1.dobj
+NATIVE_CPP_SYM_ASM = $(NATIVE_BUILD_DIR)/ccsym-cpp-v1.s
+NATIVE_CPP_SYM_OBJ = $(NATIVE_BUILD_DIR)/ccsym-cpp-v1.dobj
+NATIVE_CPP_DATA_ASM = $(NATIVE_BUILD_DIR)/ccdata-cpp-v1.s
+NATIVE_CPP_DATA_OBJ = $(NATIVE_BUILD_DIR)/ccdata-cpp-v1.dobj
+NATIVE_CORE_DRIVER_ASM = $(NATIVE_BUILD_DIR)/cc-core-v1.s
+NATIVE_CORE_DRIVER_OBJ = $(NATIVE_BUILD_DIR)/cc-core-v1.dobj
+
+NATIVE_KCPP_OBJS = \
+	$(NATIVE_CPP_DRIVER_OBJ) $(NATIVE_BUILD_DIR)/ccasmb-v1.dobj \
+	$(NATIVE_CPP_DATA_OBJ) $(NATIVE_CPP_ERR_OBJ) $(NATIVE_CPP_OUT_OBJ) \
+	$(NATIVE_BUILD_DIR)/ccpp-v1.dobj $(NATIVE_CPP_PHASE_OBJ) \
+	$(NATIVE_CPP_SYM_OBJ)
+
+NATIVE_KCC1_OBJS = \
+	$(NATIVE_CORE_DRIVER_OBJ) $(NATIVE_BUILD_DIR)/ccasmb-v1.dobj \
+	$(NATIVE_BUILD_DIR)/cccreg-v1.dobj $(NATIVE_BUILD_DIR)/cccse-v1.dobj \
+	$(NATIVE_BUILD_DIR)/cccode-v1.dobj $(NATIVE_BUILD_DIR)/ccdata-v1.dobj \
+	$(NATIVE_BUILD_DIR)/ccdbug-v1.dobj $(NATIVE_BUILD_DIR)/ccdecl-v1.dobj \
+	$(NATIVE_BUILD_DIR)/ccerr-v1.dobj $(NATIVE_BUILD_DIR)/cceval-v1.dobj \
+	$(NATIVE_BUILD_DIR)/ccgen-v1.dobj $(NATIVE_BUILD_DIR)/ccgen1-v1.dobj \
+	$(NATIVE_BUILD_DIR)/ccgen2-v1.dobj $(NATIVE_BUILD_DIR)/ccgswi-v1.dobj \
+	$(NATIVE_BUILD_DIR)/ccjskp-v1.dobj $(NATIVE_BUILD_DIR)/cclex-v1.dobj \
+	$(NATIVE_BUILD_DIR)/ccnode-v1.dobj $(NATIVE_BUILD_DIR)/ccout-v1.dobj \
+	$(NATIVE_BUILD_DIR)/ccreg-v1.dobj $(NATIVE_BUILD_DIR)/ccstmt-v1.dobj \
+	$(NATIVE_BUILD_DIR)/ccsym-v1.dobj $(NATIVE_BUILD_DIR)/cctype-v1.dobj \
+	$(NATIVE_BUILD_DIR)/ccopt-v1.dobj $(NATIVE_CORE_PHASE_OBJ)
 
 RUNTIME = \
 	$(RUNTIMEDIR)/pdp6rt-adjbp.s $(RUNTIMEDIR)/pdp6rt-kdfad.s \
@@ -53,6 +89,12 @@ native-asm: $(NATIVE_ASMS)
 
 native-objects: $(NATIVE_OBJS)
 
+native-kcpp-objects: $(NATIVE_KCPP_OBJS)
+
+native-kcc1-objects: $(NATIVE_KCC1_OBJS)
+
+native-phase-objects: native-kcpp-objects native-kcc1-objects
+
 $(NATIVE_BUILD_DIR):
 	mkdir -p $@
 
@@ -61,6 +103,30 @@ $(NATIVE_BUILD_DIR)/%-v1.s: %.c $(KCC) | $(NATIVE_BUILD_DIR)
 
 $(NATIVE_BUILD_DIR)/%-v1.dobj: $(NATIVE_BUILD_DIR)/%-v1.s
 	$(PDP10_DAS) -F -C -O $@ $<
+
+$(NATIVE_BUILD_DIR)/ccppout-v1.s: ccppout.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CPP=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccppin-v1.s: ccppin.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CORE=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/cc-cpp-v1.s: cc.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CPP=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccout-cpp-v1.s: ccout.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CPP=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccerr-cpp-v1.s: ccerr.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CPP=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccsym-cpp-v1.s: ccsym.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CPP=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccdata-cpp-v1.s: ccdata.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CPP=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/cc-core-v1.s: cc.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CORE=1 -S $< -o $@
 
 runtime: $(RUNTIME)
 
@@ -88,4 +154,6 @@ clean:
 	$(RM) $(ASMS) $(OBJS) kcc
 	$(RM) -r $(NATIVE_BUILD_DIR)
 
-.PHONY: all asm self-asm native-asm native-objects runtime install install-runtime uninstall clean
+.PHONY: all asm self-asm native-asm native-objects native-kcpp-objects \
+	native-kcc1-objects native-phase-objects runtime install install-runtime \
+	uninstall clean

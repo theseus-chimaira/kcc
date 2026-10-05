@@ -9,6 +9,43 @@
 */
 
 #include "cc.h"
+#if KCC_PHASE_CPP
+
+/*
+ * KCPP needs only the low-level text emitters used by preprocessing and
+ * mixed-listing diagnostics.  Keeping the assembler/backend emitter out of
+ * the preprocessor phase prevents one tiny output dependency from pulling in
+ * the optimizer and code generator.
+ */
+void
+outstr(char *s)
+{
+    while (*s != '\0')
+	putc(*s++, out);
+}
+
+void
+outpghdr(void)
+{
+    ++opage;
+    if (opage > 1)
+	putc('\f', out);
+    fprintf(out, "; %-26s\t\tCompuServe Incorporated\t\t%s\t  Page %d\n",
+	    dspfname, creatime, opage);
+    fprintf(out, "; KCC: %-20s\t\t\t\t\t\t%s\t\n\n",
+	    ver_str, comptime);
+    oline = 3;
+}
+
+void
+outnl(void)
+{
+    putc('\n', out);
+    if (mlist && ++oline > MAX_OLINE)
+	outpghdr();
+}
+
+#else /* !KCC_PHASE_CPP */
 #include "ccgen.h"
 #include "ccchar.h"
 #include <string.h>
@@ -4076,3 +4113,5 @@ outiepilog (void)
     }
     fputs ("\tDEBRK$\n", out);
     }
+
+#endif /* !KCC_PHASE_CPP */

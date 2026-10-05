@@ -21,6 +21,15 @@
 #ifndef HOST_DAIMOS
 # define HOST_DAIMOS 0
 #endif
+#ifndef KCC_PHASE_CPP
+# define KCC_PHASE_CPP 0
+#endif
+#ifndef KCC_PHASE_CORE
+# define KCC_PHASE_CORE 0
+#endif
+#if KCC_PHASE_CPP && KCC_PHASE_CORE
+# error "KCC_PHASE_CPP and KCC_PHASE_CORE are mutually exclusive"
+#endif
 #ifndef HOST_UNIX
 # if defined(__linux__) || defined(__unix__)
 #  define HOST_UNIX 1

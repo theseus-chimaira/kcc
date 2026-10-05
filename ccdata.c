@@ -77,14 +77,19 @@ struct psect ldpsstack = {       0, 0, 0 };	/* For now */
 /* Table storage allocation and more definitions */
 
 				/* Allocate storage for tables in cc.h */
+#if !KCC_PHASE_CPP
 NODE nodes[MAXNODE];		/* Allocate parse tree node table */
+#endif
 SYMBOL *htable[MAXHSH];		/* Symbol hash table */
+#if !KCC_PHASE_CPP
 TYPE *ttable[THASHSIZE];	/* hash table of types */
 TYPE *types = NULL;	/* 2/92 non-NULL iff -g=debug */
+#endif
 
 #define CHARTABLE		/* Make ctftab[] table */
 #include "ccchar.h"
 
+#if !KCC_PHASE_CPP
 #define GEXT			/* Define stuff */
 #include "ccgen.h"		/* and make codes[MAXCODE] table */
 
@@ -151,6 +156,7 @@ char typbsiztab[TS_MAX] = {
 ** have their entries initialized.
 */
 TYPE *typeptr[TS_MAX];
+#endif /* !KCC_PHASE_CPP */
 
 /*
 ** Tokens.
@@ -161,11 +167,13 @@ TYPE *typeptr[TS_MAX];
 */
 
 /* Define a table of token/node types & precs */
+#if !KCC_PHASE_CPP
 TOKEN tok[] = {
 #define tokdef(name,str,type,prec) {type,prec},
 #include "cctoks.h"
 #undef tokdef
 };
+#endif
 
 /* Backward compatibility hack, see whether using old preprocessor (which
 ** allowed parameters within string & char constants) or new one (which

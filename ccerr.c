@@ -36,7 +36,9 @@ void efatal (char *fmt, ...);
 
 /* Imported functions */
 extern char *estrcpy(char *, char *);	/* CCASMB for string hacking */
+#if !KCC_PHASE_CPP
 extern int nextoken(void);		/* CCLEX */
+#endif
 
 #define MAX_ERRORS 50
 
@@ -48,7 +50,9 @@ static void ectran(char *to, char *from, int cnt);
 static int evsprintf(char *cp, char *fmt, va_list *aap);
 static char *tokname(int tok);
 static int edefarg(char *cp, char **afmt, va_list *aap);
+#if !KCC_PHASE_CPP
 static void recover(int n);
+#endif
 static char *errputc(char *, int);
 static char *errputs(char *, char *);
 static char *errputul(char *, unsigned long, int, int);
@@ -640,6 +644,10 @@ evsprintf(char *cp, char *fmt, va_list *aap)
 	    {
 	    char *tcp = cp;
 	    n = va_arg(*aap, NODE *);
+#if KCC_PHASE_CPP
+	    (void)n;
+	    tcp = errputs(tcp, "(node unavailable in KCPP)");
+#else
 	    tcp = errputs(tcp, "(node ");
 	    tcp = errputsl(tcp, (long)nodeidx(n));
 	    tcp = errputs(tcp, ": ");
@@ -647,6 +655,7 @@ evsprintf(char *cp, char *fmt, va_list *aap)
 	    tcp = errputc(tcp, '=');
 	    tcp = errputs(tcp, tokname(n->Nop));
 	    tcp = errputc(tcp, ')');
+#endif
 	    i = tcp - cp;
 	    }
 	    break;
@@ -839,6 +848,7 @@ edefarg(char *cp, char **afmt, va_list *aap)
 /* ---------------------- */
 /*	expect token      */
 /* ---------------------- */
+#if !KCC_PHASE_CPP
 int
 expect(int t)
 {
@@ -892,6 +902,7 @@ recover(int n)
 /*  tokpush(token, csymbol); */
 /*  token = n;		     */
 }
+#endif /* !KCC_PHASE_CPP */
 
 #if 0	/* 5/91 KCC size */
 int

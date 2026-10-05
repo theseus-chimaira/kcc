@@ -26,16 +26,12 @@ SYMBOL *symfnext(SYMBOL *),	/* CCSYM */
 extern
 void freesym(SYMBOL *);		/* CCSYM */
 extern
-INT pconst(void);		/* CCSTMT to parse constant expr */
-extern
 char *estrcpy(char *, char *),
 	*fstrcpy(char *, char *, char *);	/* CCASMB */
 #if !HOST_DAIMOS
 extern
 int symval(char *, char *, int);		/* CCASMB */
 #endif
-extern
-int nextoken(void);			/* CCLEX  */
 extern
 void flushcode (void);
 extern
@@ -110,11 +106,6 @@ static void ppappendstr(char *), ppappendc(int);
  /* KAR-6/91, changed type to short */
 static
 short fstart = 1;
-
- /* KAR-11/91, flag for usage bef. init. code for signaling parsing the
-  * the right side of and assignment expression.
-  */
-char ra_expr;
 
 /*
  * KAR-2/93, adding the following enumerated type and instance for
@@ -359,6 +350,7 @@ static
 void tkerr(char *, int);
 static
 tlist_t getlinetl(void), tlwspdel(tlist_t, int);
+static INT ppifexpr(PPTOK **, int, int *);
 static
 tlist_t asmrefill(void);
 static
@@ -1950,11 +1942,10 @@ nextrawpp (void)
 	    break;
 
 
-	case '=':	/* KAR-11/91, usage before initialization code */
+	case '=':
 
 	    if (nextch() != '=')
 		{
-		ra_expr = 1;
 		rawpp = Q_ASGN;
 		retflag = 1;
 		break;
@@ -2135,7 +2126,6 @@ nextrawpp (void)
 
 	case ',':
 	    rawpp = T_COMMA;
-	    ra_expr = 0;
 	    break;
 
 
@@ -2146,7 +2136,6 @@ nextrawpp (void)
 
 	case ';':
 	    rawpp = T_SCOLON;
-	    ra_expr = 0;
 	    break;
 
 
@@ -2167,7 +2156,6 @@ nextrawpp (void)
 
 	case '{':
 	    rawpp = T_LBRACE;
-	    ra_expr = 0;
 	    break;
 
 
@@ -5243,25 +5231,334 @@ else
 while (flushing && !eof);		/* If still flushing, keep going. */
 }
 
+/*
+ * PPIFSKIP - Skip whitespace in an expanded #if token list.
+ */
+static PPTOK *
+ppifskip(PPTOK *p)
+{
+    while (p != NULL && (p->pt_typ == T_WSP || p->pt_typ == T_EOL))
+	p = tokn2p(p->pt_nxt);
+    return p;
+}
+
+/*
+ * PPIFINT - Convert an integer preprocessing token to an INT.
+ *
+ * This deliberately avoids strtol(): KCPP needs no extra libc conversion
+ * machinery merely to evaluate #if.  KCC accepts the usual decimal, octal,
+ * hexadecimal, and GNU/KCC binary spellings.  Integer suffixes are ignored
+ * after the digit sequence, as their signedness/width does not affect the
+ * truth value of the bootstrap expressions.
+ */
+static INT
+ppifint(char *s, int *bad)
+{
+    unsigned INT v = 0;
+    int base = 10;
+    int d;
+    int any = 0;
+
+    if (s == NULL) {
+	*bad = 1;
+	return 0;
+    }
+    if (*s == '0') {
+	++s;
+	if (*s == 'x' || *s == 'X') {
+	    base = 16;
+	    ++s;
+	} else if (*s == 'b' || *s == 'B') {
+	    base = 2;
+	    ++s;
+	} else {
+	    base = 8;
+	    any = 1;		/* The leading zero is itself a digit. */
+	}
+    }
+    while (*s != '\0') {
+	int c = (unsigned char)*s;
+	if (c == '\'') {		/* C23/GNU digit separator */
+	    ++s;
+	    continue;
+	}
+	if (c >= '0' && c <= '9')
+	    d = c - '0';
+	else if (c >= 'a' && c <= 'f')
+	    d = c - 'a' + 10;
+	else if (c >= 'A' && c <= 'F')
+	    d = c - 'A' + 10;
+	else
+	    break;
+	if (d >= base)
+	    break;
+	v = v * (unsigned INT)base + (unsigned INT)d;
+	any = 1;
+	++s;
+    }
+    if (!any) {
+	*bad = 1;
+	return 0;
+    }
+    /* Only standard integer suffix letters may remain. */
+    while (*s == 'u' || *s == 'U' || *s == 'l' || *s == 'L')
+	++s;
+    if (*s != '\0')
+	*bad = 1;
+    return (INT)v;
+}
+
+/*
+ * PPIFCHAR - Convert a preprocessing character constant.
+ *
+ * KCC's native character width is nine bits.  Multi-character constants are
+ * accumulated left-to-right, matching the compiler's historical convention.
+ * Universal-character names are intentionally left to normal preprocessing;
+ * this routine handles the ordinary C escapes needed by #if expressions.
+ */
+static INT
+ppifchar(char *s, int *bad)
+{
+    unsigned INT v = 0;
+    int n = 0;
+
+    if (s == NULL || (*s != '\'' && !(*s == 'L' && s[1] == '\''))) {
+	*bad = 1;
+	return 0;
+    }
+    if (*s == 'L')
+	++s;
+    ++s;
+    while (*s != '\0' && *s != '\'') {
+	unsigned int c;
+	if (*s != '\\') {
+	    c = (unsigned char)*s++;
+	} else {
+	    ++s;
+	    switch (*s) {
+	    case 'a': c = '\a'; ++s; break;
+	    case 'b': c = '\b'; ++s; break;
+	    case 'f': c = '\f'; ++s; break;
+	    case 'n': c = '\n'; ++s; break;
+	    case 'r': c = '\r'; ++s; break;
+	    case 't': c = '\t'; ++s; break;
+	    case 'v': c = '\v'; ++s; break;
+	    case '\\': c = '\\'; ++s; break;
+	    case '\'': c = '\''; ++s; break;
+	    case '\"': c = '\"'; ++s; break;
+	    case 'x':
+		c = 0;
+		++s;
+		if (!((*s >= '0' && *s <= '9') ||
+		      (*s >= 'a' && *s <= 'f') ||
+		      (*s >= 'A' && *s <= 'F'))) {
+		    *bad = 1;
+		    return 0;
+		}
+		while ((*s >= '0' && *s <= '9') ||
+		       (*s >= 'a' && *s <= 'f') ||
+		       (*s >= 'A' && *s <= 'F')) {
+		    int d;
+		    if (*s <= '9') d = *s - '0';
+		    else if (*s <= 'F') d = *s - 'A' + 10;
+		    else d = *s - 'a' + 10;
+		    c = (c << 4) + (unsigned int)d;
+		    ++s;
+		}
+		break;
+	    default:
+		if (*s >= '0' && *s <= '7') {
+		    int cnt = 0;
+		    c = 0;
+		    while (cnt++ < 3 && *s >= '0' && *s <= '7') {
+			c = (c << 3) + (unsigned int)(*s - '0');
+			++s;
+		    }
+		} else if (*s != '\0') {
+		    c = (unsigned char)*s++;
+		} else {
+		    *bad = 1;
+		    return 0;
+		}
+		break;
+	    }
+	}
+	v = (v << 9) | (c & 0777U);
+	++n;
+    }
+    if (*s != '\'' || s[1] != '\0' || n == 0)
+	*bad = 1;
+    return (INT)v;
+}
+
+static int
+ppifprec(int tok)
+{
+    switch (tok) {
+    case Q_MPLY: case Q_DIV: case Q_MOD: return 13;
+    case Q_PLUS: case Q_MINUS: return 12;
+    case Q_LSHFT: case Q_RSHFT: return 11;
+    case Q_LESS: case Q_GREAT: case Q_LEQ: case Q_GEQ: return 10;
+    case Q_EQUAL: case Q_NEQ: return 9;
+    case Q_ANDT: return 8;
+    case Q_XORT: return 7;
+    case Q_OR: return 6;
+    case Q_LAND: return 5;
+    case Q_LOR: return 4;
+    default: return 0;
+    }
+}
+
+static INT ppifcond(PPTOK **, int, int *);
+
+static INT
+ppifprimary(PPTOK **pp, int eval, int *bad)
+{
+    PPTOK *p = ppifskip(*pp);
+    INT v;
+    int op;
+
+    if (p == NULL) {
+	*bad = 1;
+	return 0;
+    }
+    op = p->pt_typ;
+    *pp = tokn2p(p->pt_nxt);
+    switch (op) {
+    case T_ICONST:
+	return eval ? ppifint(p->pt_val.cp, bad) : 0;
+    case T_CCONST:
+	return eval ? ppifchar(p->pt_val.cp, bad) : 0;
+    case T_LPAREN:
+	v = ppifcond(pp, eval, bad);
+	p = ppifskip(*pp);
+	if (p == NULL || p->pt_typ != T_RPAREN) {
+	    *bad = 1;
+	    return 0;
+	}
+	*pp = tokn2p(p->pt_nxt);
+	return v;
+    case Q_PLUS:
+	return ppifprimary(pp, eval, bad);
+    case Q_MINUS:
+	v = ppifprimary(pp, eval, bad);
+	return eval ? -v : 0;
+    case Q_NOT:
+	v = ppifprimary(pp, eval, bad);
+	return eval ? !v : 0;
+    case Q_COMPL:
+	v = ppifprimary(pp, eval, bad);
+	return eval ? ~v : 0;
+    default:
+	*bad = 1;
+	return 0;
+    }
+}
+
+static INT
+ppifbinary(PPTOK **pp, int minprec, int eval, int *bad)
+{
+    INT lhs = ppifprimary(pp, eval, bad);
+
+    for (;;) {
+	PPTOK *p = ppifskip(*pp);
+	int op;
+	int prec;
+	int reval;
+	INT rhs;
+
+	if (p == NULL || (prec = ppifprec(p->pt_typ)) < minprec)
+	    break;
+	op = p->pt_typ;
+	*pp = tokn2p(p->pt_nxt);
+	reval = eval;
+	if (op == Q_LAND && lhs == 0)
+	    reval = 0;
+	else if (op == Q_LOR && lhs != 0)
+	    reval = 0;
+	rhs = ppifbinary(pp, prec + 1, reval, bad);
+	if (!eval)
+	    continue;
+	switch (op) {
+	case Q_MPLY: lhs *= rhs; break;
+	case Q_DIV:
+	    if (rhs == 0) *bad = 1;
+	    else lhs /= rhs;
+	    break;
+	case Q_MOD:
+	    if (rhs == 0) *bad = 1;
+	    else lhs %= rhs;
+	    break;
+	case Q_PLUS: lhs += rhs; break;
+	case Q_MINUS: lhs -= rhs; break;
+	case Q_LSHFT:
+	    if (rhs < 0 || rhs >= 36) *bad = 1;
+	    else lhs <<= rhs;
+	    break;
+	case Q_RSHFT:
+	    if (rhs < 0 || rhs >= 36) *bad = 1;
+	    else lhs >>= rhs;
+	    break;
+	case Q_LESS: lhs = lhs < rhs; break;
+	case Q_GREAT: lhs = lhs > rhs; break;
+	case Q_LEQ: lhs = lhs <= rhs; break;
+	case Q_GEQ: lhs = lhs >= rhs; break;
+	case Q_EQUAL: lhs = lhs == rhs; break;
+	case Q_NEQ: lhs = lhs != rhs; break;
+	case Q_ANDT: lhs &= rhs; break;
+	case Q_XORT: lhs ^= rhs; break;
+	case Q_OR: lhs |= rhs; break;
+	case Q_LAND: lhs = (lhs != 0 && rhs != 0); break;
+	case Q_LOR: lhs = (lhs != 0 || rhs != 0); break;
+	default: *bad = 1; break;
+	}
+    }
+    return lhs;
+}
+
+static INT
+ppifcond(PPTOK **pp, int eval, int *bad)
+{
+    INT cond = ppifbinary(pp, 4, eval, bad);
+    PPTOK *p = ppifskip(*pp);
+
+    if (p != NULL && p->pt_typ == Q_QUERY) {
+	INT tv;
+	INT fv;
+	*pp = tokn2p(p->pt_nxt);
+	tv = ppifcond(pp, eval && cond != 0, bad);
+	p = ppifskip(*pp);
+	if (p == NULL || p->pt_typ != T_COLON) {
+	    *bad = 1;
+	    return 0;
+	}
+	*pp = tokn2p(p->pt_nxt);
+	fv = ppifcond(pp, eval && cond == 0, bad);
+	return eval ? (cond != 0 ? tv : fv) : 0;
+    }
+    return cond;
+}
+
+static INT
+ppifexpr(PPTOK **pp, int eval, int *bad)
+{
+    return ppifcond(pp, eval, bad);
+}
+
 /* IFTEST - auxiliary for #if and #elif.
 **	Parses the conditional expression and returns its value.
 ** This works by gobbling the rest of the line as a token list,
-** expanding it, and then substituting this token list as if a macro
-** to the C expression parser.
-**	On return, current token is garbage (usually T_EOF after the
-** mexplim()) but current char is 1st of next line after the #if.
-** Be careful not to try to examine the "current token" after iftest().
-** Sigh.
+** expanding it, and evaluating the resulting preprocessing tokens locally.
+** Keeping #if evaluation inside CCPP is important for split native KCC:
+** preprocessing must not drag the C parser and code generator into KCPP.
 */
 static
 int
 iftest(void)
 {
     PPTOK *p;
-    static PPTOK scoltok = { T_SCOLON, 0, NULL, { 0 } };	/* Token for ";" */
-	static PPTOK eoltok = { T_EOL, 0, NULL, { 0 } };
-	int won = 0;		/* Set non-zero if expr parse wins. */
-	INT val;
+    int bad = 0;
+    INT val;
 
     /* Set up to parse a one-line constant expression */
 	if (tlpcur(curtl))		/* Make sure we can hack curtl */
@@ -5280,25 +5577,21 @@ iftest(void)
 	p->pt_typ = T_ICONST;
 	p->pt_val.cp = "0L";
 	}
-    if (tlpcur(curtl))	/* Add ";" on end */
+    if (tlpcur(curtl))
 	{
-	tltadd(curtl, scoltok);
-	tltadd(curtl, eoltok);	/* Plus EOL in case of inasm */
-	p = curtl.tl_tail;	/* Remember ptr to last token */
 #if DEBUG_PP
 	if (debpp) pmactl("iftest", curtl, 0);
 #endif
-	nextoken();		/* Initialize top-level token parser */
-	val = pconst();		/* Parse input into value */
-	curptr = NULL;		/* Clean up from recursive nextpp() */
-	if (!tlpcur(curtl)	/* Make sure everything gobbled */
-	  || tlpcur(curtl) == p)	/* If anything left, better be EOL */
-	    {
-	    ++won;		/* Yep to either, parse won! */
-	    }
+	p = tlpcur(curtl);
+	val = ppifexpr(&p, 1, &bad);
+	p = ppifskip(p);
+	if (p != NULL)
+	    bad = 1;
 	tlzinit(curtl);		/* Ensure input tokenlist is flushed */
 	}
-    if (!won)
+    else
+	bad = 1, val = 0;
+    if (bad)
 	{
 	error("Bad syntax for #if expression, using 0");
 	val = 0;

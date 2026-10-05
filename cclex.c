@@ -36,6 +36,7 @@ static int strctok(char *), skipgnuattr(void), skipcxxattr(void),
 	attralignval(char *), gnuattrname(char *, char *);
 static long gnuattr_pending;
 static char *stripintseps(char *, char *, int);
+char ra_expr;
 
 /* Globals used */
 extern int savelits;	/* Set 0 by CC main parsing loop for each toplevel
@@ -116,6 +117,7 @@ lexinit(void)
 {
     gnuattr_pending = 0;
     tokstack = 0;
+    ra_expr = 0;
     savelits = 0;		/* OK to reset string literal char pool */
     if (!prepf)
 	nextoken();	/* Prime with 1st token */
@@ -243,6 +245,24 @@ nextoken (void)
      * the symbol and type tables will also be dumped.
      */
 
+    /*
+     * Usage-before-initialization tracking belongs to the lexer/parser
+     * boundary, not the raw preprocessor.  This keeps the cooked-token
+     * interface complete when CCPP and the compiler run in separate
+     * processes.
+     */
+    switch (token) {
+    case Q_ASGN:
+	ra_expr = 1;
+	break;
+    case T_COMMA:
+    case T_SCOLON:
+    case T_LBRACE:
+	ra_expr = 0;
+	break;
+    default:
+	break;
+    }
     return token;
 }
 

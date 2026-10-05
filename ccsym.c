@@ -13,6 +13,256 @@
 #include <stdlib.h>	/* calloc, realloc, free */
 #include <string.h>
 
+#if KCC_PHASE_CPP
+
+/*
+ * KCPP symbol table.
+ *
+ * The preprocessor needs only global identifiers and macro-shadow ordering.
+ * C types, labels, local scopes, external-name mapping, and assembler symbol
+ * output belong to KCC1 and are intentionally absent from this phase.
+ */
+SYMBOL *lsymhead;
+
+static SYMBOL *pp_symtail;
+static SYMBOL *pp_freelist;
+SYMBOL *symfnext(SYMBOL *);
+
+static int
+pp_idcpy(SYMBOL *s, char *cp)
+{
+    int left = IDENTSIZE;
+    char *to = s->Sname;
+    unsigned int h = 0;
+
+    if ((h = (unsigned char)(*to = *cp)) != 0) {
+	--left;
+	while ((*++to = *++cp) != '\0') {
+	    if (--left > 0)
+		h += h + (unsigned char)*cp;
+	    else {
+		*to = '\0';
+		s->Svalue = h & (MAXHSH - 1);
+		return 1;
+	    }
+	}
+    }
+    while (--left > 0)
+	*++to = '\0';
+    s->Svalue = h & (MAXHSH - 1);
+    return 0;
+}
+
+static int
+pp_symcmp(SYMBOL *a, SYMBOL *b)
+{
+    return strcmp(a->Sname, b->Sname) == 0;
+}
+
+static int
+pp_symhash(SYMBOL *s)
+{
+    char *cp = s->Sname;
+    unsigned int h;
+
+    if ((h = (unsigned char)*cp) != 0)
+	while (*++cp)
+	    h += h + (unsigned char)*cp;
+    return h & (MAXHSH - 1);
+}
+
+static SYMBOL *
+pp_getsym(void)
+{
+    SYMBOL *s;
+
+    if ((s = pp_freelist) != NULL)
+	pp_freelist = s->Snext;
+    else if ((s = (SYMBOL *)calloc(1, sizeof(SYMBOL))) == NULL)
+	efatal("Out of memory for preprocessor symbols");
+
+    s->Sprev = pp_symtail;
+    s->Snext = NULL;
+    pp_symtail->Snext = s;
+    pp_symtail = s;
+    return s;
+}
+
+static void
+pp_retsym(SYMBOL *s)
+{
+    if (s == pp_symtail)
+	pp_symtail = s->Sprev;
+    if (s->Sprev)
+	s->Sprev->Snext = s->Snext;
+    if (s->Snext)
+	s->Snext->Sprev = s->Sprev;
+    s->Snext = pp_freelist;
+    pp_freelist = s;
+}
+
+static SYMBOL *
+pp_mksym(char *id)
+{
+    SYMBOL *s = pp_getsym();
+    int h;
+
+    (void)pp_idcpy(s, id);
+    h = (int)s->Svalue;
+    s->Snhash = htable[h];
+    htable[h] = s;
+    s->Sclass = SC_UNDEF;
+    s->Sflags = 0;
+    s->Stype = NULL;
+    s->Svalue = 0;
+    s->Srefs = 0;
+    return s;
+}
+
+static SYMBOL *
+pp_symmk(SYMBOL *src, int h)
+{
+    SYMBOL *s = pp_getsym();
+
+    s->Snhash = htable[h];
+    htable[h] = s;
+    s->Scontents.Sid = src->Scontents.Sid;
+    s->Sclass = SC_UNDEF;
+    s->Sflags = 0;
+    s->Stype = NULL;
+    s->Svalue = 0;
+    s->Srefs = 0;
+    return s;
+}
+
+void
+syminit(void)
+{
+    SYMBOL *s;
+    SYMBOL *next;
+    int i;
+
+    if (symbol == NULL) {
+	if ((symbol = (SYMBOL *)calloc(1, sizeof(SYMBOL))) == NULL)
+	    efatal("No memory for preprocessor symbols");
+    } else {
+	for (s = symbol->Snext; s != NULL; s = next) {
+	    next = s->Snext;
+	    if (s->Sclass == SC_MACRO && s->Smacptr != NULL)
+		free(s->Smacptr);
+	    s->Snext = pp_freelist;
+	    pp_freelist = s;
+	}
+    }
+    symbol->Snext = symbol->Sprev = NULL;
+    symbol->Sclass = SC_UNDEF;
+    pp_symtail = symbol;
+    lsymhead = NULL;
+    for (i = 0; i < MAXHSH; ++i)
+	htable[i] = NULL;
+    minsym = symbol;
+}
+
+SYMBOL *
+symfind(char *str, int creatf)
+{
+    SYMBOL tmp;
+    SYMBOL *s;
+    int trunc;
+    int h;
+
+    trunc = pp_idcpy(&tmp, str);
+    h = (int)tmp.Svalue;
+    for (s = htable[h]; s != NULL; s = s->Snhash)
+	if ((s->Sflags & (SF_XLOCAL | (SF_OVCLS & ~SF_MACRO))) == 0 &&
+	    pp_symcmp(s, &tmp) && s->Sclass != SC_UNDEF) {
+	    ++s->Srefs;
+	    break;
+	}
+    if (s == NULL) {
+	if (!creatf)
+	    return NULL;
+	s = pp_symmk(&tmp, h);
+    }
+    if (trunc)
+	note("Identifer truncated: %S", s);
+    return s;
+}
+
+SYMBOL *
+symfidstr(char *str)
+{
+    SYMBOL *s = symfind(str, 0);
+
+    if (s != NULL && s->Sclass == SC_MACRO)
+	s = symfnext(s);
+    return s;
+}
+
+SYMBOL *
+symfnext(SYMBOL *old)
+{
+    SYMBOL *s = old;
+
+    while ((s = s->Snhash) != NULL)
+	if ((s->Sflags & (SF_XLOCAL | SF_OVCLS)) == 0 &&
+	    pp_symcmp(s, old)) {
+	    ++s->Srefs;
+	    break;
+	}
+    return s;
+}
+
+SYMBOL *
+symgcreat(char *id)
+{
+    return pp_mksym(id);
+}
+
+SYMBOL *
+shmacsym(SYMBOL *sym)
+{
+    SYMBOL *s;
+    SYMBOL *prev = NULL;
+    int h;
+
+    sym->Sflags |= SF_MACSHADOW;
+    h = pp_symhash(sym);
+    for (s = htable[h]; s != NULL; prev = s, s = s->Snhash)
+	if (s->Sclass == SC_MACRO && pp_symcmp(sym, s)) {
+	    if (prev == NULL)
+		break;
+	    prev->Snhash = s->Snhash;
+	    s->Snhash = htable[h];
+	    htable[h] = s;
+	    break;
+	}
+    return sym;
+}
+
+void
+freesym(SYMBOL *s)
+{
+    SYMBOL *p;
+    int h = pp_symhash(s);
+
+    p = htable[h];
+    if (p == s)
+	htable[h] = s->Snhash;
+    else {
+	while (p != NULL && p->Snhash != s)
+	    p = p->Snhash;
+	if (p == NULL) {
+	    int_error("freesym: symbol not on preprocessor hash list");
+	    return;
+	}
+	p->Snhash = s->Snhash;
+    }
+    pp_retsym(s);
+}
+
+#else /* !KCC_PHASE_CPP */
+
 /* Internal Data:
  *
  * Mapping function between SC_xxx and SCDB_xxx values
@@ -247,7 +497,9 @@ static INT lastwd;			/* Mask for last byte in word */
 void
 syminit(void)
 {
+#if !KCC_PHASE_CPP
     register int f;
+#endif
     size_t i;
     union
 	{
@@ -255,7 +507,9 @@ syminit(void)
 	char ch[sizeof(INT)];
 	}
     mask;
+#if !KCC_PHASE_CPP
     SYMBOL *s;
+#endif
 
     /* Initialize char mask table used by identifier handling stuff */
     chmask[0] = 0;
@@ -266,6 +520,15 @@ syminit(void)
 	}
     lastwd = ~chmask[sizeof(INT)-1];
 
+    /* KCPP needs only the global identifier/macro hash table. */
+#if KCC_PHASE_CPP
+    inisymlist(&symbol, &symtail);
+    lsymhead = NULL;
+    for (i = 0; i < MAXHSH; ++i)
+	htable[i] = NULL;
+    minsym = symtail;
+    return;
+#else
     /* Initialize labels, symbols, and types */
     labinit();				/* Initialize internal label stuff */
     smapinit();				/* Init symbol map stuff */
@@ -309,6 +572,7 @@ syminit(void)
     minsym = symtail;		/* Crock for CCDUMP's symdump, someday flush */
 
     typeinit();		/* Now initialize tables etc. for C data types */
+#endif /* !KCC_PHASE_CPP */
 }
 
 static void
@@ -1778,7 +2042,7 @@ typeinit(void)
     typbsiztab[TS_CHAR] = typbsiztab[TS_UCHAR] = tgcsize;
 
     maxtype = 0;
-    for (i = 0 ; i < MAXTYPE ; i++)
+    for (i = 0 ; i < THASHSIZE ; i++)
 	ttable[i] = NULL;	/* Clear hash table */
     for (i = 0; i < TS_MAX; i++)
 	if (i == TS_VOID || typsiztab[i] != 0)
@@ -3215,3 +3479,5 @@ outsymtab (void)
     symindex = 0;
 }
 #endif /* !HOST_DAIMOS */
+
+#endif /* !KCC_PHASE_CPP */
