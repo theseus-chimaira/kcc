@@ -236,7 +236,7 @@ static int vlatype_v11(TYPE *);
 static NODE *vlastride_v11(TYPE *);
 static void emit_blissargs(NODE *);
 static INT sizeargs(NODE *);
-static int gccabi_direct_reg_args(NODE *, int, TYPE *, int);
+static int gccabi_direct_reg_args(NODE *, int, TYPE *, int, int *);
 static int gccabi_direct_tail_ok(NODE *);
 static void gfnarg(NODE *);
 static VREG *gaddress(NODE *);
@@ -8173,7 +8173,8 @@ gccabi_load_args(NODE *list, int slotbase, TYPE *proto)
 ** path was used.
 */
 static int
-gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem)
+gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem,
+                      int *stackwords)
 {
     NODE *args[64];
     VREG *vals[GCCABI_ARG_REGS];
@@ -8189,6 +8190,9 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem)
 
     nargs = 0;
     gccabi_collect_args(list, args, &nargs);
+
+    if (stackwords)
+        *stackwords = 0;
 
     namedargs = nargs;
     if (proto) {
@@ -8212,6 +8216,8 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem)
         nreg = GCCABI_ARG_REGS - slotbase;
     if (nreg < 0)
         nreg = 0;
+    if (stackwords)
+        *stackwords = nargs - nreg;
 
     /* ABI argument ACs are fixed physical registers.  Do not let CSE or
     ** register-retargeting reach backward across an earlier call/branch and
@@ -8527,8 +8533,12 @@ gcall (NODE* n)
     long	fnflags;
     int	abiregwords;
     int directtail;
+    int directargs;
+    int directstackwords;
 
     calladdr = NULL;
+    directargs = 0;
+    directstackwords = 0;
 
     /* Inline the smallest freestanding memcpy before the generic call path
     ** spills registers and constructs an ABI argument block. */
@@ -8623,7 +8633,7 @@ gcall (NODE* n)
 
             if (directtail) {
                 if (!gccabi_direct_reg_args(n->Nright, 0,
-                        n->Nleft->Ntype->Tproto, 1))
+                        n->Nleft->Ntype->Tproto, 1, NULL))
                     int_error("gcall: direct tail argument generation failed");
                 flushcode();
             }
@@ -8738,9 +8748,9 @@ gcall (NODE* n)
     else				/* ...No, it's a C fn */
 	{
 	NODE *arglist = l;
-	int directargs;
-	directargs = gccabi_direct_reg_args(arglist,
-		siz > GCCABI_RET_REGS ? 1 : 0, n->Nleft->Ntype->Tproto, 0);
+    directargs = gccabi_direct_reg_args(arglist,
+		siz > GCCABI_RET_REGS ? 1 : 0, n->Nleft->Ntype->Tproto, 0,
+		&directstackwords);
 	if (!directargs) {
 	    while (l != NULL)
 		{
@@ -8772,8 +8782,16 @@ gcall (NODE* n)
 	    code13(P_MOVE, VR_RETVAL,
 		autooff_v11(n->Nretstruct));
 	}
-
-    narg -= stackoffset;	/* calculate neg number of arg words */
+    /* The direct ABI path may use transient stack storage while evaluating
+    ** register arguments.  Such spill/temporary state belongs to expression
+    ** evaluation, not to the outgoing ABI argument block.  Clean up exactly
+    ** the stack-passed words that gccabi_direct_reg_args() emitted rather
+    ** than inferring argument size from the transient stackoffset delta.
+    */
+    if (directargs)
+	narg = -directstackwords;
+    else
+	narg -= stackoffset;	/* calculate neg number of arg words */
 
     if (fnflags & TF_FORTRAN)	/* for a FORTRAN fn */
 	{
