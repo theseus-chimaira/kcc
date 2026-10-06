@@ -45,8 +45,9 @@ extern void gccabi_dimode_encode_regs(int, int);
 extern
 void	    outiprolog (void);		/* FW 2A(52) */
 
-#if SYS_CSI		
-extern void outpghdr(void), outprolog(SYMBOL *);		/* CCOUT */
+extern void outpghdr(void);				/* CCOUT */
+#if SYS_CSI
+extern void outprolog(SYMBOL *);			/* CCOUT */
 #endif
 
 /* Exported functions defined here */

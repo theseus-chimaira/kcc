@@ -40,6 +40,10 @@ NATIVE_CPP_SYM_ASM = $(NATIVE_BUILD_DIR)/ccsym-cpp-v1.s
 NATIVE_CPP_SYM_OBJ = $(NATIVE_BUILD_DIR)/ccsym-cpp-v1.dobj
 NATIVE_CPP_DATA_ASM = $(NATIVE_BUILD_DIR)/ccdata-cpp-v1.s
 NATIVE_CPP_DATA_OBJ = $(NATIVE_BUILD_DIR)/ccdata-cpp-v1.dobj
+NATIVE_CORE_DATA_ASM = $(NATIVE_BUILD_DIR)/ccdata-core-v1.s
+NATIVE_CORE_DATA_OBJ = $(NATIVE_BUILD_DIR)/ccdata-core-v1.dobj
+NATIVE_CORE_ERR_ASM = $(NATIVE_BUILD_DIR)/ccerr-core-v1.s
+NATIVE_CORE_ERR_OBJ = $(NATIVE_BUILD_DIR)/ccerr-core-v1.dobj
 NATIVE_CORE_DRIVER_ASM = $(NATIVE_BUILD_DIR)/cc-core-v1.s
 NATIVE_CORE_DRIVER_OBJ = $(NATIVE_BUILD_DIR)/cc-core-v1.dobj
 
@@ -52,9 +56,9 @@ NATIVE_KCPP_OBJS = \
 NATIVE_KCC1_OBJS = \
 	$(NATIVE_CORE_DRIVER_OBJ) $(NATIVE_BUILD_DIR)/ccasmb-v1.dobj \
 	$(NATIVE_BUILD_DIR)/cccreg-v1.dobj $(NATIVE_BUILD_DIR)/cccse-v1.dobj \
-	$(NATIVE_BUILD_DIR)/cccode-v1.dobj $(NATIVE_BUILD_DIR)/ccdata-v1.dobj \
+	$(NATIVE_BUILD_DIR)/cccode-v1.dobj $(NATIVE_CORE_DATA_OBJ) \
 	$(NATIVE_BUILD_DIR)/ccdbug-v1.dobj $(NATIVE_BUILD_DIR)/ccdecl-v1.dobj \
-	$(NATIVE_BUILD_DIR)/ccerr-v1.dobj $(NATIVE_BUILD_DIR)/cceval-v1.dobj \
+	$(NATIVE_CORE_ERR_OBJ) $(NATIVE_BUILD_DIR)/cceval-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccgen-v1.dobj $(NATIVE_BUILD_DIR)/ccgen1-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccgen2-v1.dobj $(NATIVE_BUILD_DIR)/ccgswi-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccjskp-v1.dobj $(NATIVE_BUILD_DIR)/cclex-v1.dobj \
@@ -124,6 +128,12 @@ $(NATIVE_BUILD_DIR)/ccsym-cpp-v1.s: ccsym.c $(KCC) | $(NATIVE_BUILD_DIR)
 
 $(NATIVE_BUILD_DIR)/ccdata-cpp-v1.s: ccdata.c $(KCC) | $(NATIVE_BUILD_DIR)
 	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CPP=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccdata-core-v1.s: ccdata.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CORE=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccerr-core-v1.s: ccerr.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CORE=1 -S $< -o $@
 
 $(NATIVE_BUILD_DIR)/cc-core-v1.s: cc.c $(KCC) | $(NATIVE_BUILD_DIR)
 	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CORE=1 -S $< -o $@

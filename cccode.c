@@ -76,8 +76,10 @@ void codlabel(SYMBOL *);
 void codr1(int, int, INT);
 void codr10(int, int, SYMBOL *, INT, INT);
 
+#if SYS_CSI
 void code4m(int op, VREG *reg, VREG *idx, char *mnem),
 	code5m(int, VREG *, char *);
+#endif
 
 PCODE *chkmref(PCODE *begp, PCODE *endp, INT *aoff);
 
@@ -1733,9 +1735,10 @@ code4(int op, struct vreg * reg, struct vreg * idx)
     code40(op, r, s, 0);
 }
 
-static char *tmp_mnem;  /* KAR-2/91, static storage for imuuo mnemonic */
 extern int _chnl;	/* KAR-2/91, temporary storage for channel numbers */
 
+#if SYS_CSI
+static char *tmp_mnem;  /* KAR-2/91, static storage for imuuo mnemonic */
 void
 code4m(int op, struct vreg * reg, struct vreg * idx, char * mnem)
 {
@@ -1752,6 +1755,7 @@ code4m(int op, struct vreg * reg, struct vreg * idx, char * mnem)
 	vrfree(idx);	/* will no longer need register */
     code40(op, r, s, 0);
 }
+#endif
 
 void
 codek4(int op, struct vreg * reg, struct vreg * idx)
@@ -2006,6 +2010,7 @@ code40(int op, int r, int s, INT bsiz)
  */
     switch (op)
 	{
+#if SYS_CSI
 	case P_MUUO:
 	    p->p_im.mnemonic = (char *) calloc(1, strlen(tmp_mnem) + 1);
 	    if (p->p_im.mnemonic == NULL)
@@ -2014,8 +2019,9 @@ code40(int op, int r, int s, INT bsiz)
 	    free(tmp_mnem);
 	    tmp_mnem = NULL;
 	/* FALLTHROUGH */
+#endif
 	case P_NULPTR:
-	    p->p_im.p_chnl = _chnl;
+	    p->p_u.p_int = _chnl;
 	    _chnl = -1;	/* KAR-6/91, Changed empty signal to -1 from 0 */
 	    break;
 	default:
@@ -2209,6 +2215,7 @@ code5(int op, struct vreg * reg)
 #endif
 }
 
+#if SYS_CSI
 void
 code5m(int op, struct vreg * reg, char * mnem)
 {
@@ -2262,6 +2269,7 @@ code5m(int op, struct vreg * reg, char * mnem)
 	shocum();
 #endif
 }
+#endif /* SYS_CSI */
 
 /* CODE6 - Generate op with a symbolic address operand.
 **	OP reg,sym
@@ -2435,7 +2443,7 @@ codr8(int op, int r, INT val)
 #endif
 	    return;
 	    }
-	}
+}
 
     /* Fold a constant formed by clearing a register and then toggling
     ** bits in its left half.

@@ -10,11 +10,13 @@
 #define EXT extern
 #endif
 
-/* Globals shared between CCPP and CCERR for error reporting */
+/* Globals shared between CCPP and CCERR for raw-source error context. */
+#if !KCC_PHASE_CORE
 EXT char errlin[ERRLSIZE];	/* error context - circular buffer */
 EXT char *erptr;		/* pointer into it */
 EXT int erpleft;		/* # chars left until wraparound */
 EXT int ercsiz;			/* # chars to show in error msg */
+#endif
 
 /* Globals shared between CCPP and CCLEX */
 #define PPTOK struct pptok 

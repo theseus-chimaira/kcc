@@ -402,7 +402,9 @@ extern void outstr(char *);
 void
 genstmt(NODE *n)
 {
+#if SYS_CSI
     VREG	*muuo_ac;
+#endif
 
     if (n == NULL) return;
     switch (n->Nop) {

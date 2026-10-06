@@ -33,9 +33,7 @@
 */
 SYMBOL {
   struct {
-#if SYS_CSI
     char s_reg;			/* value 6 thru 15, for register vars */
-#endif
     char s_class;		/* Symbol class - a SC_ value */
     INT s_flags;		/* Symbol flags (SF_) */
     union {
@@ -91,9 +89,7 @@ SYMBOL {
  */
 
 /* Every symbol class uses these fields */
-#if SYS_CSI
- #define Sreg Scontents.s_reg	/* value 6 thru 15, for register vars */
-#endif
+#define Sreg Scontents.s_reg	/* value 6 thru 15, for register vars */
 #define Sclass Scontents.s_class	/* Symbol class */
 #define Sflags Scontents.s_flags	/* Symbol flags */
 #define Sname Scontents.Sid.s_ch	/* Symbol name string */
@@ -754,14 +750,18 @@ enum typespecs {
 #define TF_SICONST	04000000L  /* Struct/union with inner "const" */
 #define TF_SIVOLAT	010000000L /* Struct/union with inner "volatile" */
 #if SYS_CSI
-#define TF_FORTRAN      0100000000L /* fortran attribute for functions */
-#define TF_BLISS        0200000000L /* bliss attribute for functions */
-#define TF_INTERRUPT	0400000000L /* FW 2A(52) interrupt fn qualifier */
+# define TF_FORTRAN      0100000000L /* fortran attribute for functions */
+# define TF_BLISS        0200000000L /* bliss attribute for functions */
+# define TF_INTERRUPT    0400000000L /* FW 2A(52) interrupt fn qualifier */
+#else
+# define TF_FORTRAN      0L
+# define TF_BLISS        0L
+# define TF_INTERRUPT    0L
+#endif
 #define TF_PACKEDPTR	01000000000L /* pointer into GNU packed byte stream */
 #define TF_BITPTR	02000000000L /* S=1 pointer to exact packed bit position */
 #define TF_MAYBITPTR	04000000000L /* runtime S selects exact-width ptr form */
 #define TF_VLA          020000000000L /* runtime-sized array type */
-#endif
 
 /* Combos */
 #define TF_QUALS (TF_CONST|TF_VOLATILE)	/* Type qualifiers */

@@ -51,6 +51,17 @@ outnl(void)
 #include <string.h>
 #include <stdlib.h>	/* calloc () */
 
+/*
+ * DAIMOS native output is always DAS/GAS syntax.  Keep the historical
+ * runtime dialect switch for hosted KCC, but make it a compile-time constant
+ * for HOST_DAIMOS so unreachable MACRO/FAIL emitter branches disappear.
+ */
+#if HOST_DAIMOS
+# define GAS_DIALECT 1
+#else
+# define GAS_DIALECT (asmdialect == ASM_GAS)
+#endif
+
 /* Imported functions */
 extern char *estrcpy (char *, char *),
 	*fstrcpy (char *, char *, char *);	/* CCASMB */
@@ -366,7 +377,7 @@ outnpd (PCODE *p)
     outrawnum ((unsigned INT)label);
     outnl ();
     outstr ("\tPUSH\t17,[");
-    outnum (p->p_im.p_chnl);	/* used chnl to store line # */
+    outnum (p->p_u.p_int);	/* source line saved by P_NULPTR */
     outstr ("]\n");
 
 #ifdef	MULTI_SECTION /* FW 2A (51) */
@@ -398,7 +409,7 @@ outpreamble (void)
 #if HOST_DAIMOS
     outstr ("\t.text\n");
 #else
-    if (asmdialect == ASM_GAS)
+    if (GAS_DIALECT)
 	{
 	outstr ("\t.text\n");
 	return;
@@ -466,7 +477,7 @@ outdone (int mainf)
     outnl ();
     return;
 #else
-    if (asmdialect == ASM_GAS)
+    if (GAS_DIALECT)
 	{
 	outnl ();
 	codeseg ();
@@ -610,7 +621,7 @@ outdecl (void)
 		    else
 			continue;		/* Otherwise just ignore */
 		    }
-		outstr (asmdialect == ASM_GAS ? "\t.extern\t" : "\tEXTERN\t");
+		outstr (GAS_DIALECT ? "\t.extern\t" : "\tEXTERN\t");
 		break;
 	    }
 	outmiref (s);
@@ -645,7 +656,7 @@ makprefile (void)
 	{
 	if (sym->Sclass == SC_EXTDEF)	/* For each external def */
 	    {
-	    if (asmdialect == ASM_GAS)
+	    if (GAS_DIALECT)
 		{
 		outstr ("\n\t.globl ");
 		outmiref (sym);
@@ -946,7 +957,7 @@ codeseg (void)
     int oseg;
     if ((oseg = whichseg) < 0)	/* if in data */
 	{
-	outstr (asmdialect == ASM_GAS ? "\n\t.text\n" : "\n\t%%CODE\n");
+	outstr (GAS_DIALECT ? "\n\t.text\n" : "\n\t%%CODE\n");
 #if SYS_CSI
 	if (mlist)
 	    oline += 2;
@@ -964,7 +975,7 @@ dataseg (void)
     int oseg;
     if ((oseg = whichseg) != -1)	/* if not in initialized data */
 	{
-	outstr (asmdialect == ASM_GAS ? "\n\t.data\n" : "\n\t%%DATA\n");
+	outstr (GAS_DIALECT ? "\n\t.data\n" : "\n\t%%DATA\n");
 #if SYS_CSI
 	if (mlist)
 	    oline += 2;
@@ -980,7 +991,7 @@ int
 bssseg (void)
 {
     int oseg;
-    if (asmdialect != ASM_GAS)
+    if (!GAS_DIALECT)
 	return dataseg ();
     if ((oseg = whichseg) != -2)
 	{
@@ -1374,6 +1385,7 @@ outinstr (PCODE *p)
 	{
 
 	case PTA_ONEREG:
+#if SYS_CSI
 	    if (p->Pop == P_MUUO)
 		{
 		outstr (p->p_im.mnemonic);
@@ -1387,6 +1399,7 @@ outinstr (PCODE *p)
 		    outreg (p->Preg);
 		}
 	    else
+#endif
 		{
 		outop (p->Pop);
 		outreg (p->Preg);
@@ -1434,6 +1447,7 @@ outinstr (PCODE *p)
 		    {
 		/* Normal operand, easy! */
 
+#if SYS_CSI
 		    if (p->Pop == P_MUUO)
 			{
 			outstr (p->p_im.mnemonic);
@@ -1444,6 +1458,7 @@ outinstr (PCODE *p)
 			    outreg (p->Preg);
 			}
 		    else
+#endif
 			{
 			outop (p->Pop);
 			outreg (p->Preg);
@@ -1533,7 +1548,7 @@ outinstr (PCODE *p)
 	    outop (p->Pop);
 	    outreg (p->Preg);
 	    outc ('[');
-	    if (asmdialect == ASM_GAS)
+	    if (GAS_DIALECT)
 		{
 		int bppos;
 		int bpsiz;
@@ -1567,7 +1582,7 @@ outinstr (PCODE *p)
 		if ((popflg[opr&POF_OPCODE] & PF_OPI)	/* If op can be opI,*/
 		  && (p->Pvalue &~ 0777777L) == 0)	/* and operand has zero LH, */
 		    {
-		    outc (asmdialect == ASM_GAS ? 'i' : 'I'); /* make immediate op */
+		    outc (GAS_DIALECT ? 'i' : 'I'); /* make immediate op */
 		    big = 0;			/* and say small operand */
 		    }
 		}
@@ -1603,7 +1618,7 @@ outinstr (PCODE *p)
 		    big = 1;
 		    break;
 		}
-	    if (asmdialect == ASM_GAS && !big)
+	    if (GAS_DIALECT && !big)
 		{
 		/* DEC MACRO accepts forms such as MOVSI R,(floatword)
 		 * and FADRI R,(floatword).  The DAIMON/GAS-like
@@ -1629,7 +1644,7 @@ outinstr (PCODE *p)
 
 	    outop (p->Pop);
 	    if (!big)
-		outc (asmdialect == ASM_GAS ? 'i' : 'I');
+		outc (GAS_DIALECT ? 'i' : 'I');
 	    outreg (p->Preg);
 	    if (big)
 		outc ('[');
@@ -2106,7 +2121,7 @@ simadjbp (PCODE *p)
             }
             if (p->Preg != 1 && p->Preg != R_SCRREG)
                 fprintf(out, "\tMOVE\t16,%o\n", p->Preg);
-            if (asmdialect == ASM_GAS) {
+            if (GAS_DIALECT) {
                 outstr("\tPUSHJ\t17,%ADJBPH\n");
                 simadjbp_ref = 1;
             } else {
@@ -2161,7 +2176,7 @@ simadjbp (PCODE *p)
             fprintf(out, "\tMOVEM\t%o,0(17)\n", q.Preg);
 	outstr("\tMOVE\t1,0(17)\n");
 	outstr("\tMOVE\t16,-1(17)\n");
-	if (asmdialect == ASM_GAS) {
+	if (GAS_DIALECT) {
 	    outstr("\tPUSHJ\t17,%ADJBPH\n");
 	    simadjbp_ref = 1;
 	} else {
@@ -2187,7 +2202,7 @@ simadjbp (PCODE *p)
 	fprintf(out, "\tMOVE\t%o,[", R_SCRREG);
 	outnum(n);
 	outstr("]\n");
-	if (asmdialect == ASM_GAS) {
+	if (GAS_DIALECT) {
 	    outstr("\tPUSHJ\t17,%ADJBPH\n");
 	    simadjbp_ref = 1;
 	} else {
@@ -2514,7 +2529,7 @@ simsubbp (PCODE *p)
     int oldop, oldreg;
     const char *idxsep;
 
-    idxsep = (asmdialect == ASM_GAS) ? "" : " ";
+    idxsep = (GAS_DIALECT) ? "" : " ";
     typ = (p->Ptype&PTF_ADRMODE);
 
     /* P_SUBBP carries the byte size in Pbsize when the generator knows the
@@ -2727,7 +2742,7 @@ simsmove (PCODE *p)
     INT size;
     const char *idxsep;
 
-    idxsep = (asmdialect == ASM_GAS) ? "" : " ";
+    idxsep = (GAS_DIALECT) ? "" : " ";
 
     if ((p->Ptype&PTF_ADRMODE) != PTA_MINDEXED)
 	{
@@ -3026,7 +3041,7 @@ outop (int opr)
 	int_error ("outop: null op");
 
     mnemonic = popostr[opr & POF_OPCODE];
-    if (asmdialect == ASM_GAS)
+    if (GAS_DIALECT)
 	{
 	while (*mnemonic)
 	    {
@@ -3040,25 +3055,25 @@ outop (int opr)
     switch (opr & POF_OPSKIP)
 	{
 	case POS_SKPA:
-	    outc (asmdialect == ASM_GAS ? 'a' : 'A');
+	    outc (GAS_DIALECT ? 'a' : 'A');
 	    break;
 	case POS_SKPE:
-	    outc (asmdialect == ASM_GAS ? 'e' : 'E');
+	    outc (GAS_DIALECT ? 'e' : 'E');
 	    break;
 	case POS_SKPN:
-	    outc (asmdialect == ASM_GAS ? 'n' : 'N');
+	    outc (GAS_DIALECT ? 'n' : 'N');
 	    break;
 	case POS_SKPL:
-	    outc (asmdialect == ASM_GAS ? 'l' : 'L');
+	    outc (GAS_DIALECT ? 'l' : 'L');
 	    break;
 	case POS_SKPG:
-	    outc (asmdialect == ASM_GAS ? 'g' : 'G');
+	    outc (GAS_DIALECT ? 'g' : 'G');
 	    break;
 	case POS_SKPLE:
-	    outstr (asmdialect == ASM_GAS ? "le" : "LE");
+	    outstr (GAS_DIALECT ? "le" : "LE");
 	    break;
 	case POS_SKPGE:
-	    outstr (asmdialect == ASM_GAS ? "ge" : "GE");
+	    outstr (GAS_DIALECT ? "ge" : "GE");
 	    break;
 	default:
 	    ;	/* do nothing */
@@ -3069,10 +3084,10 @@ outop (int opr)
 	    {
 	    case P_MOVN+POF_BOTH:
 	    case P_MOVM+POF_BOTH:
-		outc (asmdialect == ASM_GAS ? 's' : 'S');
+		outc (GAS_DIALECT ? 's' : 'S');
 		break;
 	    default:
-		outc (asmdialect == ASM_GAS ? 'b' : 'B');
+		outc (GAS_DIALECT ? 'b' : 'B');
 		break;
 	    }
 }
@@ -3126,7 +3141,7 @@ outaddress (PCODE *p)
 	{
 	if (p->Poffset > 01000000L)	/* ensure valid 18 bit address */
 	    int_error ("outaddress: bad stk offset 0%o", p->Poffset);
-	if (asmdialect != ASM_GAS)
+	if (!GAS_DIALECT)
 	    outc (' ');
 	outc ('(');
 
@@ -3201,7 +3216,7 @@ outpti (int bsize, INT offset)
     ** routing those through KCC's historical $$BPxx table, which only
     ** contains the traditional 6/7/8/9/18-bit byte sizes.
     */
-    if (asmdialect == ASM_GAS && bsize > 0 && bsize < TGSIZ_WORD) {
+    if (GAS_DIALECT && bsize > 0 && bsize < TGSIZ_WORD) {
 	int bpw = TGSIZ_WORD / bsize;
 	int boff = adjboffset(offset, &woff, bpw);
 	int pos;
@@ -3222,7 +3237,7 @@ outpti (int bsize, INT offset)
 	int_error ("outpti: bad args");
 	i = CRT_BPPS;
 	}
-    if (asmdialect == ASM_GAS) {
+    if (GAS_DIALECT) {
 	int n = gasbplhval (i);
 	if (n >= 0) {
 	    outnum (n);
@@ -3252,7 +3267,7 @@ outptr (SYMBOL *sym, int bsize, INT offset)
     INT woff = 0;
 
 
-    if (asmdialect == ASM_GAS && bsize)
+    if (GAS_DIALECT && bsize)
 	{
 	int boff = adjboffset(offset, &woff, TGSIZ_WORD / bsize);
 	fprintf (out, "POINT %d,", bsize);
@@ -3270,7 +3285,7 @@ outptr (SYMBOL *sym, int bsize, INT offset)
 	return;
 	}
 
-    if (asmdialect == ASM_GAS && !bsize)
+    if (GAS_DIALECT && !bsize)
 	{
 	if (sym)
 	    outmiref (sym);
@@ -3402,7 +3417,7 @@ outflt (int typ, INT *ptr, int flags)
     else
 	{
 	outtab ();
-	if (asmdialect == ASM_GAS)
+	if (GAS_DIALECT)
 	    outstr (".word ");
 	}
     if (typ == TS_FLOAT)
@@ -3427,7 +3442,7 @@ outflt (int typ, INT *ptr, int flags)
 	outpnum (ptr[0]);
 	outnl ();
 	outtab ();
-	if (asmdialect == ASM_GAS)
+	if (GAS_DIALECT)
 	    outstr (".word ");
 	if (flags & OF_CONST)
 	    outtab ();
@@ -3758,7 +3773,7 @@ outscon (char *s, int l, int bsiz)
 /* Char string,  Length (may include nulls!), and Byte size to use. */
 {
     int i, sepchar = ',';
-    char *opstr = asmdialect == ASM_GAS ? ".byte\t%d," : "BYTE\t (%d) ";
+    char *opstr = GAS_DIALECT ? ".byte\t%d," : "BYTE\t (%d) ";
 
     --s;			/* Set up for preincrement */
     while (l > 0)			/* For each word */
@@ -3797,7 +3812,7 @@ outlab (SYMBOL *s)
     {
     outid (s->Sname);		/* Output the actual label name */
 
-    if (asmdialect == ASM_GAS)
+    if (GAS_DIALECT)
 	outstr (":\n");
     else if (s->Sname[0] == '$')	/* Local label? */
 	outstr ("==.\n");	/* Yes, define it as half-killed.  See note. */
@@ -3823,7 +3838,7 @@ outid (char *s)
     int		n,
 		ch;
 
-    if (asmdialect == ASM_GAS && s[0] == '$' && s[1] >= '0' && s[1] <= '9')
+    if (GAS_DIALECT && s[0] == '$' && s[1] >= '0' && s[1] <= '9')
 	{
 	putc ('%', out);
 	putc ('L', out);
@@ -3838,7 +3853,7 @@ outid (char *s)
 
     while (ch)
 	{
-	if (ch == '_' && asmdialect != ASM_GAS)
+	if (ch == '_' && !GAS_DIALECT)
 	    ch = UNDERSCORE_MAPCHR;
 
 	putc (ch, out);
@@ -3895,11 +3910,11 @@ outmidef (SYMBOL *s)
 
     outmiref (s);
 
-    if (asmdialect != ASM_GAS && s->Sclass == SC_EXTDEF)
+    if (!GAS_DIALECT && s->Sclass == SC_EXTDEF)
 	putc (':', out);
 
     putc (':', out);
-    if (asmdialect == ASM_GAS)
+    if (GAS_DIALECT)
 	putc ('\n', out);
     }
 

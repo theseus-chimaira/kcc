@@ -27,10 +27,8 @@ NODE {
     TYPE *Ntype;		/* C type of node */
     int Nflag;			/* Flags - NF_ bits, goto breaks if short */
     unsigned char Nop;		/* Node opcode - a N_ or Q_ value */
-#if SYS_CSI
     char Nreg;			/* Count of regs 0 to R_PRESERVE_COUNT */
     short sfline;		/* KAR-1/92, storage for fline for NPD */
-#endif
 
     /* Now for random variables that can have different usages. */
     /* var 0 and var 1 are sometimes combined. */
@@ -158,10 +156,8 @@ NODE {
 #define NF_WIDE		01000	/* N_ICONST uses n_var1.n_int as high word */
 #define NF_QUERYNORMAL	02000	/* Q_QUERY may merge outside ABI return ACs */
 #define NF_VLA          04000   /* function contains variable length arrays */
-#if SYS_CSI /* KAR-1/91, Added NF_ flag for NPD;only used in */
-	    /*		 N_PTR & Q_MEMBER nodes */
+/* Null-pointer detection flag; used in N_PTR and Q_MEMBER nodes. */
 #define NF_USENPD  020000000000 /* Null pointer detection flag */
-#endif
 
 /* Node handling routines, defined in CCNODE */
 

@@ -44,9 +44,13 @@ extern int nextoken(void);		/* CCLEX */
 
 /* Internal functions */
 static char *errmak(char *fmt, va_list ap);
+#if SYS_CSI
 static void buf_errmsg(char *);
+#endif
 static void context(char *etype, char *fmt, va_list ap);
+#if !KCC_PHASE_CORE
 static void ectran(char *to, char *from, int cnt);
+#endif
 static int evsprintf(char *cp, char *fmt, va_list *aap);
 static char *tokname(int tok);
 static int edefarg(char *cp, char **afmt, va_list *aap);
@@ -471,25 +475,36 @@ static void
 context(char *etype, char *fmt, va_list ap)
 {
     char *estr;
+#if !KCC_PHASE_CORE
     char *cp, *ep;
     char conbuf[ERRLSIZE*6];	/* Allow for lots of "big" chars */
+#endif
 #if SYS_CSI
+#if !KCC_PHASE_CORE
     char errstor[ERRLSIZE*6];   /* Buffer to keep entire error msg */
     char *esp = errstor;
 #endif
+#endif
+#if !KCC_PHASE_CORE
     int cnt, colcnt;
     int here = line;		/* Line # on page */
+#endif
 
     estr = errmak(fmt, ap);	/* Build error message */
 
+#if !KCC_PHASE_CORE
     if (erptr != errlin && erptr[-1] == '\n')
 	--here;			/* Find right line # on current page */
 				/* (KLH: but probably not worth the trouble) */
+#endif
 
 #if 1	/* New version */
     fprintf(outmsgs, "\"%s\", line %d: %s%s\n",
 			inpfname, fline, etype, estr);
 
+#if KCC_PHASE_CORE
+    return;
+#else
 #if SYS_CSI
     if (mlist)
 	{
@@ -568,6 +583,8 @@ context(char *etype, char *fmt, va_list ap)
     fprintf(outmsgs, "%s\n", errlin);	/* print where we were */
 #endif
 
+#endif /* !KCC_PHASE_CORE */
+
 #else	/* Old version */
     fprintf(outmsgs, "\n%s at ", etype);	/* start error message */
     if (curfn != NULL) {		/* are we in some function? */
@@ -585,6 +602,7 @@ context(char *etype, char *fmt, va_list ap)
 /* ECTRAN - translate file input string to something nice for
 **	error message output.  Always adds a NUL after "cnt" chars.
 */
+#if !KCC_PHASE_CORE
 static void
 ectran(char *to, char *from, int cnt)
 {
@@ -621,6 +639,7 @@ ectran(char *to, char *from, int cnt)
     }
     *to = '\0';		/* Ensure string ends with null. */
 }
+#endif
 
 static int
 evsprintf(char *cp, char *fmt, va_list *aap)

@@ -38,7 +38,11 @@
 # endif
 #endif
 #ifndef SYS_CSI
-#define SYS_CSI 1
+# if HOST_DAIMOS
+#  define SYS_CSI 0
+# else
+#  define SYS_CSI 1
+# endif
 #endif
 #ifndef CPU_KL0
 #define CPU_KL0 1
@@ -90,7 +94,7 @@
 #endif
 
 /* Assign default if none of the above were furnished */
-#if (SYS_T20+SYS_10X+SYS_T10+SYS_CSI+SYS_WTS+SYS_ITS \
+#if !HOST_DAIMOS && (SYS_T20+SYS_10X+SYS_T10+SYS_CSI+SYS_WTS+SYS_ITS \
         +SYS_BSD+SYS_SUN+SYS_SYSV+SYS_V7 \
         +SYS_MSDOS)==0
 #undef SYS_T20

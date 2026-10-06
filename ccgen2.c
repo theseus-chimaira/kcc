@@ -185,7 +185,9 @@ void relflush(VREG *reg);		/* Maybe move to CCOPT */
 void gboolean(NODE *n, SYMBOL *false, int reverse);
 VREG *getmem(VREG *reg, TYPE *t, int byte, int keep),
   *stomem(VREG *reg, VREG *ra, INT siz, int byteptr); /* CCGEN1 auto inits */
+#if SYS_CSI
 VREG *gmuuo(NODE *);
+#endif
 
 static INT
 autooff_v11(SYMBOL *s)
@@ -5168,8 +5170,10 @@ gunary(NODE *n)
 		flushcode();
 	    return r;
 
+#if SYS_CSI
 	case Q_MUUO:
 	    return gmuuo(n);
+#endif
 
 	case N_NEG:
 	    if (Register_Id(n->Nleft))
@@ -7961,8 +7965,10 @@ gprimary(NODE *n)
 		flushcode();
 	    return r;
 
+#if SYS_CSI
 	case Q_MUUO:
 	    return gmuuo(n);
+#endif
 
 	default:
 	    int_error("gprimary: bad op %N", n);
@@ -9712,8 +9718,9 @@ gjffo(NODE *n)
 }
 
 
-/* KAR-6/91, Changed sentinal value for _chnl to -1 from 0 */
+/* Source line used by null-pointer diagnostics and CSI imuuo. */
 int		_chnl = -1;
+#if SYS_CSI
 #define mnem_param	temp->Nleft->Nleft->Nleft
 #define ac_param	temp->Nleft->Nleft
 #define ret_param	temp->Nleft->Nright
@@ -9799,3 +9806,4 @@ gmuuo(struct node * n)
     vrfree(ac);
     return(ret_ac);
 }
+#endif /* SYS_CSI */

@@ -70,8 +70,10 @@ static NODE *expression(void),
 	*pincdec(NODE *, int);
 static NODE *ptrapply(NODE *), *chkadd(int, NODE *),
 	    *parglist(SYMBOL *, TYPE *);
-static NODE *bin_asm(void), *bin_offsetof(void), *bin_muuo(void),
-	*bin_jffo(void);
+static NODE *bin_asm(void), *bin_offsetof(void), *bin_jffo(void);
+#if SYS_CSI
+static NODE *bin_muuo(void);
+#endif
 static int cmpatype(TYPE *, TYPE *);
 static int stmtpackedagg(INT);
 static void stmtintname(char *, char *, unsigned int);
@@ -3083,8 +3085,10 @@ primary(void)
 	    expect(T_RPAREN);		/* followed by close paren */
 	    break;
 
+#if SYS_CSI
 	case Q_MUUO:
 	    return bin_muuo();	/* Handle "muuo" built-in, KAR 1/91 */
+#endif
 
 	case Q_ASM:			/* Handle "asm" built-in */
 	    return bin_asm();
@@ -3291,6 +3295,7 @@ bin_jffo(void)
     return n;
 }
 
+#if SYS_CSI
 #define param1	temp->Nleft->Nleft->Nright
 #define param2	temp->Nleft
 #define param3  temp->Nright
@@ -3395,6 +3400,7 @@ bin_muuo(void)
 #undef param2
 #undef param3
 #undef param4
+#endif /* SYS_CSI */
 
 /* _KCC_offsetof - handle built-in for "offsetof"
 **

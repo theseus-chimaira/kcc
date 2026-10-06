@@ -61,7 +61,10 @@ enum systype {
 			/* see PPS 4516                                    */
 #endif
 #ifndef FNAMESIZE	/* CC, CCPP: Size of a filename string */
- #if SYS_CSI && !HOST_UNIX
+ #if HOST_DAIMOS
+  /* DAIMOS SYS_RUN_PATH_MAX_CHARS is 102; include the terminating NUL. */
+  #define FNAMESIZE 103
+ #elif SYS_CSI && !HOST_UNIX
   #define FNAMESIZE (48) /*cstdio:[123456,123456]#123456789012.#123456<123> */
  #else
   #define FNAMESIZE (40*4+10)	/*	TOPS-20 has biggest possible names */
@@ -132,8 +135,11 @@ enum systype {
  #define ERRLSIZE 256
 #endif
 
+#ifndef DYN_SIZE
+ #define DYN_SIZE 128  /* Dynamic allocation quantum; multiple of 128. */
+#endif
+
 #if SYS_CSI
- #define DYN_SIZE  128 /* 5/91 Dynamic tables (multiple of block size 128) */
  #ifndef MAXMLBUF
   #define MAXMLBUF 512 /*CC: size of mixed listing's dynamic output buffer */
  #endif

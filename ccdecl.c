@@ -704,7 +704,11 @@ fn_abi_leaf(NODE *root, int *has_query)
         op = n->Nop;
         left = right = NULL;
 
-        if (op == N_FNCALL || op == Q_ASM || op == Q_MUUO)
+        if (op == N_FNCALL || op == Q_ASM
+#if SYS_CSI
+            || op == Q_MUUO
+#endif
+            )
             return 0;
 
         switch (op) {
@@ -1127,7 +1131,9 @@ fn_abi_param_after_query_1(NODE *n, SYMBOL *sym, int seen, int depth,
 
     case N_FNCALL:
     case Q_ASM:
+#if SYS_CSI
     case Q_MUUO:
+#endif
     default:
         return 1;
     }
@@ -1179,7 +1185,11 @@ fn_abi_tailonly(NODE *root)
         op = n->Nop;
         left = right = NULL;
 
-        if (op == Q_ASM || op == Q_MUUO)
+        if (op == Q_ASM
+#if SYS_CSI
+            || op == Q_MUUO
+#endif
+            )
             return 0;
         if (op == N_FNCALL) {
             if (!tail)
@@ -1406,7 +1416,9 @@ fn_abi_param_used(NODE *root, SYMBOL *sym)
             break;
 
         case Q_ASM:
+#if SYS_CSI
         case Q_MUUO:
+#endif
         default:
             return 1;
         }
@@ -2980,6 +2992,7 @@ pbase(SYMBOL *symp)
 
             switch (token)
                 {
+#if SYS_CSI
                 case T_FORTRAN:
 
                     if( symp->Sflags & (TF_FORTRAN | TF_BLISS) )
@@ -3009,6 +3022,7 @@ pbase(SYMBOL *symp)
                     nextoken ();
 
                     continue;
+#endif /* SYS_CSI */
 
                 case T_CONST:           /* "const" type-qualifier */
 

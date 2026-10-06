@@ -47,6 +47,7 @@ int tgcpu = TGCPU_KL0;		/* Target CPU capability class */
 int tgarch = TGARCH_KL0;		/* Exact requested target profile */
 int tgits = 0;			/* ITS target variant */
 
+#if !KCC_PHASE_CORE
 int npredef = 0;		/* -Dmac=d # of -D macro predefinitions */
 int npreundef = 0;		/* -Umac   # of -U macro pre-undefinitions */
 int nincpaths = 0;		/* -Ipath  # of "" include-file directories */
@@ -62,6 +63,7 @@ char *ihfpaths[] = { SWI_HFPATH };	/* Default -H search paths <> */
 char *ihfsypaths[] = { SWI_HFSYPATH };	/* Default -h search paths <sys/> */
 int nihfpaths = sizeof(ihfpaths)/sizeof(ihfpaths[0]);	/* # of deflt paths */
 int nihfsypaths = sizeof(ihfsypaths)/sizeof(ihfsypaths[0]);
+#endif
 
 char *libpath = SWI_LIBPATH;	/* Where to find -l library files */
 char *asmhfile = SWI_ASMHFILE;	/* User-specified asm hdr file loc */

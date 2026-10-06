@@ -4,7 +4,6 @@
 #include "cclex.h"
 #include "ccphase.h"
 #include <stdlib.h>
-#include <string.h>
 
 extern SYMBOL *symfind(char *, int);
 
@@ -104,26 +103,13 @@ ppinit(void)
 
     pushed = 0;
     eof = 0;
-    memset(errlin, 0, sizeof(errlin));
-    erptr = errlin;
-    erpleft = ERRLSIZE;
-    ercsiz = 0;
     a = getbyte(in);
     b = getbyte(in);
     c = getbyte(in);
     d = getbyte(in);
     if (a != KCC_PHASE_MAGIC_0 || b != KCC_PHASE_MAGIC_1 ||
         c != KCC_PHASE_MAGIC_2 || d != KCC_PHASE_MAGIC_3)
-        jerr("Input is not a KCC KPT1 preprocessor stream");
-}
-
-void
-ppdefine(int unum, char **utab, int dnum, char **dtab)
-{
-    (void)utab;
-    (void)dtab;
-    if (unum != 0 || dnum != 0)
-        jerr("-D and -U must be applied by KCPP before KCC1");
+        jerr("Input is not a KCC KPT4 preprocessor stream");
 }
 
 int
@@ -188,19 +174,4 @@ pushpp(void)
     if (pushed)
         jerr("KCC preprocessor stream pushback overflow");
     pushed = 1;
-}
-
-int
-nsert_file(char *f, int insert_flag)
-{
-    (void)f;
-    (void)insert_flag;
-    return 0;
-}
-
-void
-passthru(FILE *fp)
-{
-    (void)fp;
-    jerr("-E belongs to KCPP in split KCC mode");
 }

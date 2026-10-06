@@ -64,7 +64,7 @@ PCODE {			/* pseudo op in peephole buffer */
     SYMBOL *Pptr;		/* ident for memory address */
     INT p_off;			/* Usually offset to add to ident */
 
-#if SYS_CSI	/* KAR-2/91, fix for inline monitor calls */
+#if SYS_CSI
      struct {
       char *mnemonic;	/* mnemonic string for imuuo */
       int  p_chnl;	/* optional channel number for imuuo */
@@ -382,7 +382,9 @@ extern void codek4(int, VREG *, VREG *);
 extern void codemdx(int, int, SYMBOL *, INT, int);
 extern void codestr(char *, int), codgolab(SYMBOL *), codlabel(SYMBOL *);
 extern void codr1(int, int, INT), codr10(int, int, SYMBOL *, INT, INT);
+#if SYS_CSI
 extern void code4m(int, VREG *, VREG *, char *), code5m(int, VREG *, char *);
+#endif
 extern PCODE *chkmref(PCODE *, PCODE *, INT *);
 
 #define outc(c)	 putc((c), out)

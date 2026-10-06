@@ -1303,11 +1303,7 @@ trstrcon (void)
 		int_error("trstrcon: no delim");
 		break;
 	    default:
-#if SYS_CSI	/* 5/91 KCC size */
-		(void) slcput(*cp);
-#else
 		slcput(*cp);
-#endif
 		continue;
 
 	    }
