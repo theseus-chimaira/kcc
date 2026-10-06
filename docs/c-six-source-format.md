@@ -93,6 +93,21 @@ KCPP source input is automatic:
 Detection must be strict enough that arbitrary ASCII is not misclassified as
 S6REC merely because its first bytes resemble a record header.
 
+## Host encoder and decoder
+
+The canonical host implementation is `csix` from `pdp10-tools`:
+
+```
+csix -e input.c output.s6
+csix -d input.s6 output.c
+```
+
+`-` may be used for standard input or standard output.  Encoding normalizes
+CRLF to LF, expands horizontal TAB to the next eight-column stop, and requires
+a final newline so S6REC line records round-trip reversibly.  The decoder
+strictly rejects non-text records, malformed 36-bit host containers, nonzero
+payload padding, and invalid C-SIX escapes.
+
 ## Errors
 
 The following are malformed C-SIX and must be rejected rather than silently
