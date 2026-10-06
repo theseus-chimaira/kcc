@@ -27,8 +27,18 @@
 #ifndef KCC_PHASE_CORE
 # define KCC_PHASE_CORE 0
 #endif
-#if KCC_PHASE_CPP && KCC_PHASE_CORE
-# error "KCC_PHASE_CPP and KCC_PHASE_CORE are mutually exclusive"
+#ifndef KCC_PHASE_GEN
+# define KCC_PHASE_GEN 0
+#endif
+#ifndef KCC_PHASE_OPT
+# define KCC_PHASE_OPT 0
+#endif
+#ifndef KCC_PHASE_PARSE
+# define KCC_PHASE_PARSE 0
+#endif
+#if (KCC_PHASE_CPP + KCC_PHASE_CORE + KCC_PHASE_GEN + KCC_PHASE_OPT \
+     + KCC_PHASE_PARSE) > 1
+# error "KCC phase selectors are mutually exclusive"
 #endif
 #ifndef HOST_UNIX
 # if defined(__linux__) || defined(__unix__)
