@@ -13,6 +13,7 @@
 #include <limits.h>             /* for INT_MAX */
 #include <stdlib.h>             /* for realloc, free */
 #include "cc.h"
+#include "ccvla.h"
 #include "cclex.h"
 int strcmp (const char *, const char *);
 
@@ -100,7 +101,7 @@ static int fnmaybitptrtarget(TYPE *);
 static void vlabindtype_v11(TYPE *);
 static void vlamarkfn_v11(void);
 static int fnregcap_v11(void);
-static struct vlaobj_v11 *vlaobjadd_v11(SYMBOL *);
+static void vlaobjadd_v11(SYMBOL *);
 void vlaobjmark_v12(SYMBOL *, SYMBOL *);
 static SYMBOL *sdeclaration(SYMBOL *, SYMBOL *, INT *, int *, int *);
 static SYMBOL *sdeclanon_v7(SYMBOL *, SYMBOL *, TYPE *, INT *, int *, int *);
@@ -136,54 +137,29 @@ struct vlainfo_v11 {
     struct vlainfo_v11 *next;
 };
 
-struct vlaobj_v11 {
-    SYMBOL *object;
-    SYMBOL *base;
-    SYMBOL *mark;
-    struct vlaobj_v11 *next;
-};
-
-static struct vlainfo_v11 *vlainfos_v11;
-static struct vlaobj_v11 *vlaobjs_v11;
 static unsigned int vlacounter_v11;
-
-static struct vlainfo_v11 *
-vlafind_v11(TYPE *t)
-{
-    struct vlainfo_v11 *v;
-    for (v = vlainfos_v11; v != NULL; v = v->next)
-        if (v->type == t)
-            return v;
-    return NULL;
-}
 
 static TYPE *
 vlamake_v11(NODE *bound, TYPE *subt)
 {
-    struct vlainfo_v11 *v;
     TYPE *t;
 
     t = newvlatype_v11(typbsiztab[TS_ARRAY], subt);
-    v = (struct vlainfo_v11 *)calloc(1, sizeof(*v));
-    if (v == NULL)
+    if (vlainfoadd_v12(t, bound, NULL, 0) != 0)
         jerr("Out of memory for VLA metadata\n");
-    v->type = t;
-    v->bound = bound;
-    v->next = vlainfos_v11;
-    vlainfos_v11 = v;
     return t;
 }
 
 static TYPE *
 vlaclone_v11(TYPE *old, TYPE *subt)
 {
-    struct vlainfo_v11 *v;
-    v = vlafind_v11(old);
-    if (v == NULL) {
+    NODE *bound;
+    bound = vlaboundexpr_v11(old);
+    if (bound == NULL) {
         int_error("vlaclone_v11: missing metadata");
         return findctype(TS_ARRAY, 0, 0, subt);
     }
-    return vlamake_v11(v->bound, subt);
+    return vlamake_v11(bound, subt);
 }
 
 static int
@@ -283,41 +259,39 @@ vlahidden_v11(char *stem, TYPE *typ)
 static void
 vlabindtype_v11(TYPE *t)
 {
-    struct vlainfo_v11 *v;
+    SYMBOL *bs;
 
     if (t == NULL)
         return;
     if (t->Tspec == TS_ARRAY) {
         if (tisvla(t)) {
-            v = vlafind_v11(t);
-            if (v == NULL) {
+            if (vlaboundexpr_v11(t) == NULL) {
                 int_error("vlabindtype_v11: missing metadata");
                 return;
             }
-            if (v->boundsym == NULL)
-                v->boundsym = vlahidden_v11("vlab", v->bound->Ntype);
+            bs = vlaboundsym_v11(t);
+            if (bs == NULL) {
+                NODE *bound = vlaboundexpr_v11(t);
+                bs = vlahidden_v11("vlab", bound->Ntype);
+                vlaboundsetsym_v12(t, bs);
+            }
         }
         vlabindtype_v11(t->Tsubt);
     } else if (t->Tspec == TS_PTR)
         vlabindtype_v11(t->Tsubt);
 }
 
-static struct vlaobj_v11 *
+static void
 vlaobjadd_v11(SYMBOL *s)
 {
-    struct vlaobj_v11 *v;
     TYPE *pt;
+    SYMBOL *base;
 
-    v = (struct vlaobj_v11 *)calloc(1, sizeof(*v));
-    if (v == NULL)
-        jerr("Out of memory for VLA object metadata\n");
     pt = findtype(TS_PTR, s->Stype->Tsubt);
-    v->object = s;
-    v->base = vlahidden_v11("vlap", pt);
-    v->next = vlaobjs_v11;
-    vlaobjs_v11 = v;
+    base = vlahidden_v11("vlap", pt);
+    if (vlaobjaddmeta_v12(s, base, NULL) != 0)
+        jerr("Out of memory for VLA object metadata\n");
     vlabindtype_v11(s->Stype);
-    return v;
 }
 
 static NODE *
@@ -343,83 +317,6 @@ vlaparamdata_v11(SYMBOL *args)
         tail = d;
     }
     return head;
-}
-
-SYMBOL *
-vlabase_v11(SYMBOL *s)
-{
-    struct vlaobj_v11 *v;
-    for (v = vlaobjs_v11; v != NULL; v = v->next)
-        if (v->object == s)
-            return v->base;
-    return NULL;
-}
-
-void
-vlaobjmark_v12(SYMBOL *s, SYMBOL *mark)
-{
-    struct vlaobj_v11 *v;
-    for (v = vlaobjs_v11; v != NULL; v = v->next)
-        if (v->object == s) {
-            v->mark = mark;
-            return;
-        }
-    int_error("vlaobjmark_v12: missing VLA object");
-}
-
-SYMBOL *
-vlaobjmarkget_v12(SYMBOL *s)
-{
-    struct vlaobj_v11 *v;
-    for (v = vlaobjs_v11; v != NULL; v = v->next)
-        if (v->object == s) return v->mark;
-    return NULL;
-}
-
-void
-vlaclear_v12(void)
-{
-    struct vlainfo_v11 *vi, *vin;
-    struct vlaobj_v11 *vo, *von;
-
-    for (vi = vlainfos_v11; vi != NULL; vi = vin) {
-        vin = vi->next;
-        free(vi);
-    }
-    for (vo = vlaobjs_v11; vo != NULL; vo = von) {
-        von = vo->next;
-        free(vo);
-    }
-    vlainfos_v11 = NULL;
-    vlaobjs_v11 = NULL;
-}
-
-NODE *
-vlaboundexpr_v11(TYPE *t)
-{
-    struct vlainfo_v11 *v = vlafind_v11(t);
-    return v ? v->bound : NULL;
-}
-
-int
-vlaboundcaptured_v12(TYPE *t)
-{
-    struct vlainfo_v11 *v = vlafind_v11(t);
-    return v ? v->captured : 0;
-}
-
-void
-vlaboundsetcaptured_v12(TYPE *t)
-{
-    struct vlainfo_v11 *v = vlafind_v11(t);
-    if (v != NULL) v->captured = 1;
-}
-
-SYMBOL *
-vlaboundsym_v11(TYPE *t)
-{
-    struct vlainfo_v11 *v = vlafind_v11(t);
-    return v ? v->boundsym : NULL;
 }
 
 
@@ -5402,7 +5299,7 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
             {
             NODE *vz;
             s->Svalue = -1;
-            (void)vlaobjadd_v11(s);
+            vlaobjadd_v11(s);
             vlaobjmark_v12(s, vla_declscope_v12());
             if (z != NULL)
                 error("Variable length array may not be initialized");

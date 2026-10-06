@@ -37,7 +37,7 @@ void efatal (char *fmt, ...);
 /* Imported functions */
 extern char *estrcpy(char *, char *);	/* CCASMB for string hacking */
 #if !KCC_PHASE_CPP
-#if !KCC_PHASE_OPT
+#if !KCC_PHASE_OPT && !KCC_PHASE_GEN
 extern int nextoken(void);		/* CCLEX */
 #endif
 #endif
@@ -56,7 +56,7 @@ static void ectran(char *to, char *from, int cnt);
 static int evsprintf(char *cp, char *fmt, va_list *aap);
 static char *tokname(int tok);
 static int edefarg(char *cp, char **afmt, va_list *aap);
-#if !KCC_PHASE_CPP && !KCC_PHASE_OPT
+#if !KCC_PHASE_CPP && !KCC_PHASE_OPT && !KCC_PHASE_GEN
 static void recover(int n);
 #endif
 static char *errputc(char *, int);
@@ -477,24 +477,24 @@ static void
 context(char *etype, char *fmt, va_list ap)
 {
     char *estr;
-#if !KCC_PHASE_CORE && !KCC_PHASE_OPT
+#if !KCC_PHASE_CORELIKE && !KCC_PHASE_OPT
     char *cp, *ep;
     char conbuf[ERRLSIZE*6];	/* Allow for lots of "big" chars */
 #endif
 #if SYS_CSI
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
     char errstor[ERRLSIZE*6];   /* Buffer to keep entire error msg */
     char *esp = errstor;
 #endif
 #endif
-#if !KCC_PHASE_CORE && !KCC_PHASE_OPT
+#if !KCC_PHASE_CORELIKE && !KCC_PHASE_OPT
     int cnt, colcnt;
     int here = line;		/* Line # on page */
 #endif
 
     estr = errmak(fmt, ap);	/* Build error message */
 
-#if !KCC_PHASE_CORE && !KCC_PHASE_OPT
+#if !KCC_PHASE_CORELIKE && !KCC_PHASE_OPT
     if (erptr != errlin && erptr[-1] == '\n')
 	--here;			/* Find right line # on current page */
 				/* (KLH: but probably not worth the trouble) */
@@ -504,7 +504,7 @@ context(char *etype, char *fmt, va_list ap)
     fprintf(outmsgs, "\"%s\", line %d: %s%s\n",
 			inpfname, fline, etype, estr);
 
-#if KCC_PHASE_CORE || KCC_PHASE_OPT
+#if KCC_PHASE_CORELIKE || KCC_PHASE_OPT
     return;
 #else
 #if SYS_CSI
@@ -869,7 +869,7 @@ edefarg(char *cp, char **afmt, va_list *aap)
 /* ---------------------- */
 /*	expect token      */
 /* ---------------------- */
-#if !KCC_PHASE_CPP && !KCC_PHASE_OPT
+#if !KCC_PHASE_CPP && !KCC_PHASE_OPT && !KCC_PHASE_GEN
 int
 expect(int t)
 {
@@ -923,7 +923,7 @@ recover(int n)
 /*  tokpush(token, csymbol); */
 /*  token = n;		     */
 }
-#endif /* !KCC_PHASE_CPP && !KCC_PHASE_OPT */
+#endif /* parser-bearing phases */
 
 #if 0	/* 5/91 KCC size */
 int

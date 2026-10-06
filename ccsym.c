@@ -1804,6 +1804,30 @@ newlabel(void)
     return lab;
 }
 
+/* LABMAX/LABSET/LABRENAME - Expose only the serial state needed by the
+** native KPARSE/KGEN split.  KPARSE records parser-side label intervals;
+** KGEN rebases labels from each interval onto the live backend sequence so
+** split compilation preserves the integrated compiler's exact label names.
+*/
+int
+labmax(void)
+{
+    return maxlabel;
+}
+
+void
+labset(int n)
+{
+    maxlabel = n;
+}
+
+void
+labrename(SYMBOL *lab, unsigned int n)
+{
+    if (lab != NULL && lab->Sclass == SC_ILABEL)
+        labname(lab->Sname, n);
+}
+
 /* REFLABEL - Reference or dereference a label.
 **
 ** The second argument is how much to add to the reference count.

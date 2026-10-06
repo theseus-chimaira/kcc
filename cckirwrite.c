@@ -1,6 +1,7 @@
 /* CCKIRWRITE.C - KIR1 typed graph writer. */
 
 #include "cckir.h"
+#include "ccvla.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -17,6 +18,9 @@ struct kir_wmodule {
 };
 
 static struct kir_wmodule module_syms;
+static int parser_labmax;
+
+extern int labmax(void);
 
 static int put36(FILE *, INT);
 static int writerec(FILE *, unsigned, const INT *, unsigned);
@@ -88,7 +92,7 @@ grow(void ***vp, unsigned *cap, unsigned need)
 static int
 persistent_symbol(SYMBOL *s)
 {
-    return s != NULL && (s->Sflags & SF_LOCAL) == 0;
+    return s != NULL && s->Sclass != SC_ILABEL && (s->Sflags & SF_LOCAL) == 0;
 }
 
 static unsigned
@@ -127,6 +131,8 @@ static unsigned
 addtype(struct kir_wgraph *g, TYPE *t)
 {
     unsigned id;
+    NODE *bound;
+    SYMBOL *bs;
     if (t == NULL) return 0;
     if ((id = findptr((void **)g->types, g->nt, t)) != 0) return id;
     if (grow((void ***)&g->types, &g->ct, g->nt + 1)) return 0;
@@ -138,6 +144,12 @@ addtype(struct kir_wgraph *g, TYPE *t)
         (void)addsym(g, t->Tsmtag);
     else
         (void)addtype(g, t->Tsubt);
+    if (tisvla(t)) {
+        bound = vlaboundexpr_v11(t);
+        bs = vlaboundsym_v11(t);
+        if (bound != NULL) (void)addnode(g, bound);
+        if (bs != NULL) (void)addsym(g, bs);
+    }
     return id;
 }
 
@@ -145,6 +157,7 @@ static unsigned
 addsym(struct kir_wgraph *g, SYMBOL *s)
 {
     unsigned id, i;
+    SYMBOL *base, *mark;
     if (s == NULL) return 0;
     for (i = 0; i < g->ns; ++i)
         if (g->syms[i] == s)
@@ -178,6 +191,10 @@ addsym(struct kir_wgraph *g, SYMBOL *s)
     if ((s->Sclass == SC_EXTDEF || s->Sclass == SC_INTDEF)
       && s->Stype != NULL && s->Stype->Tspec == TS_FUNCT)
         (void)addtype(g, s->Shproto);
+    base = vlabase_v11(s);
+    mark = vlaobjmarkget_v12(s);
+    if (base != NULL) (void)addsym(g, base);
+    if (mark != NULL) (void)addsym(g, mark);
     return id;
 }
 
@@ -347,11 +364,44 @@ writestring(FILE *fp, unsigned id, NODE *p)
     return 0;
 }
 
+static int
+writevlatype(FILE *fp, struct kir_wgraph *g, TYPE *t)
+{
+    INT w[4];
+    NODE *bound;
+    SYMBOL *bs;
+
+    if (!tisvla(t)) return 0;
+    bound = vlaboundexpr_v11(t);
+    bs = vlaboundsym_v11(t);
+    w[0] = (INT)typeid(g, t);
+    w[1] = (INT)nodeid(g, bound);
+    w[2] = (INT)symid(g, bs);
+    w[3] = (INT)vlaboundcaptured_v12(t);
+    return writerec(fp, KIR_REC_VLA_TYPE, w, 4);
+}
+
+static int
+writevlaobject(FILE *fp, struct kir_wgraph *g, SYMBOL *s)
+{
+    SYMBOL *base, *mark;
+    INT w[3];
+
+    base = vlabase_v11(s);
+    mark = vlaobjmarkget_v12(s);
+    if (base == NULL && mark == NULL) return 0;
+    w[0] = (INT)symid(g, s);
+    w[1] = (INT)symid(g, base);
+    w[2] = (INT)symid(g, mark);
+    return writerec(fp, KIR_REC_VLA_OBJECT, w, 3);
+}
+
 int
 kir_write_header(FILE *fp)
 {
     const char *p;
     freemodule();
+    parser_labmax = labmax();
     for (p = KIR_MAGIC; *p != '\0'; ++p)
         if (putc((unsigned char)*p, fp) == EOF) return -1;
     return put36(fp, KIR_VERSION);
@@ -360,16 +410,42 @@ kir_write_header(FILE *fp)
 static int
 writegraph(FILE *fp, NODE *root)
 {
-    struct kir_wgraph g; INT h[4]; unsigned i;
+    struct kir_wgraph g; INT h[KIR_EXT_WORDS]; unsigned i;
     memset(&g, 0, sizeof(g));
     if (root != NULL && addnode(&g, root) == 0) { freegraph(&g); return -1; }
-    h[0] = nodeid(&g, root); h[1] = g.nt; h[2] = g.ns; h[3] = g.nn;
-    if (writerec(fp, KIR_REC_EXTDEF, h, 4)) { freegraph(&g); return -1; }
+    if (curfn != NULL && addsym(&g, curfn) == 0) { freegraph(&g); return -1; }
+    for (i = 0; i < (unsigned)_reg_count; ++i)
+        if (Reg_Id[i] != NULL && addsym(&g, Reg_Id[i]) == 0) {
+            freegraph(&g); return -1;
+        }
+    memset(h, 0, sizeof(h));
+    h[KIR_EXT_ROOT] = nodeid(&g, root);
+    h[KIR_EXT_NTYPE] = g.nt;
+    h[KIR_EXT_NSYM] = g.ns;
+    h[KIR_EXT_NNODE] = g.nn;
+    h[KIR_EXT_CURFN] = (INT)symid(&g, curfn);
+    packint(&h[KIR_EXT_MAXAUTO0], maxauto);
+    h[KIR_EXT_ABIDIRECT] = fnabidirect;
+    h[KIR_EXT_ARGKEEP] = fnargkeepmask;
+    h[KIR_EXT_ARGDROP] = fnargdropmask;
+    h[KIR_EXT_ARGPREDROP] = fnargpredropmask;
+    h[KIR_EXT_FNMAIN] = fn_main;
+    h[KIR_EXT_REGCOUNT] = _reg_count;
+    h[KIR_EXT_STACKREFS] = stackrefs;
+    h[KIR_EXT_STKGOTO] = stkgoto;
+    h[KIR_EXT_PARSELAB_START] = parser_labmax;
+    h[KIR_EXT_PARSELAB_END] = labmax();
+    parser_labmax = (int)h[KIR_EXT_PARSELAB_END];
+    for (i = 0; i < KIR_EXT_REGIDS; ++i)
+        h[KIR_EXT_REGID0 + i] = (INT)symid(&g, Reg_Id[i]);
+    if (writerec(fp, KIR_REC_EXTDEF, h, KIR_EXT_WORDS)) { freegraph(&g); return -1; }
     for (i = 0; i < g.nt; ++i) if (writetype(fp, &g, i+1, g.types[i])) goto bad;
     for (i = 0; i < g.ns; ++i)
         if (writesym(fp, &g, g.symids[i], g.syms[i])) goto bad;
     for (i = 0; i < g.nn; ++i) if (writenode(fp, &g, i+1, g.nodes[i])) goto bad;
     for (i = 0; i < g.nn; ++i) if (writestring(fp, i+1, g.nodes[i])) goto bad;
+    for (i = 0; i < g.nt; ++i) if (writevlatype(fp, &g, g.types[i])) goto bad;
+    for (i = 0; i < g.ns; ++i) if (writevlaobject(fp, &g, g.syms[i])) goto bad;
     if (writerec(fp, KIR_REC_EXTEND, NULL, 0)) goto bad;
     freegraph(&g); return 0;
 bad:

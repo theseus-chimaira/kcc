@@ -1,6 +1,7 @@
 /* CCKIRREAD.C - KIR1 typed graph reader. */
 
 #include "cckir.h"
+#include "ccvla.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,12 +16,17 @@ struct sref {
     unsigned tag;
 };
 struct nref { unsigned type, left, right; int mode; INT v0[KIR_INT_CHUNKS]; };
+struct vtref { int seen; unsigned bound, boundsym; int captured; };
+struct voref { unsigned object, base, mark; };
 static TYPE **last_types; static unsigned last_nt;
 static SYMBOL **module_syms; static unsigned module_ns, module_cs;
 static SYMBOL **local_syms; static unsigned local_ns;
 static NODE **last_nodes; static unsigned last_nn;
 static int last_mainf;
 static SYMBOL root_symbol;
+
+extern int labmax(void);
+extern void labset(int), labrename(SYMBOL *, unsigned int);
 
 static int get36(FILE *, INT *);
 static int readrec(FILE *, unsigned *, INT *, unsigned, unsigned *);
@@ -138,14 +144,26 @@ kir_read_header(FILE *fp)
 static int
 readgraph(FILE *fp, INT *head, unsigned hn, NODE **root)
 {
-    unsigned rootid,nt,ns,nn,i,kind,n; INT w[KIR_MAX_RECORD_WORDS];
+    unsigned rootid,nt,ns,nn,curfnid,i,kind,n;
+    int parse_start, parse_end, backend_start;
+    INT w[KIR_MAX_RECORD_WORDS];
     struct tref *tr=NULL; struct sref *sr=NULL; struct nref *nr=NULL;
-    if(hn!=4) return -1; rootid=(unsigned)head[0]; nt=(unsigned)head[1]; ns=(unsigned)head[2]; nn=(unsigned)head[3];
+    struct vtref *vr=NULL; struct voref *vo=NULL; unsigned nvo=0;
+    if(hn!=KIR_EXT_WORDS) return -1;
+    rootid=(unsigned)head[KIR_EXT_ROOT]; nt=(unsigned)head[KIR_EXT_NTYPE];
+    ns=(unsigned)head[KIR_EXT_NSYM]; nn=(unsigned)head[KIR_EXT_NNODE];
+    curfnid=(unsigned)head[KIR_EXT_CURFN];
+    parse_start=(int)head[KIR_EXT_PARSELAB_START];
+    parse_end=(int)head[KIR_EXT_PARSELAB_END];
+    if (parse_end < parse_start) return -1;
+    backend_start=labmax();
     clear_graph();
     last_types=(TYPE**)calloc(nt+1,sizeof(TYPE*)); tr=(struct tref*)calloc(nt+1,sizeof(*tr));
     local_syms=(SYMBOL**)calloc(ns+1,sizeof(SYMBOL*)); sr=(struct sref*)calloc(ns,sizeof(*sr));
     last_nodes=(NODE**)calloc(nn+1,sizeof(NODE*)); nr=(struct nref*)calloc(nn+1,sizeof(*nr));
-    if((nt&&(!last_types||!tr))||(ns&&(!local_syms||!sr))||(nn&&(!last_nodes||!nr))) goto bad;
+    vr=(struct vtref*)calloc(nt+1,sizeof(*vr));
+    vo=(struct voref*)calloc(ns+1,sizeof(*vo));
+    if((nt&&(!last_types||!tr||!vr))||(ns&&(!local_syms||!sr||!vo))||(nn&&(!last_nodes||!nr))) goto bad;
     last_nt=nt; local_ns=ns; last_nn=nn;
     for(i=1;i<=nt;++i){ unsigned id,j=0; TYPE*t;
         if(readrec(fp,&kind,w,KIR_MAX_RECORD_WORDS,&n)||kind!=KIR_REC_TYPE||n<14) goto bad;
@@ -185,15 +203,67 @@ readgraph(FILE *fp, INT *head, unsigned hn, NODE **root)
     for(;;){
         if(readrec(fp,&kind,w,KIR_MAX_RECORD_WORDS,&n)) goto bad;
         if(kind==KIR_REC_EXTEND) break;
-        if(kind!=KIR_REC_STRING||n<2) goto bad;
-        { unsigned id=(unsigned)w[0],off=(unsigned)w[1],k; NODE*p; if(id==0||id>nn||(p=last_nodes[id])==NULL||p->Nop!=N_SCONST||off+n-2>(unsigned)p->Nsclen)goto bad; for(k=2;k<n;++k)p->Nsconst[off+k-2]=(char)w[k]; }
+        if(kind==KIR_REC_STRING&&n>=2) {
+            unsigned id=(unsigned)w[0],off=(unsigned)w[1],k; NODE*p;
+            if(id==0||id>nn||(p=last_nodes[id])==NULL||p->Nop!=N_SCONST||off+n-2>(unsigned)p->Nsclen)goto bad;
+            for(k=2;k<n;++k)p->Nsconst[off+k-2]=(char)w[k];
+            continue;
+        }
+        if(kind==KIR_REC_VLA_TYPE&&n==4) {
+            unsigned id=(unsigned)w[0];
+            if(id==0||id>nt||vr[id].seen) goto bad;
+            vr[id].seen=1; vr[id].bound=(unsigned)w[1];
+            vr[id].boundsym=(unsigned)w[2]; vr[id].captured=(int)w[3];
+            continue;
+        }
+        if(kind==KIR_REC_VLA_OBJECT&&n==3) {
+            if(nvo>=ns) goto bad;
+            vo[nvo].object=(unsigned)w[0]; vo[nvo].base=(unsigned)w[1];
+            vo[nvo].mark=(unsigned)w[2]; ++nvo;
+            continue;
+        }
+        goto bad;
     }
     for(i=1;i<=nt;++i){ TYPE*t=last_types[i]; if(tr[i].v0kind)t->t_v0.t_subt=(unsigned)tr[i].v0[0]<=nt?last_types[(unsigned)tr[i].v0[0]]:NULL; else t->Tsize=(unsigned INT)unpackint(tr[i].v0); if(tr[i].v1kind==2)t->Tsmtag=getsymid(tr[i].v1); else t->Tsubt=tr[i].v1<=nt?last_types[tr[i].v1]:NULL; }
     for(i=0;i<ns;++i){ SYMBOL*s=sr[i].sym; s->Stype=sr[i].type<=nt?last_types[sr[i].type]:NULL; s->Ssmnext=getsymid(sr[i].next); if(sr[i].valkind)s->Ssym=getsymid((unsigned)sr[i].val[0]); else s->Svalue=unpackint(sr[i].val); if(sr[i].tagkind==1)s->Ssmtag=getsymid(sr[i].tag); else if(sr[i].tagkind==2)s->Shproto=sr[i].tag<=nt?last_types[sr[i].tag]:NULL; }
+    for(i=0;i<ns;++i) {
+        SYMBOL *s=sr[i].sym;
+        if(s != NULL && s->Sclass == SC_ILABEL && s->Sname[0] == '$') {
+            unsigned old=0, j=1;
+            while(s->Sname[j]>='0' && s->Sname[j]<='9') {
+                old=old*10U+(unsigned)(s->Sname[j]-'0'); ++j;
+            }
+            if(s->Sname[j]=='\0' && old>(unsigned)parse_start && old<=(unsigned)parse_end)
+                labrename(s,(unsigned)backend_start+(old-(unsigned)parse_start));
+        }
+    }
+    labset(backend_start + (parse_end - parse_start));
     for(i=1;i<=nn;++i){ NODE*p=last_nodes[i]; p->Ntype=nr[i].type<=nt?last_types[nr[i].type]:NULL; if(nodelinks(p->Nop)){ p->Nleft=nr[i].left<=nn?last_nodes[nr[i].left]:NULL; p->Nright=nr[i].right<=nn?last_nodes[nr[i].right]:NULL; } if(nr[i].mode==1)p->n_var0.n_int=unpackint(nr[i].v0); else if(nr[i].mode==2)p->n_var0.n_sym=getsymid((unsigned)nr[i].v0[0]); else if(nr[i].mode==3)p->n_var0.n_node=(unsigned)nr[i].v0[0]<=nn?last_nodes[(unsigned)nr[i].v0[0]]:NULL; }
-    free(tr); free(sr); free(nr); *root=rootid<=nn?last_nodes[rootid]:NULL; return 0;
+    for(i=1;i<=nt;++i) if(vr[i].seen) {
+        NODE *bound=vr[i].bound<=nn?last_nodes[vr[i].bound]:NULL;
+        SYMBOL *bs=getsymid(vr[i].boundsym);
+        if(vlainfoadd_v12(last_types[i],bound,bs,vr[i].captured)!=0) goto bad;
+    }
+    for(i=0;i<nvo;++i) {
+        SYMBOL *obj=getsymid(vo[i].object), *base=getsymid(vo[i].base), *mark=getsymid(vo[i].mark);
+        if(obj==NULL||vlaobjaddmeta_v12(obj,base,mark)!=0) goto bad;
+    }
+    curfn = getsymid(curfnid);
+    maxauto = unpackint(&head[KIR_EXT_MAXAUTO0]);
+    fnabidirect = (char)head[KIR_EXT_ABIDIRECT];
+    fnargkeepmask = (char)head[KIR_EXT_ARGKEEP];
+    fnargdropmask = (char)head[KIR_EXT_ARGDROP];
+    fnargpredropmask = (char)head[KIR_EXT_ARGPREDROP];
+    fn_main = (char)head[KIR_EXT_FNMAIN];
+    _reg_count = (int)head[KIR_EXT_REGCOUNT];
+    stackrefs = (int)head[KIR_EXT_STACKREFS];
+    stkgoto = (int)head[KIR_EXT_STKGOTO];
+    if (_reg_count < 0 || _reg_count > KIR_EXT_REGIDS) goto bad;
+    for (i = 0; i < KIR_EXT_REGIDS; ++i)
+        Reg_Id[i] = getsymid((unsigned)head[KIR_EXT_REGID0 + i]);
+    free(tr); free(sr); free(nr); free(vr); free(vo); *root=rootid<=nn?last_nodes[rootid]:NULL; return 0;
 bad:
-    free(tr); free(sr); free(nr); clear_graph(); return -1;
+    free(tr); free(sr); free(nr); free(vr); free(vo); clear_graph(); return -1;
 }
 
 int
@@ -230,6 +300,11 @@ static void
 clear_graph(void)
 {
     unsigned i;
+    vlaclear_v12();
+    curfn = NULL;
+    for (i = 0; i < KIR_EXT_REGIDS; ++i)
+        Reg_Id[i] = NULL;
+    _reg_count = 0;
     for(i=1;i<=last_nn;++i){ if(last_nodes&&last_nodes[i]){ if(last_nodes[i]->Nop==N_SCONST)free(last_nodes[i]->Nsconst); free(last_nodes[i]); } }
     for(i=1;i<=local_ns;++i) if(local_syms&&local_syms[i]) free(local_syms[i]);
     for(i=1;i<=last_nt;++i) if(last_types&&last_types[i]) free(last_types[i]);

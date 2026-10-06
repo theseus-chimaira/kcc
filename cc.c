@@ -74,8 +74,20 @@ extern char *execargs(int *, char ***);			/* CCASMB */
 #endif
 extern char *fnparse(char *, char *, char *, char *, char *);  /* CCASMB */
 extern char *estrcpy(char *, char *);			/* CCASMB */
-#if !KCC_PHASE_CPP
+#if !KCC_PHASE_CPP && !KCC_PHASE_GEN
 extern NODE *extdef(void), *tntdef(void);		/* CCDECL */
+#endif
+#if KCC_PHASE_PARSE
+extern int kir_write_header(FILE *), kir_write_extdef(FILE *, NODE *),
+    kir_write_tentative(FILE *, NODE *), kir_write_globals(FILE *, SYMBOL *),
+    kir_write_module_end(FILE *, int);
+#endif
+#if KCC_PHASE_GEN
+extern int kir_read_header(FILE *), kir_read_next(FILE *, int *, NODE **),
+    kir_read_mainflag(void);
+extern void kir_free_graph(NODE *), kir_free_module(void);
+#define KIR_REC_EXTDEF 1
+#define KIR_REC_MODULE_END 7
 #endif
 extern void syminit(void), ppinit(void), lexinit(void), initpar(void),
 	outinit(void), outdone(int),
@@ -1477,6 +1489,44 @@ module_loop:
 	}
 
     syminit ();				/* Set up symbol tables */
+#if KCC_PHASE_GEN
+    {
+    NODE *n;
+    int kind;
+
+    if (kir_read_header(in) != 0)
+	{
+	jerr("Invalid KIR1 input stream");
+	fclose(in);
+	fclose(out);
+	return asmdflg;
+	}
+    outinit();
+    for (;;) {
+	if (kir_read_next(in, &kind, &n) != 0) {
+	    jerr("Invalid or truncated KIR1 input stream");
+	    break;
+	}
+	if (kind == KIR_REC_EXTDEF) {
+	    nodeinit();
+	    gencode(n);
+	    kir_free_graph(n);
+	    continue;
+	}
+	if (kind == KIR_REC_MODULE_END) {
+	    mainflg = kir_read_mainflag();
+	    outdone(mainflg);
+	    break;
+	}
+	jerr("Unexpected KIR1 record kind %d", kind);
+	break;
+    }
+    kir_free_module();
+    fclose(in);
+    fclose(out);
+    return asmdflg;
+    }
+#else
     ppinit ();				/* Initialize the input preprocessor */
 #if !KCC_PHASE_CORELIKE
     ppdefine (npreundef,preundefs,	/*  then can do initial -U undefs */
@@ -1527,12 +1577,67 @@ module_loop:
 	    fclose (fsym);
 	    }
 #endif
-	}
+    }
     else
 #endif
 					/* Normal compilation processing */
 	{
 	NODE*	    n;
+
+#if KCC_PHASE_PARSE
+	if (kir_write_header(out) != 0)
+	    {
+	    jerr("Could not write KIR1 header");
+	    fclose(in);
+	    fclose(out);
+	    return asmdflg;
+	    }
+
+	if (eof)
+	    {
+	    if (clevel >= CLEV_STRICT)
+		error("File must contain at least one external definition");
+	    else
+		warn("Null source file");
+	    }
+
+	while (!eof && token != T_EOF)
+	    {
+	    savelits = 0;
+	    nodeinit();
+	    curfn = NULL;
+	    n = extdef();
+	    if (kir_write_extdef(out, n) != 0)
+		{
+		jerr("Could not write KIR1 external definition");
+		break;
+		}
+	    }
+
+	if (!module_pragma)
+	    {
+	    fclose(in);
+	    curfn = NULL;
+	    fline = 0;
+	    }
+
+	while ((n = tntdef()) != NULL)
+	    {
+	    if (kir_write_tentative(out, n) != 0)
+		{
+		jerr("Could not write KIR1 tentative definition");
+		break;
+		}
+	    nodeinit();
+	    }
+
+	mainflg = mainsymp();
+	if (kir_write_globals(out, symbol) != 0
+	  || kir_write_module_end(out, mainflg) != 0)
+	    jerr("Could not finish KIR1 module");
+	fclose(out);
+	return asmdflg;
+#else
 
 	/* if (module_pragma) outinit() puts title in *.mac outpreamble()*/
 
@@ -1629,6 +1734,8 @@ module_loop:
 
 	if ((delete && asmdflg != 0) && (!mlist))
 	    remove (outfname);
+
+#endif /* !KCC_PHASE_PARSE */
 	}
 
     if (outmsgs == stdout)
@@ -1649,6 +1756,7 @@ module_loop:
 
     return asmdflg;			/* Return assembly result */
 #endif /* !KCC_PHASE_CPP */
+#endif /* !KCC_PHASE_GEN */
     }
 
 /* Auxiliary - returns true if main() was defined in this module */
@@ -1861,7 +1969,13 @@ files (char *fname)
     ** filename we calculated above, in the current directory.
     */
 
+#if KCC_PHASE_PARSE
+    cp = ".kir";
+#elif KCC_PHASE_GEN
+    cp = ".kp1";
+#else
     cp = (asmdialect == ASM_GAS) ? ".s" : ".mac";
+#endif
 
     if (savofnam != NULL && exactasmout)
 	estrcpy(outfname, savofnam);
@@ -1903,7 +2017,13 @@ files (char *fname)
     else
 	estrcpy (estrcpy (outfname, inpfmodule), cp); /* Compose output filename */
 
-    if ((out = fopen(outfname, "w")) == NULL)
+    if ((out = fopen(outfname,
+#if KCC_PHASE_PARSE || KCC_PHASE_GEN
+                     "wb"
+#else
+                     "w"
+#endif
+                     )) == NULL)
 	{
 	errfopen("output", outfname);
 	return 0;
