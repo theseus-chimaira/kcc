@@ -1890,7 +1890,7 @@ files (char *fname)
 #if KCC_PHASE_CORELIKE
     in = fopen(inpfname, "rb");
 #elif __MSDOS__ || HOST_UNIX || HOST_DAIMOS	/* native/host ANSI fopen */
-    in = fopen (inpfname, "r");
+    in = fopen (inpfname, "rb");
 #else
     switch (sourcebytewidth)		/* FW 2A(47) */
 	{
@@ -1917,7 +1917,7 @@ files (char *fname)
 	estrcpy (inpfname, cname);	/* then constructed filename */
 
 #if __MSDOS__ || HOST_UNIX || HOST_DAIMOS	/* native/host ANSI fopen */
-	in = fopen (inpfname, "r");
+	in = fopen (inpfname, "rb");
 #else
 	switch (sourcebytewidth)	/* FW 2A(47) */
 	    {

@@ -9,6 +9,7 @@
 #endif
 
 #include "cc.h"
+#include "ccsrc.h"
 #include "ccchar.h"
 #include "cclex.h"
 #include <time.h>	/* Needed for __DATE__ and __TIME__ */
@@ -244,12 +245,15 @@ ppappendc(int c)
 static
 int inlevel;			/* 0 - top level */
 static
+CCSRC srcin;
+static
 int scanning_comment = 0;	/* flags true while in scancomm */
 
 static
 struct
     {
     FILE    *cptr;	/* file pointer  */
+    CCSRC   csrc;	/* raw source decoder state */
     filename cname;	/* filename      */
     int	    cpage;	/* page number   */
     int	    cline;	/* line number in page */
@@ -646,6 +650,8 @@ ppinit(void)
     erptr = errlin;		/* Init pointer to error-context buffer */
     erpleft = ERRLSIZE;		/* Set countdown of chars left in errlin */
     memset((char *) erptr, 0, erpleft);	/* Clear the circular buffer */
+    if (ccsrc_init(&srcin, in) != 0)
+	efatal("Cannot initialize source input");
     pushstr("\n");		/* Prime input with EOL, set up 1st char! */
 
     /* Enter special macro pre-definitions into symbol table. */
@@ -1377,12 +1383,12 @@ nextch (void)
 	ch = EOF;
     else
 	{
-	ch = getc(in);
+	ch = ccsrc_getc(&srcin);
 	if (ch == '\r')
 	    {
-	    int next = getc(in);
+	    int next = ccsrc_getc(&srcin);
 	    if (next != '\n' && next != EOF)
-		ungetc(next, in);
+		ccsrc_ungetc(next, &srcin);
 	    ch = '\n';
 	    }
 	}
@@ -1426,9 +1432,9 @@ nextch (void)
 	{
 	case EOF:			/* End Of File on input */
 				/* Do a couple of checks to verify */
-	    if (ferror(in))
+	    if (ccsrc_error(&srcin))
 	        error("I/O error detected while reading file %s", inpfname);
-	    else if (!feof(in) && !module_pragma)
+	    else if (!ccsrc_eof(&srcin) && !module_pragma)
 		int_error("nextch: spurious EOF");
 
 	    if (prevch != '\n' && prevch != EOF) /* Was last ch in file EOL? */
@@ -1447,6 +1453,7 @@ nextch (void)
 		fclose(in);		/* Close this file */
 		--inlevel;
 		in = inc[inlevel].cptr;	/* then set vars from popped level */
+		srcin = inc[inlevel].csrc;
 		page = inc[inlevel].cpage;
 		line = inc[inlevel].cline;
 		fline = inc[inlevel].cfline;
@@ -1753,7 +1760,7 @@ pushch(int c)
     /* File input, back up over that.
     ** Note that errlin and t/f/line only need to be fixed up for file input.
     */
-    if (c != ungetc(c, in))
+    if (c != ccsrc_ungetc(c, &srcin))
 	int_error("pushch: ungetc failed: %o", c);
     if (isceol(c))
 	{
@@ -5710,7 +5717,7 @@ d_include (void)
     if (*f == '/')
 	{
 	estrcpy(f2, f);
-	fp = fopen(f2, "r");	/* Try to open just this one */
+	fp = fopen(f2, "rb");	/* Try to open just this one */
 	++done;				/* Always done now */
 	}
 else if (ftype != '>')
@@ -5725,13 +5732,13 @@ else if (ftype != '>')
 	{
 	estrcpy(estrcpy(estrcpy(f2,	/* Use source filename pref+suff */
 		inpfdir), f), inpfsuf);
-	if ((fp = fopen(f2, "r")) != NULL)
+	if ((fp = fopen(f2, "rb")) != NULL)
 	    ++done;
 else			/* V 2A(37): try the user's filespec
 						    exactly as given (SPR 9577) */
 	    {
 	    estrcpy(f2, f);
-	    if ((fp = fopen (f2, "r")) != NULL)
+	    if ((fp = fopen (f2, "rb")) != NULL)
 		++done;
 	    }
     }
@@ -5791,7 +5798,7 @@ cinctry(int n, char ** ptab, char * f2, char * f, FILE ** fp)
 #else
 	fstrcpy(f2, *ptab, f);		/* Build filename to try */
 #endif
-	if ((*fp = fopen(f2, "r")) != NULL)
+	if ((*fp = fopen(f2, "rb")) != NULL)
 	    return 1;			/* Won! */
 	}
     return 0;				/* No stop and no opens... */
@@ -5818,6 +5825,7 @@ filepush(FILE * fp, char * fname, int lin, int pag, int flin)
 	eof = 0;			/* top-level EOF, undo it. */
     estrcpy(inc[inlevel].cname, inpfname);	/* Save old context */
     inc[inlevel].cptr = in;
+    inc[inlevel].csrc = srcin;
     inc[inlevel].cpage = page;
     inc[inlevel].cline = line;
     inc[inlevel].cfline = fline;
@@ -5826,6 +5834,8 @@ filepush(FILE * fp, char * fname, int lin, int pag, int flin)
     inlevel++;				/* Create new context */
     estrcpy(inpfname, fname);		/* Set new current file name */
     in = fp;				/* Set new current input stream */
+    if (ccsrc_init(&srcin, in) != 0)
+	efatal("Cannot initialize include source input");
     fline = flin;
     line = lin;
     page = pag;

@@ -21,7 +21,7 @@ RUNTIMEDIR = runtime
 SRCS = \
 	cc.c ccasmb.c cccreg.c cccse.c cccode.c ccdata.c ccdbug.c ccdecl.c \
 	ccerr.c cceval.c ccgen.c ccgen1.c ccgen2.c ccgswi.c ccjskp.c cclex.c \
-	ccnode.c ccout.c ccoututil.c ccpp.c ccreg.c ccstmt.c ccsym.c cctype.c ccopt.c \
+	ccnode.c ccout.c ccoututil.c ccpp.c ccsrc.c ccreg.c ccstmt.c ccsym.c cctype.c ccopt.c \
 	ccvla.c
 OBJS = $(SRCS:.c=.o)
 ASMS = $(SRCS:.c=.s)
@@ -96,7 +96,7 @@ NATIVE_KCPP_OBJS = \
 	$(NATIVE_CPP_DRIVER_OBJ) $(NATIVE_BUILD_DIR)/ccasmb-v1.dobj \
 	$(NATIVE_CPP_DATA_OBJ) $(NATIVE_CPP_ERR_OBJ) $(NATIVE_CPP_OUT_OBJ) \
 	$(NATIVE_BUILD_DIR)/ccpp-v1.dobj $(NATIVE_CPP_PHASE_OBJ) \
-	$(NATIVE_CPP_SYM_OBJ)
+	$(NATIVE_CPP_SYM_OBJ) $(NATIVE_BUILD_DIR)/ccsrc-v1.dobj
 
 NATIVE_KCC1_OBJS = \
 	$(NATIVE_CORE_DRIVER_OBJ) $(NATIVE_BUILD_DIR)/ccasmb-v1.dobj \
