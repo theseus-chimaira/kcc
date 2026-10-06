@@ -166,10 +166,23 @@ EXT int fnvla_v11,             /* current function contains a VLA */
     stksz;			/* -Nxxxx User selectable run time stack
 				   	  size (default 4K or 8 pages)  */
 
+/* Mixed listings consume source/preprocessor state and are therefore a
+ * KCPP/integrated-compiler facility.  KCC1 consumes KPT4 and never accepts
+ * the listing switch, so make those paths compile-time dead in the core
+ * phase rather than carrying runtime tests and formatting code.
+ */
+#if KCC_PHASE_CORE
+# define KCC_MLIST 0
+#else
+# define KCC_MLIST mlist
+#endif
+
+#if !KCC_PHASE_CORE
 EXT char creatime[30], comptime[30];   /* Time variables for mixed listing */
 EXT filename dspfname;	/* Mixed listing input file name -- KAR 8/90	   */
 EXT char *errbuf;		/* contains buffered err msgs (mlist)
 					-KAR 8/90 */
+#endif
 EXT char *ver_str;		/* ptr for version string--KAR 11/90 */
 
 #define FN_ENTRY 0

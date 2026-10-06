@@ -358,9 +358,7 @@ foldidx(struct pcode * p)
 {
     int s;
 
-#if SYS_CSI			/* Reg linkage */
     if (Register_Nopreserve(p->Pindex))	/* avoid faulty opts */
-#endif
         if ((s = findcse(p->Pindex, before(p), 1)) != 0) /* Look for match to index */
 	    p->Pindex = s;		/* Won, set new index reg */
 }

@@ -169,10 +169,8 @@ foldskip(PCODE *p, int safechange)
 
     if (p == NULL) return;
 
-#if SYS_CSI		/*  Reg linkage */
     if (Register_Preserve (p->Pr2))
 	return;			/* avoid faulty optimizations */
-#endif
 
     /*
     ** fold:  P_MOVE S,x
@@ -212,9 +210,7 @@ foldskip(PCODE *p, int safechange)
     if (q == NULL) return;
 
     if (q != NULL && q->Ptype == PTA_REGIS /* !prevskips */
-#if SYS_CSI		/*  Reg linkage */
      && (Register_Nopreserve (q->Pr2))/* avoid faulty optimizations */
-#endif
      && q->Preg == p->Preg && q->Pop == P_MOVE && safechange) {
 
 	/*
@@ -843,9 +839,7 @@ optlab(label lab)
     */
 
     if ((q = before (p)) == NULL || (q->Ptype & PTF_ADRMODE) != PTA_MINDEXED 
-#if SYS_CSI		/*  Reg linkage */
         || Register_Preserve(p->Preg)   /* avoid faulty optimizations */
-#endif
 	|| q->Pptr != lab) return;	/* make sure some jump to lab */
 
     /*
@@ -886,9 +880,7 @@ optlab(label lab)
     if (previous->Pop == P_MOVEM && p->Pop == P_MOVE && p->Preg == previous->Preg)
     {
 	if (p->Ptype == PTV_IMMED && p->Pvalue == 1 && q->Pop== P_SOJ+POS_SKPN
-#if SYS_CSI		/*  Reg linkage */
 	    && (Register_Nopreserve (p->Preg)) /*avoid faulty optimizations */
-#endif
 
 	    && !prevskips (q) && changereg (p->Preg, q->Preg, before (q))) {
 
@@ -931,10 +923,8 @@ optlab(label lab)
 	for (b = q; b != NULL; b = before (b))
 	    if (b->Pop == P_MOVEM) {		/* Find MOVEM if any */
 		if (prevskips(b)) b = NULL;	/*Forget it if it's skipped */
-#if SYS_CSI		/*  Reg linkage */
 		if (b != NULL && Register_Preserve (b->Preg))
 		    b = NULL;	 /* avoid faulty opts */
-#endif
 		break;
 	    }
 
@@ -993,10 +983,8 @@ optlab(label lab)
     **	      instr
     */
 
-#if SYS_CSI		/*  Reg linkage */
     if (Register_Preserve (p->Preg)) /* avoid faulty opts */
         return;
-#endif
     if (q->Pop != P_JRST) return;
 
     /*

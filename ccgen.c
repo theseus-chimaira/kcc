@@ -42,8 +42,10 @@ extern void vrfree (VREG *);
 extern void gccabi_dimode_normalize_reg(int);
 extern void gccabi_dimode_encode_regs(int, int);
 
+#if SYS_CSI
 extern
 void	    outiprolog (void);		/* FW 2A(52) */
+#endif
 
 extern void outpghdr(void);				/* CCOUT */
 #if SYS_CSI
@@ -787,7 +789,7 @@ genfunct (NODE* n)
     codeseg ();				/* Ensure in code segment */
     inicode ();				/* Start making code */
 
-    if (mlist)
+    if (KCC_MLIST)
 	{
 	/* Emit definitions for register variables. */
 
@@ -808,12 +810,14 @@ genfunct (NODE* n)
 
     fnargregs = 0;
     bltsave = 0;
+#if SYS_CSI
     if (n->Nleft->Nleft->Nid->Sflags & TF_INTERRUPT)
 	{				/* FW 2A(52) */
 	isr = 1;
 	outiprolog ();
 	}
     else
+#endif
 	{
 	/* AC16 is KCC's reserved output scratch register and is call-preserved
 	** by the external ABI.  Save only AC16 here.  Expansions that need AC15
@@ -931,7 +935,7 @@ genfunct (NODE* n)
 
     _word_cnt = 0;
 
-    if (mlist && (oline > HDR_LINES))
+    if (KCC_MLIST && (oline > HDR_LINES))
 	outpghdr();
 
 }

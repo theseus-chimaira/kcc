@@ -7,9 +7,6 @@
 
 extern SYMBOL *symfind(char *, int);
 
-char *mlbuf = NULL;
-char *mlbptr = NULL;
-
 static char *tokbuf;
 static unsigned int tokcap;
 static int pushed;

@@ -1303,7 +1303,7 @@ trstrcon (void)
 		int_error("trstrcon: no delim");
 		break;
 	    default:
-		slcput(*cp);
+		(void) slcput(*cp);
 		continue;
 
 	    }

@@ -44,8 +44,19 @@ NATIVE_CORE_DATA_ASM = $(NATIVE_BUILD_DIR)/ccdata-core-v1.s
 NATIVE_CORE_DATA_OBJ = $(NATIVE_BUILD_DIR)/ccdata-core-v1.dobj
 NATIVE_CORE_ERR_ASM = $(NATIVE_BUILD_DIR)/ccerr-core-v1.s
 NATIVE_CORE_ERR_OBJ = $(NATIVE_BUILD_DIR)/ccerr-core-v1.dobj
+NATIVE_CORE_OUT_ASM = $(NATIVE_BUILD_DIR)/ccout-core-v1.s
+NATIVE_CORE_OUT_OBJ = $(NATIVE_BUILD_DIR)/ccout-core-v1.dobj
+NATIVE_CORE_GEN_ASM = $(NATIVE_BUILD_DIR)/ccgen-core-v1.s
+NATIVE_CORE_GEN_OBJ = $(NATIVE_BUILD_DIR)/ccgen-core-v1.dobj
 NATIVE_CORE_DRIVER_ASM = $(NATIVE_BUILD_DIR)/cc-core-v1.s
 NATIVE_CORE_DRIVER_OBJ = $(NATIVE_BUILD_DIR)/cc-core-v1.dobj
+NATIVE_HEADERS = $(wildcard *.h) $(wildcard self/include/*.h)
+NATIVE_PHASE_ASMS = \
+	$(NATIVE_CPP_PHASE_ASM) $(NATIVE_CORE_PHASE_ASM) \
+	$(NATIVE_CPP_DRIVER_ASM) $(NATIVE_CPP_OUT_ASM) $(NATIVE_CPP_ERR_ASM) \
+	$(NATIVE_CPP_SYM_ASM) $(NATIVE_CPP_DATA_ASM) \
+	$(NATIVE_CORE_DATA_ASM) $(NATIVE_CORE_ERR_ASM) \
+	$(NATIVE_CORE_OUT_ASM) $(NATIVE_CORE_GEN_ASM) $(NATIVE_CORE_DRIVER_ASM)
 
 NATIVE_KCPP_OBJS = \
 	$(NATIVE_CPP_DRIVER_OBJ) $(NATIVE_BUILD_DIR)/ccasmb-v1.dobj \
@@ -59,10 +70,10 @@ NATIVE_KCC1_OBJS = \
 	$(NATIVE_BUILD_DIR)/cccode-v1.dobj $(NATIVE_CORE_DATA_OBJ) \
 	$(NATIVE_BUILD_DIR)/ccdbug-v1.dobj $(NATIVE_BUILD_DIR)/ccdecl-v1.dobj \
 	$(NATIVE_CORE_ERR_OBJ) $(NATIVE_BUILD_DIR)/cceval-v1.dobj \
-	$(NATIVE_BUILD_DIR)/ccgen-v1.dobj $(NATIVE_BUILD_DIR)/ccgen1-v1.dobj \
+	$(NATIVE_CORE_GEN_OBJ) $(NATIVE_BUILD_DIR)/ccgen1-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccgen2-v1.dobj $(NATIVE_BUILD_DIR)/ccgswi-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccjskp-v1.dobj $(NATIVE_BUILD_DIR)/cclex-v1.dobj \
-	$(NATIVE_BUILD_DIR)/ccnode-v1.dobj $(NATIVE_BUILD_DIR)/ccout-v1.dobj \
+	$(NATIVE_BUILD_DIR)/ccnode-v1.dobj $(NATIVE_CORE_OUT_OBJ) \
 	$(NATIVE_BUILD_DIR)/ccreg-v1.dobj $(NATIVE_BUILD_DIR)/ccstmt-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccsym-v1.dobj $(NATIVE_BUILD_DIR)/cctype-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccopt-v1.dobj $(NATIVE_CORE_PHASE_OBJ)
@@ -102,6 +113,8 @@ native-phase-objects: native-kcpp-objects native-kcc1-objects
 $(NATIVE_BUILD_DIR):
 	mkdir -p $@
 
+$(NATIVE_ASMS) $(NATIVE_PHASE_ASMS): $(NATIVE_HEADERS)
+
 $(NATIVE_BUILD_DIR)/%-v1.s: %.c $(KCC) | $(NATIVE_BUILD_DIR)
 	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -S $< -o $@
 
@@ -133,6 +146,12 @@ $(NATIVE_BUILD_DIR)/ccdata-core-v1.s: ccdata.c $(KCC) | $(NATIVE_BUILD_DIR)
 	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CORE=1 -S $< -o $@
 
 $(NATIVE_BUILD_DIR)/ccerr-core-v1.s: ccerr.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CORE=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccout-core-v1.s: ccout.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CORE=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccgen-core-v1.s: ccgen.c $(KCC) | $(NATIVE_BUILD_DIR)
 	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CORE=1 -S $< -o $@
 
 $(NATIVE_BUILD_DIR)/cc-core-v1.s: cc.c $(KCC) | $(NATIVE_BUILD_DIR)

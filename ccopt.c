@@ -168,10 +168,8 @@ foldbp(struct pcode * p)
     PCODE *q;
     INT soff;
 
-#if SYS_CSI	/* Reg linkage, avoid faulty optimizations */
     if (Register_Preserve (p->Pindex))
 	return;
-#endif
 
 /* Look for a previous instruction that sets the index register */
     if (!p->Pindex || (q = findrset(before(p), p->Pindex)) == 0)
@@ -354,13 +352,11 @@ foldadjbp(struct pcode * p)
     if (p->Ptype == PTA_REGIS			/* If ADJBP R,S then */
 	&& ((q = findrset(before(p), p->Pr2)) != NULL)	/* find instr that sets S */
 	&& q->Pop == P_MOVE
-#if SYS_CSI
 	/* SSR 9718, 9719   AVOID the following
 	 *   folds	MOVE 1,0(2) MOVEI 2,1 ADJBP 2,1 
 	 *   into		    MOVEI 2,1 ADJBP 2,0(2)
          */
 	&& p->Preg != q->Pindex
-#endif
 	)			/* Check for simple setup */
 
 	/* Change MOVE S,x  /.../  ADJBP R,S   into   ADJBP R,x
@@ -1204,10 +1200,8 @@ foldplus(struct pcode * p)
 PCODE *
 findrset(struct pcode * p, int reg)
 {
-#if SYS_CSI			/* Reg linkage */
     if (Register_Preserve(reg))
 	return NULL;		/* avoid faulty opts */
-#endif
 
     /* Loop until break out or no instrs left */
     for (; p; p = before(p))
@@ -1450,17 +1444,13 @@ foldboth(void)
     /*--------------------------------------*/
 
     if ((b = before(previous)) != NULL
-#if SYS_CSI		/*  Reg linkage, avoid faulty optimizations */
 	&& Register_Nopreserve (b->Pr2)
-#endif
 	&& b->Ptype == PTA_REGIS /* !prevskips */
 	&& b->Pop == P_MOVE && b->Preg == previous->Preg
-#if SYS_CSI
 	&& (previous->Pr2 != b->Preg)	/* FEW, 2A(37) 17-Jul-92 (SPR 9877) */
 					/* Cannot perform this fold if 2d   */
 					/* operand of 2d instr ('x' below)  */
 					/* refers to common register ('R'). */
-#endif
 	&& rfree(b->Pr2)		/* Ensure OK to clobber S */
 	&& snglop(previous->Pop)	/* Single-word op */
 	&& ((previous->Pop & POF_OPCODE) != P_IDIV)

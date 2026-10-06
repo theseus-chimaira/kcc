@@ -236,7 +236,9 @@ static VREG *gassign(NODE *),
 	*gcall(NODE *);
 static int vlatype_v11(TYPE *);
 static NODE *vlastride_v11(TYPE *);
+#if SYS_CSI
 static void emit_blissargs(NODE *);
+#endif
 static INT sizeargs(NODE *);
 static int gccabi_direct_reg_args(NODE *, int, TYPE *, int, int *);
 static int gccabi_direct_tail_ok(NODE *);
@@ -302,7 +304,9 @@ static void gor(), gand(), gboolop();
 static VREG *gassign(), *gbinary(), *garithop(), *gptrop(), *gptraddend(),
        *glogical(), *gunary(), *gcast(), *gcastr(),
        *gintwiden(), *guintwiden(), *gincdec(),  *gprimary(),  *gcall();
+#if SYS_CSI
 static void emit_blissargs();
+#endif
 static INT sizeargs();
 static void gfnarg();
 static VREG *gaddress();
@@ -7524,7 +7528,7 @@ gpackedbitcopy(NODE *dst, NODE *src, TYPE *t, int discard)
 static VREG *
 gpackedvalue(NODE *src, TYPE *t)
 {
-    VREG *sa, *sp, *q, *r, *dw;
+    VREG *sa, *q, *r, *dw;
     int i, bytes, word, pos, sflags;
 
     bytes = t->Tbytes;
@@ -8694,8 +8698,10 @@ gcall (NODE* n)
         fnargpredropmask = 0;
     }
 
+#if SYS_CSI
     if (fnflags & TF_FORTRAN)	    /* FORTRAN fn */
 	XF4_call_spill = (char) ~0;		/* spill preserved regs if XF4 call */ // FW KCC-NT
+#endif
 
     vrallspill();			/* save active non-preserved regs */
 
@@ -8734,6 +8740,7 @@ gcall (NODE* n)
      * Choose bliss, fortran, interrupt, or normal C function argument linkage
      */
 
+#if SYS_CSI
     if (fnflags & TF_BLISS)
 	emit_blissargs (l);		/* bliss linkage */
     else if (fnflags & TF_FORTRAN)
@@ -8756,6 +8763,7 @@ gcall (NODE* n)
 
 	}
     else				/* ...No, it's a C fn */
+#endif
 	{
 	NODE *arglist = l;
     directargs = gccabi_direct_reg_args(arglist,
@@ -8803,6 +8811,7 @@ gcall (NODE* n)
     else
 	narg -= stackoffset;	/* calculate neg number of arg words */
 
+#if SYS_CSI
     if (fnflags & TF_FORTRAN)	/* for a FORTRAN fn */
 	{
 	/*
@@ -8815,7 +8824,9 @@ gcall (NODE* n)
 	code13(P_MOVE, VR_FAP, narg+2); /* Point to just after count */
 	code4(P_PUSHJ, VR_SP, r);	/* Call function */
 	}
-    else if (n->Nleft->Nop == Q_IDENT)
+    else
+#endif
+    if (n->Nleft->Nop == Q_IDENT)
 	code6(P_PUSHJ, VR_SP, n->Nleft->Nid);	/* optimization */
     else
         codemdx(P_PUSHJ, R_SP, (SYMBOL *)NULL, 0, R_SCRREG);
@@ -8862,6 +8873,7 @@ gcall (NODE* n)
     else
 	return NULL;			/* Returning void */
 
+#if SYS_CSI
     if (fnflags & TF_FORTRAN)	/* for a FORTRAN fn */
 	{
 	/* FORTRAN functions return values in regs 0+1 instead of 1+2 */
@@ -8869,6 +8881,7 @@ gcall (NODE* n)
 	gretmove(n->Ntype, r, VR_ZERO);
 	code5(P_SETZ, VR_ZERO);	/* This may not be necessary */
 	}
+#endif
 
     r->Vrtype = n->Ntype;		/* Set C type of result obj */
     return r;
@@ -8882,6 +8895,7 @@ gcall (NODE* n)
  * for a function's arguments in the reverse of the usual order.
  */
 
+#if SYS_CSI
 static
 void
 emit_blissargs (NODE *l)
@@ -8897,6 +8911,7 @@ emit_blissargs (NODE *l)
 	    gfnarg(l);
 	}
     }
+#endif /* SYS_CSI */
 
 /* Count # words needed by all args ahead of time, so FORTRAN linkage
 ** can use it without backpatching.

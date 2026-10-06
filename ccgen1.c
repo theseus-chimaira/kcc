@@ -44,10 +44,11 @@ extern int vlaboundcaptured_v12(TYPE *);
 extern void vlaboundsetcaptured_v12(TYPE *);
 
 extern void outepilog(SYMBOL *);	/* CCOUT */
+#if SYS_CSI
 extern VREG *gmuuo(NODE *);	/* CCGEN2 for imuuo key word; KAR 1/91 */
-
 extern
 void	    outiepilog (void);		/* FW 2A(52) */
+#endif
 
 /* Exported functions defined here */
 void genstmt(NODE *), genretinit(NODE *), genretepilog(int), genadata(NODE *);
@@ -1638,12 +1639,15 @@ genretepilog(int i)
 	}
 #endif
 
+#if SYS_CSI
     if (isr)				/* FW 2A(52) */
 	{
 	flushcode ();			
 	outiepilog ();
 	}
-    else if (fnargregs)
+    else
+#endif
+    if (fnargregs)
 	{
 	/* The external ABI leaves register arguments in AC1..AC4.  The
 	** KCC callee prologue inserted private stack copies below the return

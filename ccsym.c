@@ -337,8 +337,10 @@ static SYMBOL *mksym(char *, SYMBOL **);
 static SYMBOL *symmk(SYMBOL *, int, SYMBOL **);
 static int symhash(SYMBOL *), symcmp(SYMBOL *, SYMBOL *);
 static int idcpy(SYMBOL *, char *);
+#if !HOST_DAIMOS
 static void smapinit(void);
 static int smapmatch(INT);
+#endif
 static void aryerr(char *);
 static void realfreelabel(SYMBOL *);
 static void labname(char *, unsigned int);
@@ -531,7 +533,9 @@ syminit(void)
 #else
     /* Initialize labels, symbols, and types */
     labinit();				/* Initialize internal label stuff */
+#if !HOST_DAIMOS
     smapinit();				/* Init symbol map stuff */
+#endif
 
     inisymlist(&symbol, &symtail);	/* Initialize global symbol list */
     inisymlist(&locsymbol, &loctail);	/* Initialize local symbol list */
@@ -1438,6 +1442,28 @@ ridlsym(struct symbol * prevptr)
  *		This will ultimately succeed.
  */
 
+#if HOST_DAIMOS
+
+/*
+ * DAS/GAS accepts the original long C identifiers.  There is no six-character
+ * linker namespace to collide in, so do not build mapped names or maintain
+ * the historical collision table in the native compiler.
+ */
+int
+mapextsym(SYMBOL *s)
+{
+    (void)s;
+    return 1;
+}
+
+void
+mapintsym(SYMBOL *s)
+{
+    (void)s;
+}
+
+#else /* !HOST_DAIMOS */
+
 typedef
 INT	    mpdsym;
 
@@ -1696,6 +1722,8 @@ mapintsym (SYMBOL* s)
 	    }
 	}
     }
+
+#endif /* !HOST_DAIMOS */
 
 /* LABEL MANAGEMENT CODE */
 

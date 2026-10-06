@@ -506,7 +506,7 @@ context(char *etype, char *fmt, va_list ap)
     return;
 #else
 #if SYS_CSI
-    if (mlist)
+    if (KCC_MLIST)
 	{
 	esp = errputs(esp, "; \"");
 	esp = errputs(esp, inpfname);
@@ -541,7 +541,7 @@ context(char *etype, char *fmt, va_list ap)
     colcnt = strlen(conbuf);	/* # cols so far */
     fputs(conbuf, outmsgs);
 #if SYS_CSI
-    if (mlist)
+    if (KCC_MLIST)
 	esp = errputs(errstor + strlen(errstor), conbuf);
 #endif
 
@@ -571,11 +571,11 @@ context(char *etype, char *fmt, va_list ap)
     fputc('\n', outmsgs);
     fputc('\n', outmsgs);	/* Extra newline between msgs for clarity */
 #if SYS_CSI
-    if (mlist) {
+    if (KCC_MLIST) {
 	esp = errputs(errstor + strlen(errstor), cp);
 	esp = errputs(errstor + strlen(errstor), "\n");
 	buf_errmsg(esp);
-    } /* if mlist */
+    } /* if KCC_MLIST */
 #endif /* SYS_CSI */
 
 #else

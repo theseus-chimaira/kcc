@@ -120,10 +120,12 @@ char *savofnam = NULL;			/* KAR-3/92, save -R= name */
 static void getimestr(char *src_fname);
 #endif
 
+#if !KCC_PHASE_CPP
 static
 char mainname[FNAMESIZE]
 /* = {0} */
 ;	/* Name of module containing "main" */
+#endif
 
 static char *savname = NULL;		/* Pointer to desired linked output filename */
 static char *drvoutname = NULL;		/* -o compiler-driver output */

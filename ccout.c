@@ -41,7 +41,7 @@ void
 outnl(void)
 {
     putc('\n', out);
-    if (mlist && ++oline > MAX_OLINE)
+    if (KCC_MLIST && ++oline > MAX_OLINE)
 	outpghdr();
 }
 
@@ -74,22 +74,26 @@ extern void dmpmlbuf (void);
 void outinit (void), outdone (int),
 	outlab (SYMBOL *), outscon (char *, int, int),
 	outid (char *), outmidef (SYMBOL *), outmiref (SYMBOL *),
-	outptr (SYMBOL *, int, INT), outstr (char *), outnum (INT),
-	outsix (unsigned INT);
+	outptr (SYMBOL *, int, INT), outstr (char *), outnum (INT);
+#if !HOST_DAIMOS
+void outsix (unsigned INT);
+#endif
 void realcode (PCODE *);
 int codeseg (void), dataseg (void), bssseg (void), prevseg (int);
 int outflt (int, INT *, int);			/* CCGEN */
 INT binexp (unsigned INT);			/* CCEVAL */
 int adjboffset (INT, INT *, int);
-void outsix (unsigned INT), outnl (void);
+void outnl (void);
 void outpghdr (void); /* KAR, added for mixed listing page header output */
  /* profiler functions: 9/15/89 by MVS */
+#if !HOST_DAIMOS
 void outprolog (SYMBOL *), outepilog (SYMBOL *);
+#endif
 static int makprefile (void); /* KAR-2/92, create ENTRY list in side .MAC */
 
 /* Internal Functions */
-static void outrj6 (unsigned INT);
 #if !HOST_DAIMOS
+static void outrj6 (unsigned INT);
 static char *ahmacs (void), *octcpy (char *, unsigned INT);
 #endif
 static void simptrcnv (PCODE *), simsmove (PCODE *),
@@ -392,7 +396,7 @@ outnpd (PCODE *p)
     outrawnum ((unsigned INT)label);
     outstr ("==.");
 
-    if (mlist)
+    if (KCC_MLIST)
 	oline += 7;
     }
 
@@ -499,7 +503,7 @@ outdone (int mainf)
 
     outstr ("\n\tLIT\n");
 
-    if (mlist)
+    if (KCC_MLIST)
 	oline += 2;
 
     /* "main" module needs entry vector set.  This crock is necessary
@@ -509,7 +513,7 @@ outdone (int mainf)
 
     if (mainf)
 	{
-	if (mlist)
+	if (KCC_MLIST)
 	    oline += 4;
 
 	outstr ("$$STRT: JRST $START##\n");
@@ -912,10 +916,10 @@ PURGE IFE,IFN,IFG,IFGE,IFL,IFLE,IFDEF,IFNDEF,IFIDN,IFDIF\n\n");
     cp = estrcpy (cp, segfai);
 #endif
 
-    if (mlist)
+    if (KCC_MLIST)
 	cp = estrcpy (cp, "\n\tSP=17");
 
-    if ((!delete) || mlist)
+    if ((!delete) || KCC_MLIST)
 	cp = estrcpy (cp, "\n;\t*** User code begins here ***\n");
 
     size = strlen (beg) + 1;		/* Find size of entire header */
@@ -959,7 +963,7 @@ codeseg (void)
 	{
 	outstr (GAS_DIALECT ? "\n\t.text\n" : "\n\t%%CODE\n");
 #if SYS_CSI
-	if (mlist)
+	if (KCC_MLIST)
 	    oline += 2;
 #endif
 	whichseg = 1;			/* and remember in code */
@@ -977,7 +981,7 @@ dataseg (void)
 	{
 	outstr (GAS_DIALECT ? "\n\t.data\n" : "\n\t%%DATA\n");
 #if SYS_CSI
-	if (mlist)
+	if (KCC_MLIST)
 	    oline += 2;
 #endif
 	whichseg = -1;			/* and remember in data */
@@ -997,7 +1001,7 @@ bssseg (void)
 	{
 	outstr ("\n\t.bss\n");
 #if SYS_CSI
-	if (mlist)
+	if (KCC_MLIST)
 	    oline += 2;
 #endif
 	whichseg = -2;
@@ -1411,10 +1415,10 @@ outinstr (PCODE *p)
 	    outop (p->Pop);
 	    outreg (p->Preg);
 
-	    if (mlist && Register_Preserve (p->Pr2))
+	    if (KCC_MLIST && Register_Preserve (p->Pr2))
 		outid (Reg_Id[p->Pr2 -
 		      (r_maxnopreserve + 1)]->Sname); /* FW 2A (47) */
-	    else if (mlist && p->Pr2 == R_SP)
+	    else if (KCC_MLIST && p->Pr2 == R_SP)
 		outid ("SP");
 	    else
 		outnum (p->Pr2);
@@ -3101,9 +3105,9 @@ outreg (int n)
 
     if (n > 0)
 	{
-	if (mlist && Register_Preserve (n))
+	if (KCC_MLIST && Register_Preserve (n))
 	    outid (Reg_Id[n - (r_maxnopreserve + 1)]->Sname); /* FW 2A (47) */
-	else if (mlist && n == R_SP)
+	else if (KCC_MLIST && n == R_SP)
 	    outid ("SP");
 	else
 	    outrawnum ((unsigned INT)n);
@@ -3145,10 +3149,10 @@ outaddress (PCODE *p)
 	    outc (' ');
 	outc ('(');
 
-	if (mlist && Register_Preserve (p->Pindex))
+	if (KCC_MLIST && Register_Preserve (p->Pindex))
 	    outid (Reg_Id[p->Pindex -
 		   (r_maxnopreserve + 1)]->Sname); /* FW 2A (47) */
-	else if (mlist && p->Pindex == R_SP)
+	else if (KCC_MLIST && p->Pindex == R_SP)
 	    outid ("SP");
 	else
 	    outrawnum ((unsigned INT)p->Pindex);
@@ -3793,7 +3797,7 @@ outscon (char *s, int l, int bsiz)
 	    }
 	outstr ("\n\t");
 
-	if (mlist)
+	if (KCC_MLIST)
 	    oline++;
 	}
 
@@ -3819,7 +3823,7 @@ outlab (SYMBOL *s)
     else
 	outstr (":\n");		/* No, normal label. */
 
-    if (mlist)
+    if (KCC_MLIST)
 	oline++;
     }
 
@@ -3870,6 +3874,7 @@ outid (char *s)
  *	       added 09/15/89 by MVS
  */
 
+#if !HOST_DAIMOS
 void
 outprolog (SYMBOL *s)
     {
@@ -3890,9 +3895,10 @@ outepilog (SYMBOL *s)
     outmiref (s);
     putc ('\n', out);
 
-    if (mlist)
+    if (KCC_MLIST)
 	oline++;
     }
+#endif /* !HOST_DAIMOS */
 
 /*
  * outmidef
@@ -3905,7 +3911,7 @@ outmidef (SYMBOL *s)
     {
     putc ('\n', out);
 
-    if (mlist)
+    if (KCC_MLIST)
 	oline++;
 
     outmiref (s);
@@ -3940,13 +3946,16 @@ outmiref (SYMBOL *s)
 	    break;
 
 	default:
-
+#if HOST_DAIMOS
+	    outid (s->Sname);
+#else
 	    if (longidents)		/* FW 2A(51) */
 		outid (s->Sname);	/* FW 2A(51) */
 	    else if (s->Smaplab)
 		outsix (s->Smaplab);	/* Output SIXBIT */
 	    else
 		int_error ("outmiref: no map for \"%s\"", s->Sname);
+#endif
 	}
 }
 
@@ -3966,6 +3975,7 @@ outstr (char *s)
 	}
 }
 
+#if !KCC_PHASE_CORE
 void outpghdr (void)
 {
     opage++;
@@ -3978,17 +3988,18 @@ void outpghdr (void)
     fprintf (out, "; KCC: %-20s\t\t\t\t\t\t%s\t\n\n", ver_str, comptime);
     oline = 3;
 }
+#endif
 
 void outnl (void)
 {
     putc ('\n', out);
 
-    if (mlist)
+    if (KCC_MLIST)
 	{
 	oline++;
 	if (oline > MAX_OLINE)
 	    outpghdr ();
-	} /* if mlist */
+	} /* if KCC_MLIST */
 }
 
 /* OUTNUM - Output value as a signed octal number (with minus sign if negative)
@@ -4037,6 +4048,7 @@ outpnum (unsigned INT n)
 
 /* OUTSIX - Output SIXBIT word, ignoring trailing blanks
 */
+#if !HOST_DAIMOS
 void
 outsix (unsigned INT wd)
 {
@@ -4067,6 +4079,7 @@ outrj6 (unsigned INT ms)
     putc ((char) (fromrad50 ((char) ch6)), out);
 #endif    
 }
+#endif /* !HOST_DAIMOS */
 
 /*
  * outiprolog ()
@@ -4074,6 +4087,7 @@ outrj6 (unsigned INT ms)
  * Emit prolog for an interrupt function.
  */
 
+#if SYS_CSI
 void
 outiprolog (void)
 {
@@ -4129,4 +4143,5 @@ outiepilog (void)
     fputs ("\tDEBRK$\n", out);
     }
 
+#endif /* SYS_CSI */
 #endif /* !KCC_PHASE_CPP */
