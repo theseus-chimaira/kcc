@@ -1,6 +1,7 @@
 /* CCKPWRITE.C - bounded KPCODE1 stream writer */
 
 #include "cckpcode.h"
+#include <string.h>
 
 static int
 putoctet(FILE *fp, unsigned int v)
@@ -21,6 +22,19 @@ putword36(FILE *fp, INT value)
         putoctet(fp, (unsigned int)v) != 0)
         return -1;
     return 0;
+}
+
+void
+kpcode_pack_int(INT *dst, INT value)
+{
+    unsigned INT u;
+    int i;
+
+    u = (unsigned INT)value;
+    for (i = 0; i < 4; ++i) {
+        dst[i] = (INT)(u & 0777777U);
+        u >>= 18;
+    }
 }
 
 int
@@ -92,6 +106,9 @@ int
 kpcode_write_pcode(FILE *fp, const PCODE *p, unsigned int symid)
 {
     INT words[KPCODE_PCODE_WORDS];
+#ifndef __COMPILER_KCC__
+    int mode;
+#endif
 
     if (p == NULL || (p->Pptr != NULL && symid == 0U))
         return -1;
@@ -100,9 +117,36 @@ kpcode_write_pcode(FILE *fp, const PCODE *p, unsigned int symid)
     words[KPCODE_PCODE_PREG] = (INT)p->Preg;
     words[KPCODE_PCODE_REG2] = (INT)p->p_reg2;
     words[KPCODE_PCODE_SYMID] = (INT)symid;
-    words[KPCODE_PCODE_OFFSET] = p->p_off;
-    words[KPCODE_PCODE_AUX0] = p->p_u.p_di[0];
-    words[KPCODE_PCODE_AUX1] = p->p_u.p_di[1];
+    kpcode_pack_int(&words[KPCODE_PCODE_OFFSET0], p->p_off);
+#ifdef __COMPILER_KCC__
+    kpcode_pack_int(&words[KPCODE_PCODE_AUX00], p->p_u.p_di[0]);
+    kpcode_pack_int(&words[KPCODE_PCODE_AUX10], p->p_u.p_di[1]);
+#else
+    mode = p->Ptype & PTF_ADRMODE;
+    if (mode == PTA_FCONST) {
+        unsigned char b[4];
+        unsigned INT v;
+        memcpy((char *)b, (char *)&p->Pfloat, 4);
+        v = ((unsigned INT)b[0] << 24) | ((unsigned INT)b[1] << 16) |
+            ((unsigned INT)b[2] << 8) | (unsigned INT)b[3];
+        kpcode_pack_int(&words[KPCODE_PCODE_AUX00], (INT)v);
+        kpcode_pack_int(&words[KPCODE_PCODE_AUX10], 0);
+    } else if (mode == PTA_DCONST || mode == PTA_DCONST1 ||
+               mode == PTA_DCONST2) {
+        unsigned char b[8];
+        unsigned INT a, c;
+        memcpy((char *)b, (char *)&p->Pdouble, 8);
+        a = ((unsigned INT)b[0] << 24) | ((unsigned INT)b[1] << 16) |
+            ((unsigned INT)b[2] << 8) | (unsigned INT)b[3];
+        c = ((unsigned INT)b[4] << 24) | ((unsigned INT)b[5] << 16) |
+            ((unsigned INT)b[6] << 8) | (unsigned INT)b[7];
+        kpcode_pack_int(&words[KPCODE_PCODE_AUX00], (INT)a);
+        kpcode_pack_int(&words[KPCODE_PCODE_AUX10], (INT)c);
+    } else {
+        kpcode_pack_int(&words[KPCODE_PCODE_AUX00], p->p_u.p_int);
+        kpcode_pack_int(&words[KPCODE_PCODE_AUX10], 0);
+    }
+#endif
     return kpcode_write_record(fp, KPCODE_REC_PCODE, words,
         KPCODE_PCODE_WORDS);
 }

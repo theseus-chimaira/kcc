@@ -1190,8 +1190,10 @@ realcode (PCODE *p)
     ** impossible instructions.
     */
 	case P_TRN:
+#if !KCC_PHASE_OPT
 	    if (foldtrna (p))
 		return;
+#endif
 	/* FALLTHROUGH */
 	case P_TRC:
 	case P_TRZ:
@@ -1749,79 +1751,6 @@ outinstr (PCODE *p)
 	_word_cnt++;
 }
 
-/* ONEINSTR (p) - See if an instruction is safe to skip over.
-**
-** Takes an instruction as argument and returns true if that
-** instruction will expand to one machine code word.
-** This routine is in CCOUT because it must accurately reflect what
-** CCOUT will actually do for a given pseudo-instruction.
-*/
-int
-oneinstr (PCODE *p)
-{
-    switch (p->Pop & POF_OPCODE)
-	{
-
-    /* Simulated ops always expand out. */
-	case P_PTRCNV:
-	case P_SMOVE:
-	case P_UIDIV:
-	case P_UFLTR:
-	case P_SUBBP:
-	case P_DFIX:
-	case P_DSNGL:
-	    return 0;
-
-    /* These instructions may or may not expand out, depending on the
-    ** target machine.  If unsupported, they are actually macros defined
-    ** by the assembler header.
-    ** None of them have an "immediate" form, so PTV_IINDEXED can never happen.
-    */
-	case P_DMOVE:
-	case P_DMOVN:
-	case P_DMOVEM:
-	    return tgmachuse.dmovx;	/* TRUE if machine has DMOVx */
-	case P_ADJSP:
-	    return tgmachuse.adjsp;	/* FALSE if simulated as ADD */
-	case P_ADJBP:
-	    return tgmachuse.adjbp;	/* TRUE if machine has ADJBP */
-	case P_DFAD:
-	case P_DFSB:
-	case P_DFMP:
-	case P_DFDV:
-	    return (tgarch == TGARCH_PDP6 || (tgcpu != TGCPU_PDP6 && tgcpu != TGCPU_KA));
-	case P_IDIV:
-	    if (tgcpu == TGCPU_PDP6 || tgarch == TGARCH_BASE || tgarch == TGARCH_PDP10)
-		return 0;
-	    return 1;
-	case P_FLTR:
-	    return tgmachuse.fltr;	/* TRUE if machine has hardware FLTR */
-
-	case P_TRN:
-	case P_TRO:
-	case P_TRC:
-	case P_TRZ:	/* RH tests */
-	case P_TLN:
-	case P_TLO:
-	case P_TLC:
-	case P_TLZ:	/* LH tests */
-	case P_CAI:
-	case P_LSH:
-	case P_ASH:
-	    return (p->Ptype != PTA_MINDEXED);	/* PTV_IINDEXED for implicit immed op */
-
-    /* All other (standard) instructions.
-    */
-	default:			/* OPI R,addr  expands to */
-	    return (p->Ptype != PTV_IINDEXED);	/* MOVEI 16,addr ? OP r,16 */
-
-    /* Special case of above, which always wins */
-	case P_MOVE:
-	case P_MOVEI:
-	    return 1;			/* OK even for PTV_IINDEXED */
-	}
-}
-
 static int
 directop (int op)
 {
@@ -3373,31 +3302,6 @@ obplh (INT boff, INT *awoff, int bsize)
 
 /* ADJBOFFSET - Adjust byte offset.  Auxiliary for obplh () and foldadjbp ().
 */
-int
-adjboffset (INT boff, INT *awoff, int bpw)
-/* Byte offset to adjust, Place to deposit word offset, # bytes per word */
-{
-    if (boff < 0)
-	{
-	/* Negative increment, need to go back far enough
-	** that boff can become a positive offset within a word.
-	*/
-	*awoff = - ((-boff) / bpw);	/* Find -# words */
-	if ((boff = (-boff) % bpw) != 0)	/* If any bytes, */
-	    {
-	    (*awoff)--;			/* must bump back 1 more word */
-	    return bpw - (int) boff;	/* and return positive offset. */
-	    }
-	else
-	    return 0;
-	}
-    else		/* Positive increment, simple. */
-	{
-	*awoff = boff / bpw;		/* Find # words */
-	return (int) (boff % bpw);		/* and remaining # bytes */
-	}
-}
-
 /* Floating-point auxiliary functions */
 
 /* OUTFLT - Output floating-point constant value.
@@ -3703,22 +3607,6 @@ outmpdbl (INT *ip, int which)  /* 1 = 1st wd, 2 = 2nd wd, 3 = both wds (dbl) */
 **	Used for converting a power-of-2 value into a shift count.
 **	Also called by CCEVAL for constant folding.
 */
-INT
-binexp (unsigned INT n)
-{
-    INT e;
-
-    e = -1;				/* init count of bits to shift */
-    do
-	{
-	n >>= 1;			/* logical shift over one */
-	e++;				/* and count a zero */
-	}
-    while (n != 0)
-	;			/* until that was the last bit */
-    return e;				/* return number of bits */
-}
-
 /* FLTPOW2 (d) - See if arg is positive and a power of 2
  *	Returns zero if not, else non-zero integer exponent.
  * Very machine-dependent, only works for standard single-precision
@@ -3973,6 +3861,14 @@ outstr (char *s)
 	while (*++s)
 	    ;
 	}
+}
+
+/* OUTNSTR - Output exactly LEN characters, including embedded nulls. */
+void
+outnstr(char *s, int len)
+{
+    while (--len >= 0)
+	putc(*s++, out);
 }
 
 #if !KCC_PHASE_CORE

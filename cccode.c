@@ -2749,9 +2749,10 @@ code17(INT value)
 void
 codestr(char * s, int len)
 {
+    extern void outnstr(char *, int);
+
     flushcode();		/* Ensure pcode buffer flushed */
-    while (--len >= 0)
-	outc(*s++);
+    outnstr(s, len);
 }
 
 /* CODLABEL, CODGOLAB - Generate "code" consisting of the given label symbol.

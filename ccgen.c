@@ -795,11 +795,11 @@ genfunct (NODE* n)
 
 	for (i = 0; i < _reg_count; i++)
 	    {
-	    putc ('\t', out);
+	    outstr ("\t");
 	    outid (Reg_Id[i]->Sname);
-	    putc ('=', out);
+	    outstr ("=");
 	    outnum (i + r_maxnopreserve + 1); /* FW 2A(47) */
-	    putc ('\n', out);
+	    outnl ();
 	    }
 	}
 
@@ -1029,7 +1029,7 @@ gliterals(void)
     while (litstrings != NULL) {	/* Output literal strings */
 	outlab(litstrings->Nsclab);	/* Emit generated label */
 	freelabel(litstrings->Nsclab);	/* and then can free it. */
-	outtab();			/* spaced out from string. */
+	outstr("\t");			/* spaced out from string. */
 	outscon(litstrings->Nsconst,	/* Output string literal, */
 		    litstrings->Nsclen,	/* this long */
 		    elembsize(litstrings->Ntype));	/* of this bytesize. */
@@ -1152,7 +1152,7 @@ gizconst(NODE *e)
 		pv.pv_off = pv.pv_bsize = 0;
 		if ((res = gizptr(e)) != 0) {	/* Fill in the struct */
 		    /* Won, output pointer word. */
-		    outtab();			/* Won, output it. */
+		    outstr("\t");			/* Won, output it. */
 		    if (asmdialect == ASM_GAS)
 			outstr(".word ");
 		    outptr(pv.pv_id, pv.pv_bsize, pv.pv_off);
@@ -2019,7 +2019,7 @@ static void
 outval(INT v)
 {
     if (!bsiz) {
-	outtab();
+	outstr("\t");
 	if (asmdialect == ASM_GAS)
 	    outstr(".word ");
 	outnum(v);
@@ -2034,20 +2034,24 @@ outval(INT v)
 static void
 outbyte(INT v, int siz)
 {
+    char nbuf[40];
+
     v &= ((unsigned INT)1 << siz) - 1;	/* Ensure value masked off */
     if (bpos < siz)
 	wdalign();		/* If not enough room, get new wd */
     if (bpos == TGSIZ_WORD) {	/* If at start of word, */
-	fprintf(out, asmdialect == ASM_GAS ? "\t.byte %d," : "\tBYTE (%d) ", siz);
+	sprintf(nbuf, asmdialect == ASM_GAS ? "\t.byte %d," : "\tBYTE (%d) ", siz);
+	outstr(nbuf);
 	outnum(v);			/* DAS values use explicit KCC octal */
 	bsiz = siz;			/* and remember the active size */
     }
     else if (siz == bsiz) {		/* can skip size if no change */
-	outc(',');
+	outstr(",");
 	outnum(v);
     }
     else {
-	fprintf(out, " (%d) ", siz);	/* Else just output it */
+	sprintf(nbuf, " (%d) ", siz);	/* Else just output it */
+	outstr(nbuf);
 	outnum(v);
 	bsiz = siz;
     }
@@ -2088,10 +2092,12 @@ static void
 outzwds(INT nwds)
 {
     if (nwds > 0) {
+	char nbuf[64];
 	if (asmdialect == ASM_GAS)
-	    fprintf(out, "\t.space %lu\n", (unsigned long)nwds * 4UL);
+	    sprintf(nbuf, "\t.space %lu\n", (unsigned long)nwds * 4UL);
 	else
-	    fprintf(out, "\tBLOCK %" INT_OFMT "\n", (unsigned INT)nwds); /* This many zero wds */
+	    sprintf(nbuf, "\tBLOCK %" INT_OFMT "\n", (unsigned INT)nwds); /* This many zero wds */
+	outstr(nbuf);
 	locctr += nwds;
     }
 }

@@ -40,6 +40,8 @@
      + KCC_PHASE_PARSE) > 1
 # error "KCC phase selectors are mutually exclusive"
 #endif
+#define KCC_PHASE_CORELIKE \
+    (KCC_PHASE_CORE || KCC_PHASE_GEN || KCC_PHASE_PARSE)
 #ifndef HOST_UNIX
 # if defined(__linux__) || defined(__unix__)
 #  define HOST_UNIX 1

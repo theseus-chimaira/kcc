@@ -13,10 +13,10 @@
 #include "ccchar.h"
 #include <string.h>
 #include <stdlib.h>	/* calloc(), EXIT_SUCCESS, EXIT_FAILURE */
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
 #include <time.h>	/* For clock() to get runtime */
 #endif
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
 #include <sys/types.h>
 #include <sys/stat.h>
 #endif
@@ -95,7 +95,7 @@ extern void symdump(SYMBOL *, char *), typedump(void), nodedump(NODE *);
 
 /* Internal functions */
 static void cindfiles(int *, char ***);
-#if !KCC_PHASE_CPP && !KCC_PHASE_CORE
+#if !KCC_PHASE_CPP && !KCC_PHASE_CORELIKE
 static void showcpu(clock_t);
 #endif
 static void coptimize(char *), cdebug(char *), csidebug(char *),
@@ -104,7 +104,7 @@ static void coptimize(char *), cdebug(char *), csidebug(char *),
 
 static int cswitch(char *, int *, char ***), cfile(char *),
 	files(char *), mainsymp(void);
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
 static int needcomp(char *, char *);
 #endif
 static int chkmacname(char *);
@@ -116,7 +116,7 @@ static int set_level (int level); /* KAR-8/92, support leveled headers PPS 4516 
 
 extern char *mlbuf, *mlbptr;		/* mixed listing */
 char *savofnam = NULL;			/* KAR-3/92, save -R= name */
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
 static void getimestr(char *src_fname);
 #endif
 
@@ -132,7 +132,7 @@ static char *drvoutname = NULL;		/* -o compiler-driver output */
 static int exactasmout = 0;		/* -S output name is exact */
 static int marchexplicit = 0;		/* -march given explicitly */
 static int vrbarg = 0;			/* Patch 1 to show args on outmsgs */
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
 static int sourcebytewidth = 7;		/* FW 2A(47) */
 #endif
 
@@ -324,7 +324,7 @@ main (int argc, char **argv)
 #endif /* !__MSDOS__ && !HOST_UNIX && !HOST_DAIMOS */
 
     /* Get the string rep. of the version */
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
     if (mlist)
 	{
 	mlbptr = mlbuf = (char *) calloc (1, MAXMLBUF * sizeof(char));
@@ -335,7 +335,7 @@ main (int argc, char **argv)
 	    mlist = 0;
 	    }
 	}
-#endif /* !KCC_PHASE_CORE */
+#endif /* !KCC_PHASE_CORELIKE */
 
     /* Now finalize after all switches scanned.  -o is the hosted spelling
     ** and -O is the native SIXBIT-safe spelling.  For -S the name is exact;
@@ -592,7 +592,7 @@ cswitch (char *s, int *aac, char ***aav)
 
 	    case 'b':			/* FW 2A(47) */
 
-#if KCC_PHASE_CORE
+#if KCC_PHASE_CORELIKE
 		jerr("-b belongs to KCPP in split KCC mode");
 		return 1;
 #else
@@ -613,7 +613,7 @@ cswitch (char *s, int *aac, char ***aav)
 		break;
 
 	    case 'C':			/* -C	Pass on comments during -E */
-#if KCC_PHASE_CORE
+#if KCC_PHASE_CORELIKE
 		jerr("-C belongs to KCPP in split KCC mode");
 #else
 		keepcmts = 1;		/*	pass comments thru to stdout */
@@ -635,7 +635,7 @@ cswitch (char *s, int *aac, char ***aav)
 
 	    case 'D':			/* -D<ident>   Define a macro */
 
-#if KCC_PHASE_CORE
+#if KCC_PHASE_CORELIKE
 		jerr("-D belongs to KCPP in split KCC mode");
 		return 1;
 #else
@@ -651,7 +651,7 @@ cswitch (char *s, int *aac, char ***aav)
 #endif
 
 	    case 'E':			/* -E	Run through preproc. only */
-#if KCC_PHASE_CORE
+#if KCC_PHASE_CORELIKE
 		jerr("-E belongs to KCPP in split KCC mode");
 		return 1;
 #else
@@ -677,7 +677,7 @@ cswitch (char *s, int *aac, char ***aav)
 
 	    case 'H':			/* -H<path> Specify #include <> path */
 
-#if KCC_PHASE_CORE
+#if KCC_PHASE_CORELIKE
 		jerr("-H belongs to KCPP in split KCC mode");
 		return 1;
 #else
@@ -691,7 +691,7 @@ cswitch (char *s, int *aac, char ***aav)
 
 	    case 'h':			/* -h<path> Specify <sys/ > path */
 
-#if KCC_PHASE_CORE
+#if KCC_PHASE_CORELIKE
 		jerr("-h belongs to KCPP in split KCC mode");
 		return 1;
 #else
@@ -704,7 +704,7 @@ cswitch (char *s, int *aac, char ***aav)
 #endif
 
 	    case 'i':			/* -i #incs all files only once each */
-#if KCC_PHASE_CORE
+#if KCC_PHASE_CORELIKE
 		jerr("-i belongs to KCPP in split KCC mode");
 #else
 		insert_all_files = (char) ~0; // FW KCC-NT
@@ -713,7 +713,7 @@ cswitch (char *s, int *aac, char ***aav)
 
 	    case 'I':			/* -I<path> or -I <path>: both include forms */
 
-#if KCC_PHASE_CORE
+#if KCC_PHASE_CORELIKE
 		jerr("-I belongs to KCPP in split KCC mode");
 		return 1;
 #else
@@ -807,7 +807,7 @@ cswitch (char *s, int *aac, char ***aav)
 		break;
 
 	    case 'q':			/* -q	Conditional compilation */
-#if KCC_PHASE_CORE
+#if KCC_PHASE_CORELIKE
 		jerr("-q belongs to KCPP in split KCC mode");
 #else
 		condccf = 1;
@@ -858,7 +858,7 @@ cswitch (char *s, int *aac, char ***aav)
 
 	    case 'U':			/* -U<ident>   Undefine macro */
 
-#if KCC_PHASE_CORE
+#if KCC_PHASE_CORELIKE
 		jerr("-U belongs to KCPP in split KCC mode");
 		return 1;
 #else
@@ -1097,7 +1097,7 @@ static flagent_t cdebtab[] = {
 	"pho",	&debpho,  1,	/* Peephole optimizer output */
 	"sym",	&debsym,  1,	/* Symbol table output */
 #endif
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
 	{"list", &mlist,   1},    /* CSI Mixed Listing generation-KAR */
 #endif
 	{NULL,	NULL,	0}					// FW KCC-NT
@@ -1428,10 +1428,10 @@ cfile (char *arg)
     int		mainflg;		/* Set if module contains "main" */
 #endif
     int		asmdflg = -2;		/* Set to result of assembly attempt */
-#if !KCC_PHASE_CPP && !KCC_PHASE_CORE
+#if !KCC_PHASE_CPP && !KCC_PHASE_CORELIKE
     clock_t	startime = (clock_t)0;
 #endif
-#if !KCC_PHASE_CPP && !KCC_PHASE_CORE
+#if !KCC_PHASE_CPP && !KCC_PHASE_CORELIKE
     extern
     int		nsert_file (char *f, int insert_flag);
 #endif
@@ -1441,7 +1441,7 @@ cfile (char *arg)
 #endif
 
 
-#if !KCC_PHASE_CPP && !KCC_PHASE_CORE
+#if !KCC_PHASE_CPP && !KCC_PHASE_CORELIKE
     if (!vrbsta)
 	startime = clock();		/* Mark cpu time */
 #endif
@@ -1453,7 +1453,7 @@ cfile (char *arg)
     if (!files(arg))			/* If couldn't open or file is .REL, */
 	return asmdflg;			/* just return. */
 
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
     if (mlist)				/* set up output file with page hdr */
 	{
 	opage = 0;
@@ -1478,7 +1478,7 @@ module_loop:
 
     syminit ();				/* Set up symbol tables */
     ppinit ();				/* Initialize the input preprocessor */
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
     ppdefine (npreundef,preundefs,	/*  then can do initial -U undefs */
 	     npredef, predefs);		/*   and initial -D definitions */
 #endif
@@ -1508,12 +1508,12 @@ module_loop:
 
     /* KAR-6/92, moved reset of -i here to handle multiple files as well */
 
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
     nsert_file (NULL,0);		/* turn off "-i" command line switch */
 #endif
     dbginit ();				/* Initialize src debugger output */
 
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
     if (prepf)				/* If only preprocessor output (-E) */
 	{
 	passthru (stdout);		/*   send it through specially */
@@ -1642,7 +1642,7 @@ module_loop:
     if (nerrors)			/* Report errors */
 	jmsg ("%d error%s detected", nerrors, nerrors == 1 ? "" : "s" );
     else
-#if !KCC_PHASE_CPP && !KCC_PHASE_CORE
+#if !KCC_PHASE_CPP && !KCC_PHASE_CORELIKE
     if (!vrbsta)
 	showcpu (startime);		/* or say how much cpu we used */
 #endif
@@ -1678,7 +1678,7 @@ files (char *fname)
     int		cextf;
     char*	cp;
     char	cname[FNAMESIZE];	/* Name of .C source file */
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
     char	rname[FNAMESIZE];	/* Name of .REL binary file */
 #endif
     char	ext[FNAMESIZE];		/* Temp to hold parsed extension */
@@ -1740,7 +1740,7 @@ files (char *fname)
 #endif
 	}
 
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
     if (mlist)
 	{
 	int	    i;
@@ -1760,7 +1760,7 @@ files (char *fname)
      * this file to determine whether compilation is necessary.
      */
 
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
     if (condccf)
 	{
 	estrcpy (estrcpy (rname, inpfmodule), ".rel");	/* Make the .REL filename */
@@ -1779,7 +1779,7 @@ files (char *fname)
 
     estrcpy (inpfname, fname);		/* Try filename as given */
 
-#if KCC_PHASE_CORE
+#if KCC_PHASE_CORELIKE
     in = fopen(inpfname, "rb");
 #elif __MSDOS__ || HOST_UNIX || HOST_DAIMOS	/* native/host ANSI fopen */
     in = fopen (inpfname, "r");
@@ -1802,7 +1802,7 @@ files (char *fname)
     
     if (in == NULL)
 	{
-#if KCC_PHASE_CORE
+#if KCC_PHASE_CORELIKE
 	errfopen("token input", inpfname);
 	return 0;
 #else
@@ -1942,7 +1942,7 @@ files (char *fname)
  *	source needs compiling (is newer than binary).
  */
 
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE
 #if __MSDOS__ || HOST_UNIX || HOST_DAIMOS	/* use ANSI stat() */
 #define stats stat	/* just use stat() */
 #else
@@ -1998,13 +1998,13 @@ getimestr (char* src_fname)
     strtok (comptime, "\n");
     strtok (creatime, "\n");
     }
-#endif /* !KCC_PHASE_CORE */
+#endif /* !KCC_PHASE_CORELIKE */
 
 /*
  *      show how much cpu we used
  */
 
-#if !KCC_PHASE_CPP && !KCC_PHASE_CORE
+#if !KCC_PHASE_CPP && !KCC_PHASE_CORELIKE
 static
 void
 showcpu (clock_t otim)
