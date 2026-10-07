@@ -169,6 +169,7 @@ compile_one(char *source, char *output, int optimize)
     rc = run_child(kparse_path, av, 3U);
     if (rc != 0)
         goto done;
+    remove_file(kpt);
 
     av[0] = "KGEN";
     if (optimize) {
@@ -183,11 +184,14 @@ compile_one(char *source, char *output, int optimize)
     }
     if (rc != 0)
         goto done;
+    remove_file(kir);
 
     av[0] = "KOPT";
     av[1] = kp1;
     av[2] = outarg;
     rc = run_child(kopt_path, av, 3U);
+    if (rc == 0)
+        remove_file(kp1);
 
 done:
     remove_file(kpt);

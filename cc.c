@@ -2012,6 +2012,15 @@ files (char *fname)
     cp = (asmdialect == ASM_GAS) ? ".s" : ".mac";
 #endif
 
+#if KCC_PHASE_PARSE
+    /* Split KPARSE uses -R= as an exact KIR path.  The native phase driver
+    ** owns temporary-name construction; appending another .kir here both
+    ** disagrees with the next phase and needlessly allocates heap. */
+    if (savofnam != NULL)
+	estrcpy(outfname, savofnam);
+    else
+	estrcpy(estrcpy(outfname, inpfmodule), cp);
+#else
     if (savofnam != NULL && exactasmout)
 	estrcpy(outfname, savofnam);
     else if (savofnam != NULL)
@@ -2051,6 +2060,7 @@ files (char *fname)
 	}
     else
 	estrcpy (estrcpy (outfname, inpfmodule), cp); /* Compose output filename */
+#endif
 
     if ((out = fopen(outfname,
 #if KCC_PHASE_PARSE || KCC_PHASE_GEN
