@@ -47,7 +47,7 @@ int tgcpu = TGCPU_KL0;		/* Target CPU capability class */
 int tgarch = TGARCH_KL0;		/* Exact requested target profile */
 int tgits = 0;			/* ITS target variant */
 
-#if !KCC_PHASE_CORE
+#if !KCC_PHASE_CORELIKE && !KCC_PHASE_OPT
 int npredef = 0;		/* -Dmac=d # of -D macro predefinitions */
 int npreundef = 0;		/* -Umac   # of -U macro pre-undefinitions */
 int nincpaths = 0;		/* -Ipath  # of "" include-file directories */
@@ -79,7 +79,7 @@ struct psect ldpsstack = {       0, 0, 0 };	/* For now */
 /* Table storage allocation and more definitions */
 
 				/* Allocate storage for tables in cc.h */
-#if !KCC_PHASE_CPP
+#if !KCC_PHASE_CPP && !KCC_PHASE_OPT
 NODE nodes[MAXNODE];		/* Allocate parse tree node table */
 #endif
 SYMBOL *htable[MAXHSH];		/* Symbol hash table */
@@ -92,8 +92,13 @@ TYPE *types = NULL;	/* 2/92 non-NULL iff -g=debug */
 #include "ccchar.h"
 
 #if !KCC_PHASE_CPP
-#define GEXT			/* Define stuff */
+#if !KCC_PHASE_PARSE && !KCC_PHASE_OPT
+#define GEXT			/* Define generator state only in generator owners. */
+#endif
 #include "ccgen.h"		/* and make codes[MAXCODE] table */
+#ifdef GEXT
+#undef GEXT
+#endif
 
 	/* Output string table of PDP-10 pseudo-ops, indexed by P_ vals */
 char *popostr[] = {

@@ -1536,10 +1536,23 @@ module_loop:
 #if KCC_PHASE_CPP
     /*
      * Split native KCPP stops at the cooked preprocessor-token boundary.
-     * Diagnostics stay on stderr/outmsgs; stdout is reserved for KPT4.
+     * Diagnostics stay on stderr/outmsgs.  An explicit -o names the binary
+     * KPT4 stream directly; stdout remains the hosted/test fallback.
      */
-    if (ppstream_write(stdout) != 0)
+    {
+    FILE *ppout = stdout;
+    char *ppname = drvoutname != NULL ? drvoutname : savofnam;
+    if (ppname != NULL) {
+        ppout = fopen(ppname, "wb");
+        if (ppout == NULL)
+            jerr("Could not create KCC preprocessor token stream %s",
+                ppname);
+    }
+    if (ppstream_write(ppout) != 0)
 	jerr("Could not write KCC preprocessor token stream");
+    if (ppout != stdout)
+        fclose(ppout);
+    }
     fclose(in);
     return -2;
 #else
@@ -1585,6 +1598,10 @@ module_loop:
 	NODE*	    n;
 
 #if KCC_PHASE_PARSE
+	extern void bindopt(NODE *);
+#if HOST_DAIMOS
+	fprintf(stderr, "KPARSE: lexer ready\n");
+#endif
 	if (kir_write_header(out) != 0)
 	    {
 	    jerr("Could not write KIR1 header");
@@ -1607,11 +1624,19 @@ module_loop:
 	    nodeinit();
 	    curfn = NULL;
 	    n = extdef();
+#if HOST_DAIMOS
+	    fprintf(stderr, "KPARSE: extdef parsed\n");
+#endif
+	    if (optgen)
+		bindopt(n);
 	    if (kir_write_extdef(out, n) != 0)
 		{
 		jerr("Could not write KIR1 external definition");
 		break;
 		}
+#if HOST_DAIMOS
+	    fprintf(stderr, "KPARSE: extdef written\n");
+#endif
 	    }
 
 	if (!module_pragma)
@@ -1630,11 +1655,20 @@ module_loop:
 		}
 	    nodeinit();
 	    }
+#if HOST_DAIMOS
+	fprintf(stderr, "KPARSE: tentatives done\n");
+#endif
 
 	mainflg = mainsymp();
+#if HOST_DAIMOS
+	fprintf(stderr, "KPARSE: mainsym=%d globals begin\n", mainflg);
+#endif
 	if (kir_write_globals(out, symbol) != 0
 	  || kir_write_module_end(out, mainflg) != 0)
 	    jerr("Could not finish KIR1 module");
+#if HOST_DAIMOS
+	fprintf(stderr, "KPARSE: module written\n");
+#endif
 	fclose(out);
 	return asmdflg;
 #else
@@ -1790,6 +1824,7 @@ files (char *fname)
     char	rname[FNAMESIZE];	/* Name of .REL binary file */
 #endif
     char	ext[FNAMESIZE];		/* Temp to hold parsed extension */
+
 
     /*
      * All filename components and the reconstructed source name use the

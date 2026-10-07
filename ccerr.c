@@ -35,7 +35,13 @@ void int_error (char *fmt, ...);
 void efatal (char *fmt, ...);
 
 /* Imported functions */
-extern char *estrcpy(char *, char *);	/* CCASMB for string hacking */
+static char *
+errstrcpy(char *dst, char *src)
+{
+    while ((*dst = *src++) != '\0')
+        ++dst;
+    return dst;
+}
 #if !KCC_PHASE_CPP
 #if !KCC_PHASE_OPT && !KCC_PHASE_GEN
 extern int nextoken(void);		/* CCLEX */
@@ -99,7 +105,7 @@ errputs(char * cp, char * s)
 {
     if (s == NULL)
 	s = "(null)";
-    return estrcpy(cp, s);
+    return errstrcpy(cp, s);
 }
 
 static char *
@@ -525,14 +531,14 @@ context(char *etype, char *fmt, va_list ap)
     /* Someday may wish to make further context optional (runtime switch) */
     if (!fline || 0) return;	/* Omit buffer context if at EOF */
 
-    cp = estrcpy(conbuf, "       (");	/* Indented by 6 */
+    cp = errstrcpy(conbuf, "       (");	/* Indented by 6 */
     if (curfn != NULL) {		/* are we in some function? */
-	cp = estrcpy(cp, curfn->Sname);	/* yes, give its name */
+	cp = errstrcpy(cp, curfn->Sname);	/* yes, give its name */
 	if (fline > curfnloc) {
 	    cp = errputc(cp, '+');
 	    cp = errputsl(cp, (long)(fline - curfnloc));
 	}
-	cp = estrcpy(cp, ", ");		/* separate from page/line info */
+	cp = errstrcpy(cp, ", ");		/* separate from page/line info */
     }
 
     cp = errputs(cp, "p.");
@@ -637,7 +643,7 @@ ectran(char *to, char *from, int cnt)
 	    exp = expbuf;
 	    break;
 	}
-	to = estrcpy(to, exp);
+	to = errstrcpy(to, exp);
     }
     *to = '\0';		/* Ensure string ends with null. */
 }

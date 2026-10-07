@@ -381,7 +381,8 @@ extern void codebp(int, int, INT, int, SYMBOL *, INT);
 extern void codek4(int, VREG *, VREG *);
 extern void codemdx(int, int, SYMBOL *, INT, int);
 extern void codestr(char *, int), codgolab(SYMBOL *), codlabel(SYMBOL *);
-extern void codr1(int, int, INT), codr10(int, int, SYMBOL *, INT, INT);
+extern void codr1(int, int, INT), codr1_force(int, int, INT),
+    codr10(int, int, SYMBOL *, INT, INT);
 #if SYS_CSI
 extern void code4m(int, VREG *, VREG *, char *), code5m(int, VREG *, char *);
 #endif

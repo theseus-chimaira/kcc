@@ -1173,6 +1173,15 @@ nisnull(struct node ** an)
 {
     NODE *n = *an;
 
+#if KCC_PHASE_GEN
+    /* KGEN only asks the conversion layer about backend-synthesized nodes.
+    ** Source expressions were already converted and fully folded before KIR1.
+    ** Avoid retaining the complete parser evaluator for this one predicate. */
+    while (n->Nop == N_EXPRLIST)
+        n = n->Nright;
+    return n->Nop == N_ICONST && n->Niconst == 0;
+#else
+
     if (clevel >= CLEV_ANSI) {
 	/* Stupid ANSI mistake, but must support (void *)0 */
 	if (n->Ntype == voidptrtype) {		/* If type is (void *) */
@@ -1188,6 +1197,7 @@ nisnull(struct node ** an)
 
     /* Now check for integer 0 */
     return (n->Nop == N_ICONST && n->Niconst == 0);
+#endif
 }
 
 /* NDEFCAST - Makes a N_CAST node and sets its cast operation value.

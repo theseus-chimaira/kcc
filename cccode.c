@@ -74,6 +74,7 @@ void codestr(char *, int);
 void codgolab(SYMBOL *);
 void codlabel(SYMBOL *);
 void codr1(int, int, INT);
+void codr1_force(int, int, INT);
 void codr10(int, int, SYMBOL *, INT, INT);
 
 #if SYS_CSI
@@ -1657,6 +1658,25 @@ codr1(int op, int r, INT s)
     if (debpho)
 	shocum();
 #endif
+}
+
+/* CODR1_FORCE - Emit a fixed-register immediate instruction without CSE.
+**
+** This is for ABI boundary setup, where an instruction such as MOVEI AC1,1
+** is required on every incoming control-flow edge.  The ordinary codr1()
+** deliberately runs foldmove(), which may reuse an older value of the same
+** constant.  That is correct inside a basic block but is not safe for fixed
+** argument ACs at a call edge: the matching value may only exist on another
+** branch reaching the call.  Keep the instruction in PCODE so normal output
+** and later passes still see it, but do not perform local CSE here.
+*/
+void
+codr1_force(int op, int r, INT s)
+{
+    PCODE *p;
+
+    p = newcode(PTA_RCONST+PTF_IMM, op, r);
+    p->Poffset = s;
 }
 
 /* CODEBP - Generate instr with PTA_BYTEPOINT local byte pointer operand.

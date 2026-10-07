@@ -3,6 +3,8 @@ KCC ?= ./kcc
 KCC_SELF_FLAGS ?= -P=stdc+kcc -DHOST_UNIX=1 -Iself/include/ -Hself/include/
 PDP10_PREFIX ?= $(PREFIX)
 PDP10_DAS ?= $(PDP10_PREFIX)/bin/das
+PDP10_DLINK ?= $(PDP10_PREFIX)/bin/dlink
+DAIMOS_REPO ?= ../DAIMOS
 NATIVE_BUILD_DIR ?= build-native-v1
 NATIVE_KCCFLAGS ?= -Pgnu99 -O -x=pdp6 -m=gas
 NATIVE_CPPFLAGS ?= -DHOST_DAIMOS=1 -DHOST_UNIX=0 -Iself/include/ -Hself/include/
@@ -51,12 +53,18 @@ NATIVE_CORE_GEN_ASM = $(NATIVE_BUILD_DIR)/ccgen-core-v1.s
 NATIVE_CORE_GEN_OBJ = $(NATIVE_BUILD_DIR)/ccgen-core-v1.dobj
 NATIVE_CORE_DRIVER_ASM = $(NATIVE_BUILD_DIR)/cc-core-v1.s
 NATIVE_CORE_DRIVER_OBJ = $(NATIVE_BUILD_DIR)/cc-core-v1.dobj
-NATIVE_GEN_DRIVER_ASM = $(NATIVE_BUILD_DIR)/cc-gen-v1.s
-NATIVE_GEN_DRIVER_OBJ = $(NATIVE_BUILD_DIR)/cc-gen-v1.dobj
+NATIVE_GEN_DRIVER_ASM = $(NATIVE_BUILD_DIR)/cckgen-gen-v1.s
+NATIVE_GEN_DRIVER_OBJ = $(NATIVE_BUILD_DIR)/cckgen-gen-v1.dobj
 NATIVE_GEN_DATA_ASM = $(NATIVE_BUILD_DIR)/ccdata-gen-v1.s
 NATIVE_GEN_DATA_OBJ = $(NATIVE_BUILD_DIR)/ccdata-gen-v1.dobj
 NATIVE_GEN_ERR_ASM = $(NATIVE_BUILD_DIR)/ccerr-gen-v1.s
 NATIVE_GEN_ERR_OBJ = $(NATIVE_BUILD_DIR)/ccerr-gen-v1.dobj
+NATIVE_GEN_EVAL_ASM = $(NATIVE_BUILD_DIR)/ccevalgen-v1.s
+NATIVE_GEN_EVAL_OBJ = $(NATIVE_BUILD_DIR)/ccevalgen-v1.dobj
+NATIVE_GEN_TYPE_ASM = $(NATIVE_BUILD_DIR)/cctype-gen-v1.s
+NATIVE_GEN_TYPE_OBJ = $(NATIVE_BUILD_DIR)/cctype-gen-v1.dobj
+NATIVE_GEN_STMT_ASM = $(NATIVE_BUILD_DIR)/ccgen1-gen-v1.s
+NATIVE_GEN_STMT_OBJ = $(NATIVE_BUILD_DIR)/ccgen1-gen-v1.dobj
 NATIVE_GEN_CODE_ASM = $(NATIVE_BUILD_DIR)/ccgen-gen-v1.s
 NATIVE_GEN_CODE_OBJ = $(NATIVE_BUILD_DIR)/ccgen-gen-v1.dobj
 NATIVE_GEN_KPIN_ASM = $(NATIVE_BUILD_DIR)/ccppin-gen-v1.s
@@ -69,6 +77,10 @@ NATIVE_PARSE_DRIVER_ASM = $(NATIVE_BUILD_DIR)/cc-parse-v1.s
 NATIVE_PARSE_DRIVER_OBJ = $(NATIVE_BUILD_DIR)/cc-parse-v1.dobj
 NATIVE_PARSE_ERR_ASM = $(NATIVE_BUILD_DIR)/ccerr-parse-v1.s
 NATIVE_PARSE_ERR_OBJ = $(NATIVE_BUILD_DIR)/ccerr-parse-v1.dobj
+NATIVE_PARSE_DATA_ASM = $(NATIVE_BUILD_DIR)/ccdata-parse-v1.s
+NATIVE_PARSE_DATA_OBJ = $(NATIVE_BUILD_DIR)/ccdata-parse-v1.dobj
+NATIVE_PARSE_BIND_ASM = $(NATIVE_BUILD_DIR)/ccbind-parse-v1.s
+NATIVE_PARSE_BIND_OBJ = $(NATIVE_BUILD_DIR)/ccbind-parse-v1.dobj
 NATIVE_OPT_DRIVER_ASM = $(NATIVE_BUILD_DIR)/cckopt-opt-v1.s
 NATIVE_OPT_DRIVER_OBJ = $(NATIVE_BUILD_DIR)/cckopt-opt-v1.dobj
 NATIVE_OPT_DATA_ASM = $(NATIVE_BUILD_DIR)/ccdata-opt-v1.s
@@ -79,6 +91,26 @@ NATIVE_OPT_ERR_ASM = $(NATIVE_BUILD_DIR)/ccerr-opt-v1.s
 NATIVE_OPT_ERR_OBJ = $(NATIVE_BUILD_DIR)/ccerr-opt-v1.dobj
 NATIVE_OPT_KPREAD_ASM = $(NATIVE_BUILD_DIR)/cckpread-opt-v1.s
 NATIVE_OPT_KPREAD_OBJ = $(NATIVE_BUILD_DIR)/cckpread-opt-v1.dobj
+NATIVE_RUNTIME_DIR = $(NATIVE_BUILD_DIR)/runtime
+NATIVE_DAIMOS_LIBC_ROOT = $(abspath $(NATIVE_BUILD_DIR)/daimos-libc)
+NATIVE_DAIMOS_LIBC_DIR = $(NATIVE_DAIMOS_LIBC_ROOT)/libc
+NATIVE_DAIMOS_LIBC = $(NATIVE_DAIMOS_LIBC_DIR)/libc.a
+NATIVE_DAIMOS_SYSCALL_OBJ = $(NATIVE_DAIMOS_LIBC_DIR)/syscall.dobj
+NATIVE_BOOTSTRAP_ASM = $(NATIVE_RUNTIME_DIR)/daimos-bootstrap-v1.s
+NATIVE_BOOTSTRAP_OBJ = $(NATIVE_RUNTIME_DIR)/daimos-bootstrap-v1.dobj
+NATIVE_CRT0_OBJ = $(NATIVE_RUNTIME_DIR)/crt0-v1.dobj
+NATIVE_SYSCALL_HELPERS_OBJ = $(NATIVE_RUNTIME_DIR)/syscall-helpers-v1.dobj
+NATIVE_LINK_RUNTIME = $(NATIVE_CRT0_OBJ) $(NATIVE_BOOTSTRAP_OBJ) \
+	$(NATIVE_DAIMOS_SYSCALL_OBJ) $(NATIVE_SYSCALL_HELPERS_OBJ)
+NATIVE_KCPP_DXR = $(NATIVE_BUILD_DIR)/KCPP.dxr
+NATIVE_KPARSE_DXR = $(NATIVE_BUILD_DIR)/KPARSE.dxr
+NATIVE_KGEN_DXR = $(NATIVE_BUILD_DIR)/KGEN.dxr
+NATIVE_KOPT_DXR = $(NATIVE_BUILD_DIR)/KOPT.dxr
+NATIVE_DRIVER_ASM = $(NATIVE_RUNTIME_DIR)/daimos-driver-v1.s
+NATIVE_DRIVER_OBJ = $(NATIVE_RUNTIME_DIR)/daimos-driver-v1.dobj
+NATIVE_DRIVER_DXR = $(NATIVE_BUILD_DIR)/KCC.dxr
+NATIVE_PHASE_DXRS = $(NATIVE_KCPP_DXR) $(NATIVE_KPARSE_DXR) \
+	$(NATIVE_KGEN_DXR) $(NATIVE_KOPT_DXR)
 NATIVE_HEADERS = $(wildcard *.h) $(wildcard self/include/*.h)
 NATIVE_PHASE_ASMS = \
 	$(NATIVE_CPP_PHASE_ASM) $(NATIVE_CORE_PHASE_ASM) \
@@ -87,8 +119,10 @@ NATIVE_PHASE_ASMS = \
 	$(NATIVE_CORE_DATA_ASM) $(NATIVE_CORE_ERR_ASM) \
 	$(NATIVE_CORE_OUT_ASM) $(NATIVE_CORE_GEN_ASM) $(NATIVE_CORE_DRIVER_ASM) \
 	$(NATIVE_GEN_DRIVER_ASM) $(NATIVE_GEN_DATA_ASM) $(NATIVE_GEN_ERR_ASM) \
+	$(NATIVE_GEN_EVAL_ASM) $(NATIVE_GEN_TYPE_ASM) $(NATIVE_GEN_STMT_ASM) \
 	$(NATIVE_GEN_CODE_ASM) $(NATIVE_GEN_KPIN_ASM) $(NATIVE_GEN_KPOUT_ASM) \
 	$(NATIVE_GEN_KPWRITE_ASM) $(NATIVE_PARSE_DRIVER_ASM) $(NATIVE_PARSE_ERR_ASM) \
+	$(NATIVE_PARSE_DATA_ASM) $(NATIVE_PARSE_BIND_ASM) \
 	$(NATIVE_OPT_DRIVER_ASM) $(NATIVE_OPT_DATA_ASM) \
 	$(NATIVE_OPT_OUT_ASM) $(NATIVE_OPT_ERR_ASM) $(NATIVE_OPT_KPREAD_ASM)
 
@@ -115,7 +149,7 @@ NATIVE_KCC1_OBJS = \
 
 NATIVE_KPARSE_OBJS = \
 	$(NATIVE_PARSE_DRIVER_OBJ) $(NATIVE_BUILD_DIR)/ccasmb-v1.dobj \
-	$(NATIVE_BUILD_DIR)/ccdata-v1.dobj $(NATIVE_BUILD_DIR)/ccdbug-v1.dobj \
+	$(NATIVE_PARSE_DATA_OBJ) $(NATIVE_PARSE_BIND_OBJ) $(NATIVE_BUILD_DIR)/ccdbug-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccdecl-v1.dobj $(NATIVE_PARSE_ERR_OBJ) \
 	$(NATIVE_BUILD_DIR)/cceval-v1.dobj $(NATIVE_BUILD_DIR)/cclex-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccnode-v1.dobj $(NATIVE_CORE_PHASE_OBJ) \
@@ -124,17 +158,17 @@ NATIVE_KPARSE_OBJS = \
 	$(NATIVE_BUILD_DIR)/cckirwrite-v1.dobj $(NATIVE_BUILD_DIR)/ccvla-v1.dobj
 
 NATIVE_KGEN_OBJS = \
-	$(NATIVE_GEN_DRIVER_OBJ) $(NATIVE_BUILD_DIR)/ccasmb-v1.dobj \
+	$(NATIVE_GEN_DRIVER_OBJ) \
 	$(NATIVE_BUILD_DIR)/cccreg-v1.dobj $(NATIVE_BUILD_DIR)/cccse-v1.dobj \
 	$(NATIVE_BUILD_DIR)/cccode-v1.dobj $(NATIVE_GEN_DATA_OBJ) \
 	$(NATIVE_BUILD_DIR)/ccdbug-v1.dobj $(NATIVE_GEN_ERR_OBJ) \
-	$(NATIVE_BUILD_DIR)/cceval-v1.dobj \
-	$(NATIVE_GEN_CODE_OBJ) $(NATIVE_BUILD_DIR)/ccgen1-v1.dobj \
+	$(NATIVE_GEN_EVAL_OBJ) \
+	$(NATIVE_GEN_CODE_OBJ) $(NATIVE_GEN_STMT_OBJ) \
 	$(NATIVE_BUILD_DIR)/ccgen2-v1.dobj $(NATIVE_BUILD_DIR)/ccgswi-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccjskp-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccnode-v1.dobj $(NATIVE_BUILD_DIR)/ccreg-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccsym-v1.dobj \
-	$(NATIVE_BUILD_DIR)/cctype-v1.dobj $(NATIVE_BUILD_DIR)/ccopt-v1.dobj \
+	$(NATIVE_GEN_TYPE_OBJ) $(NATIVE_BUILD_DIR)/ccopt-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccoututil-v1.dobj $(NATIVE_GEN_KPOUT_OBJ) \
 	$(NATIVE_GEN_KPWRITE_OBJ) $(NATIVE_BUILD_DIR)/cckirread-v1.dobj \
 	$(NATIVE_BUILD_DIR)/ccvla-v1.dobj
@@ -182,8 +216,68 @@ native-kopt-objects: $(NATIVE_KOPT_OBJS)
 
 native-phase-objects: native-kcpp-objects native-kcc1-objects native-kparse-objects native-kgen-objects native-kopt-objects
 
+native-phase-dxrs: $(NATIVE_PHASE_DXRS)
+
+native-driver: $(NATIVE_DRIVER_DXR)
+
 $(NATIVE_BUILD_DIR):
 	mkdir -p $@
+
+$(NATIVE_RUNTIME_DIR):
+	mkdir -p $@
+
+$(NATIVE_DAIMOS_LIBC): $(KCC)
+	$(MAKE) -C $(DAIMOS_REPO)/userland/libc build \
+		PDP10_PREFIX='$(PDP10_PREFIX)' BUILD_ROOT='$(NATIVE_DAIMOS_LIBC_ROOT)' \
+		CC='$(abspath $(KCC))'
+
+$(NATIVE_DAIMOS_SYSCALL_OBJ): $(NATIVE_DAIMOS_LIBC)
+	@test -f '$@'
+
+$(NATIVE_BOOTSTRAP_ASM): runtime/daimos-bootstrap.c $(KCC) | $(NATIVE_RUNTIME_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) \
+		-I$(DAIMOS_REPO)/userland/libc \
+		-I$(DAIMOS_REPO)/system/kernel/boot -I$(DAIMOS_REPO)/system/kernel/core \
+		-I$(DAIMOS_REPO)/system/kernel/drivers -I$(DAIMOS_REPO)/system/kernel/fs \
+		-I$(DAIMOS_REPO)/system/kernel/mm -I$(DAIMOS_REPO)/system/kernel/modules \
+		-I$(DAIMOS_REPO)/system/kernel/proc -I$(DAIMOS_REPO)/system/kernel/storage \
+		-I$(PDP10_PREFIX)/include -S $< -o $@
+
+$(NATIVE_BOOTSTRAP_OBJ): $(NATIVE_BOOTSTRAP_ASM)
+	$(PDP10_DAS) -F -C -O $@ $<
+
+$(NATIVE_DRIVER_ASM): runtime/daimos-driver.c $(KCC) | $(NATIVE_RUNTIME_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) \
+		-I$(DAIMOS_REPO)/userland/libc \
+		-I$(DAIMOS_REPO)/system/kernel/boot -I$(DAIMOS_REPO)/system/kernel/core \
+		-I$(DAIMOS_REPO)/system/kernel/drivers -I$(DAIMOS_REPO)/system/kernel/fs \
+		-I$(DAIMOS_REPO)/system/kernel/mm -I$(DAIMOS_REPO)/system/kernel/modules \
+		-I$(DAIMOS_REPO)/system/kernel/proc -I$(DAIMOS_REPO)/system/kernel/storage \
+		-I$(PDP10_PREFIX)/include -S $< -o $@
+
+$(NATIVE_DRIVER_OBJ): $(NATIVE_DRIVER_ASM)
+	$(PDP10_DAS) -F -C -O $@ $<
+
+$(NATIVE_DRIVER_DXR): $(NATIVE_DRIVER_OBJ) $(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
+	$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(@:.dxr=.map) \
+		$(NATIVE_LINK_RUNTIME) $(NATIVE_DRIVER_OBJ) $(NATIVE_DAIMOS_LIBC)
+
+$(NATIVE_CRT0_OBJ): runtime/daimos-crt0.s | $(NATIVE_RUNTIME_DIR)
+	$(PDP10_DAS) -F -C -O $@ $<
+
+$(NATIVE_SYSCALL_HELPERS_OBJ): $(DAIMOS_REPO)/userland/libc/syscall_helpers.s | $(NATIVE_RUNTIME_DIR)
+	$(PDP10_DAS) -F -C -O $@ $<
+
+define NATIVE_LINK_PHASE
+$(1): $(2) $(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
+	$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $$@ -M $$(@:.dxr=.map) \
+		$(NATIVE_LINK_RUNTIME) $(2) $(NATIVE_DAIMOS_LIBC)
+endef
+
+$(eval $(call NATIVE_LINK_PHASE,$(NATIVE_KCPP_DXR),$(NATIVE_KCPP_OBJS)))
+$(eval $(call NATIVE_LINK_PHASE,$(NATIVE_KPARSE_DXR),$(NATIVE_KPARSE_OBJS)))
+$(eval $(call NATIVE_LINK_PHASE,$(NATIVE_KGEN_DXR),$(NATIVE_KGEN_OBJS)))
+$(eval $(call NATIVE_LINK_PHASE,$(NATIVE_KOPT_DXR),$(NATIVE_KOPT_OBJS)))
 
 $(NATIVE_ASMS) $(NATIVE_PHASE_ASMS): $(NATIVE_HEADERS)
 
@@ -229,13 +323,22 @@ $(NATIVE_BUILD_DIR)/ccgen-core-v1.s: ccgen.c $(KCC) | $(NATIVE_BUILD_DIR)
 $(NATIVE_BUILD_DIR)/cc-core-v1.s: cc.c $(KCC) | $(NATIVE_BUILD_DIR)
 	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_CORE=1 -S $< -o $@
 
-$(NATIVE_BUILD_DIR)/cc-gen-v1.s: cc.c $(KCC) | $(NATIVE_BUILD_DIR)
+$(NATIVE_BUILD_DIR)/cckgen-gen-v1.s: cckgen.c $(KCC) | $(NATIVE_BUILD_DIR)
 	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_GEN=1 -S $< -o $@
 
 $(NATIVE_BUILD_DIR)/ccdata-gen-v1.s: ccdata.c $(KCC) | $(NATIVE_BUILD_DIR)
 	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_GEN=1 -S $< -o $@
 
 $(NATIVE_BUILD_DIR)/ccerr-gen-v1.s: ccerr.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_GEN=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccevalgen-v1.s: ccevalgen.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_GEN=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/cctype-gen-v1.s: cctype.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_GEN=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccgen1-gen-v1.s: ccgen1.c $(KCC) | $(NATIVE_BUILD_DIR)
 	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_GEN=1 -S $< -o $@
 
 $(NATIVE_BUILD_DIR)/ccgen-gen-v1.s: ccgen.c $(KCC) | $(NATIVE_BUILD_DIR)
@@ -254,6 +357,12 @@ $(NATIVE_BUILD_DIR)/cc-parse-v1.s: cc.c $(KCC) | $(NATIVE_BUILD_DIR)
 	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_PARSE=1 -S $< -o $@
 
 $(NATIVE_BUILD_DIR)/ccerr-parse-v1.s: ccerr.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_PARSE=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccdata-parse-v1.s: ccdata.c $(KCC) | $(NATIVE_BUILD_DIR)
+	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_PARSE=1 -S $< -o $@
+
+$(NATIVE_BUILD_DIR)/ccbind-parse-v1.s: ccbind.c $(KCC) | $(NATIVE_BUILD_DIR)
 	$(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS) -DKCC_PHASE_PARSE=1 -S $< -o $@
 
 $(NATIVE_BUILD_DIR)/cckopt-opt-v1.s: cckopt.c $(KCC) | $(NATIVE_BUILD_DIR)
@@ -298,5 +407,5 @@ clean:
 	$(RM) -r $(NATIVE_BUILD_DIR)
 
 .PHONY: all asm self-asm native-asm native-objects native-kcpp-objects \
-	native-kcc1-objects native-kparse-objects native-kgen-objects native-kopt-objects native-phase-objects runtime install install-runtime \
+	native-kcc1-objects native-kparse-objects native-kgen-objects native-kopt-objects native-phase-objects native-phase-dxrs native-driver runtime install install-runtime \
 	uninstall clean

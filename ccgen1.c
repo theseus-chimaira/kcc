@@ -67,6 +67,7 @@ static void genaggcopy(SYMBOL *, NODE *);
 static void genautoiz(NODE *, NODE *, TYPE *);
 static NODE *genizindex(NODE *, TYPE *, INT);
 
+#if !KCC_PHASE_GEN
 #define CONSTBIND_MAX 16
 struct constbind {
     SYMBOL *sym;
@@ -82,6 +83,7 @@ static void cbprepass(NODE *, struct constbind *);
 static int cbbranchsafe(NODE *, struct constbind *, int);
 static int cbifkeep(NODE *, struct constbind *, int);
 static int dsedeadonce(NODE *);
+#endif /* !KCC_PHASE_GEN */
 static SYMBOL *retlabel;
 static NODE *retfall;
 static INT autooff1_v11(SYMBOL *);
@@ -96,6 +98,7 @@ static NODE *laststmt();
 #endif
 
 
+#if !KCC_PHASE_GEN
 /* CONSTBIND helpers - very small straight-line constant propagation.
 **
 ** This deliberately tracks only integral one-word auto/register locals.
@@ -392,6 +395,7 @@ dsedeadonce(NODE *n)
         return 0;
     }
 }
+#endif /* !KCC_PHASE_GEN */
 
 
 /* ------------------------------------- */
@@ -411,23 +415,30 @@ genstmt(NODE *n)
     switch (n->Nop) {
 
     case N_STATEMENT:
-	{ NODE *beg, *next, *st;
+	{ NODE *beg, *next;
+#if !KCC_PHASE_GEN
+	  NODE *st;
 	  struct constbind binds[CONSTBIND_MAX];
 	  int nbind = 0;
 	  SYMBOL *bsym;
+#endif
 	if (n->Nleft && n->Nleft->Nop == N_DATA) { /* Check for auto inits */
 	    genadata(n->Nleft);		/* Yep, do them */
 	    n = n->Nright;		/* then move on to real statements */
 	}
+	#if !KCC_PHASE_GEN
 	if (optgen)
 	    cbprepass(n, binds);
+	#endif
 	for(beg = n; n != NULL; n = n->Nright) {
 	    if(n->Nop != N_STATEMENT)
 		int_error("genstmt: bad stmt %N", n);
 	    if(n->Nleft == NULL) continue;
 	    if(n->Nleft->Nop == N_DATA) {
 		genadata(n->Nleft);
+	#if !KCC_PHASE_GEN
 		nbind = 0;
+	#endif
 		continue;
 	    }
 
@@ -435,6 +446,7 @@ genstmt(NODE *n)
 	    ** expressions before the normal expression folder/code generator.
 	    ** Anything with control flow or unknown side effects ends the run.
 	    */
+	#if !KCC_PHASE_GEN
 	    st = n->Nleft;
 	    if (optgen && dsedeadonce(st)) {
 		nbind = 0;
@@ -453,6 +465,7 @@ genstmt(NODE *n)
 		    st->Nright = cbfold(st->Nright, binds, nbind);
 		}
 	    }
+	#endif
 
 	    /* Check out following stmt for possible optimizations */
 	    if(n->Nright && (next = n->Nright->Nleft) != NULL && optgen) {
@@ -500,6 +513,7 @@ genstmt(NODE *n)
 
 	    genstmt(n->Nleft);
 
+	#if !KCC_PHASE_GEN
 	    if (optgen && bsym != NULL && st->Nright != NULL
 	      && st->Nright->Nop == N_ICONST)
 		cbset(binds, &nbind, bsym, st->Nright->Niconst);
@@ -508,6 +522,7 @@ genstmt(NODE *n)
 		;			/* Constant branch kept bindings valid */
 	    else
 		nbind = 0;
+	#endif
 	}
 	break;
 	} /* end of N_STATEMENT case block */

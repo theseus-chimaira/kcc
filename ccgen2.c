@@ -3312,11 +3312,16 @@ gassign(NODE *n)
 		&& nod->Nop == N_PTR		/* and op is "*++(exp)" */
 		&& nod->Nleft->Nop == N_PREINC)
 	    {
-#if 0		/* Later, fix Reg linkage for pointers */
 	    if (Register_Id(nod->Nleft->Nleft))
-		code40(P_IDPB, r1->Vrloc, nod->Nleft->Nleft->Nid->Sreg, 0);
+		/* IDPB updates the byte-pointer cell as well as storing through it.
+		** A register variable's pointer cell is the AC itself (absolute low
+		** memory address Sreg), not memory indexed by that AC.  code40()
+		** would encode 0(Sreg), which treats the pointed-to word as another
+		** byte pointer and corrupts assignments such as *++dst = *++src.
+		*/
+		codemdx(P_IDPB, vrtoreal(r1), (SYMBOL *)NULL,
+		    nod->Nleft->Nleft->Nid->Sreg, 0);
 	    else
-#endif
 		code4(P_IDPB, r1, gaddress(nod->Nleft->Nleft));
 	    return r1;
 	    }
@@ -8332,7 +8337,7 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem,
 
     for (i = 0; i < nreg; ++i) {
 	if (isconst[i])
-	    codr1(P_MOVE, dst[i], cval[i]);
+	    codr1_force(P_MOVE, dst[i], cval[i]);
 	else if (ismem[i])
 	    codemdx(P_MOVE, dst[i], memsym[i], 0, 0);
         if (!defermem && (isconst[i] || ismem[i]))

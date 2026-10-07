@@ -278,15 +278,17 @@ main(int argc, char **argv)
     for (i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "-o") && i + 1 < argc)
             outname = argv[++i];
+        else if (!strncmp(argv[i], "-R=", 3))
+            outname = argv[i] + 3;
         else if (inname == NULL)
             inname = argv[i];
         else {
-            fprintf(stderr, "usage: kopt input.kp1 -o output.s\n");
+            fprintf(stderr, "usage: kopt input.kp1 -R=output.s\n");
             return 2;
         }
     }
     if (inname == NULL || outname == NULL) {
-        fprintf(stderr, "usage: kopt input.kp1 -o output.s\n");
+        fprintf(stderr, "usage: kopt input.kp1 -R=output.s\n");
         return 2;
     }
     infile = fopen(inname, "rb");
