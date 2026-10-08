@@ -232,6 +232,17 @@ native-phase-dxrs: $(NATIVE_PHASE_DXRS)
 
 native-driver: $(NATIVE_DRIVER_DXR)
 
+# Complete host-side bootstrap for DAIMOS: four native compiler phases,
+# driver, startup/runtime objects and native libc archive.  These files
+# are consumed by DAIMOS's boot-image staging at NATIVE_BUILD_DIR.  This
+# requires DAIMOS_REPO's libc to provide malloc/free and the native heap ABI;
+# an older DAIMOS checkout will fail at link time instead of shipping broken
+# executables.
+# Keep the individual targets for iterative development; "make native"
+# must never leave an apparently prepared but incomplete bootstrap tree.
+native: kcc $(NATIVE_PHASE_DXRS) $(NATIVE_DRIVER_DXR) \
+	$(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
+
 $(NATIVE_BUILD_DIR):
 	mkdir -p $@
 
@@ -452,5 +463,5 @@ clean:
 	$(RM) -r $(NATIVE_BUILD_DIR)
 
 .PHONY: all asm self-asm native-asm native-objects native-kcpp-objects \
-	native-kcc1-objects native-kparse-objects native-kgen-objects native-kopt-objects native-phase-objects native-phase-dxrs native-driver runtime install install-runtime \
+	native-kcc1-objects native-kparse-objects native-kgen-objects native-kopt-objects native-phase-objects native-phase-dxrs native-driver native runtime install install-runtime \
 	uninstall clean
