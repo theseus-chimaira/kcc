@@ -1092,19 +1092,25 @@ foldtrna(PCODE *p)
       || (q->Pop != P_JRST
 	&& q->Pop != P_POPJ
         && (q->Pop & POF_OPSKIP) != POS_SKPA)
-      || (a = after(q)) == NULL
-      || !newskip(a))
+      || (a = after(q)) == NULL)
 		return 0;		/* no good */
 
-    /* DImode compare cascades can skip into the folded SKIPA and break. */
+    /* Check hazards before newskip(a), which MUTATES the following MOVE.
+     * A rejected fold must leave every instruction unchanged. */
     for (q = before(p); q != NULL; q = before(q))
 	{
 	if (q->Pop == P_NOP)
 	    continue;
-	if ((q->Pop & POF_OPCODE) == P_CAM)
+	/* A preceding SKIP controls whether this TRNA executes.  Folding
+	 * TRNA/JRST/MOVE across that chain may leave its replacement MOVE
+	 * unguarded and reverse a compound conditional return.  Keep the
+	 * original four-instruction sequence in this case. */
+	if (isskip(q->Pop) || (q->Pop & POF_OPCODE) == P_CAM)
 	    return 0;
 	break;
 	}
+    if (!newskip(a))
+	return 0;
 
     /*
     ** fold:  TRNA
