@@ -12,7 +12,7 @@
 #include "u.h"
 
 #define KDRV_REC_WORDS      18U
-#define KDRV_ARG_MAX         8U
+#define KDRV_ARG_MAX        SYS_RUN_ARG_MAX
 #define KDRV_BLOCK_WORDS \
     (SYS_RUN_V2_FIXED_WORDS + KDRV_REC_WORDS + \
      KDRV_ARG_MAX * KDRV_REC_WORDS + 2U)
@@ -158,7 +158,8 @@ remove_file(char *name)
 }
 
 static int
-compile_one(char *source, char *output, int optimize)
+compile_one(char *source, char *output, int optimize,
+    char **cpp_options, unsigned int cpp_option_count)
 {
     char kpt[40];
     char kir[40];
@@ -167,7 +168,8 @@ compile_one(char *source, char *output, int optimize)
     char kirarg[44];
     char kp1chain[SYS_RUN_ARG_MAX_CHARS + 1U];
     char outchain[SYS_RUN_ARG_MAX_CHARS + 1U];
-    char *av[7];
+    char *av[KDRV_ARG_MAX];
+    unsigned int i;
     int rc;
 
     temp_name(kpt, ".KPT");
@@ -184,8 +186,12 @@ compile_one(char *source, char *output, int optimize)
 
     av[0] = "KCPP";
     av[1] = kptarg;
-    av[2] = source;
-    rc = run_child(kcpp_path, av, 3U);
+    if (cpp_option_count > KDRV_ARG_MAX - 3U)
+        return 126;
+    for (i = 0U; i < cpp_option_count; ++i)
+        av[i + 2U] = cpp_options[i];
+    av[2U + cpp_option_count] = source;
+    rc = run_child(kcpp_path, av, 3U + cpp_option_count);
     if (rc != 0)
         goto done;
 
@@ -215,12 +221,15 @@ main(int argc, char **argv)
 {
     char *source;
     char *output;
+    char *cpp_options[KDRV_ARG_MAX - 3U];
+    unsigned int cpp_option_count;
     int optimize;
     int i;
 
     source = 0;
     output = 0;
     optimize = 1;
+    cpp_option_count = 0U;
     for (i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "-N") || !strcmp(argv[i], "-n")) {
             optimize = 0;
@@ -231,6 +240,17 @@ main(int argc, char **argv)
             !strcmp(argv[i], "-R")) &&
             i + 1 < argc) {
             output = argv[++i];
+        } else if (!strncmp(argv[i], "-D", 2) ||
+            !strncmp(argv[i], "-I", 2) ||
+            !strncmp(argv[i], "-H", 2) ||
+            !strncmp(argv[i], "-P", 2) ||
+            !strncmp(argv[i], "-x", 2) ||
+            !strncmp(argv[i], "-m", 2)) {
+            if (cpp_option_count >= KDRV_ARG_MAX - 3U) {
+                fprintf(stderr, "kcc: too many preprocessor options\n");
+                return 2;
+            }
+            cpp_options[cpp_option_count++] = argv[i];
         } else if (source == 0) {
             source = argv[i];
         } else {
@@ -244,5 +264,6 @@ main(int argc, char **argv)
     }
     if (output == 0)
         output = "/TEMP/KCCOUT.S";
-    return compile_one(source, output, optimize);
+    return compile_one(source, output, optimize,
+        cpp_options, cpp_option_count);
 }
