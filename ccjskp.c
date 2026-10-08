@@ -73,8 +73,21 @@ deadjump(void)
 int
 dropsout(PCODE *p)
 {
+    int op;
+
     if (p == NULL) return 0;
     if (p->Pop == P_JRST || p->Pop == P_POPJ) return 1;
+
+    /* AOJA/SOJA are unconditional control transfers just like JRST after
+    ** applying their register update.  Treating them as fall-through lets
+    ** optlab() fold a conditional return into SKIPA/AOJA and reverse the
+    ** path: the AOJA register can then contain a comparison temporary rather
+    ** than the intended return value. */
+    op = p->Pop & POF_OPCODE;
+    if ((op == P_AOJ || op == P_SOJ) &&
+        (p->Pop & POF_OPSKIP) == POS_SKPA)
+        return 1;
+
     if ((p->Pop & POF_OPSKIP) != POS_SKPA) return 0;
     if ((p = after(p)) == NULL || (p = after(p)) == NULL) return 0;
     return dropsout(p);
