@@ -268,14 +268,26 @@ replay(FILE *fp)
     return -1;
 }
 
+#if HOST_DAIMOS
+extern void daimos_unlink_path(char *);
+#endif
+
 int
 main(int argc, char **argv)
 {
     FILE *infile;
     char *inname = NULL, *outname = NULL;
     int i, rc;
+#if HOST_DAIMOS
+    int delete_input = 0;
+#endif
 
     for (i = 1; i < argc; ++i) {
+#if HOST_DAIMOS
+        if (!strcmp(argv[i], "-D"))
+            delete_input = 1;
+        else
+#endif
         if (!strcmp(argv[i], "-o") && i + 1 < argc)
             outname = argv[++i];
         else if (!strncmp(argv[i], "-R=", 3))
@@ -299,6 +311,10 @@ main(int argc, char **argv)
     out = fopen(outname, "w");
     if (out == NULL) {
         fclose(infile);
+#if HOST_DAIMOS
+        if (delete_input)
+            daimos_unlink_path(inname);
+#endif
         fprintf(stderr, "kopt: cannot create %s\n", outname);
         return 1;
     }
@@ -306,5 +322,9 @@ main(int argc, char **argv)
     rc = replay(infile);
     fclose(infile);
     fclose(out);
+#if HOST_DAIMOS
+    if (delete_input)
+        daimos_unlink_path(inname);
+#endif
     return rc == 0 ? 0 : 1;
 }

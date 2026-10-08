@@ -104,7 +104,11 @@ enum systype {
 #endif
 #ifndef THASHSIZE	/* CCSYM: Size of type hash table */
 #if HOST_DAIMOS
- #define THASHSIZE 509	/* Native bootstrap: buckets only, types are dynamic */
+# if KCC_PHASE_GEN
+ #  define THASHSIZE 251 /* Split KGEN: types are dynamic; keep only cache buckets */
+# else
+ #  define THASHSIZE 509 /* Native bootstrap: buckets only, types are dynamic */
+# endif
 #else
  #define THASHSIZE 2557	/* primes for better hash */
 #endif
@@ -117,19 +121,31 @@ enum systype {
 #endif
 #ifndef MAXHSH		/* CCSYM: Symbol hashtable size */
 #if HOST_DAIMOS
- #define MAXHSH (1<<9)	/* Native bootstrap: symbols themselves are dynamic */
+# if KCC_PHASE_GEN
+ #  define MAXHSH (1<<8) /* Split KGEN: symbols are dynamic; smaller hash cache */
+# else
+ #  define MAXHSH (1<<9) /* Native bootstrap: symbols themselves are dynamic */
+# endif
 #else
  #define MAXHSH (1<<12)	/*	(4096) Must be a power of 2! */
 #endif
 #endif
 #ifndef MAXNODE		/* CCSTMT: # of nodes in initial static table */
+#if HOST_DAIMOS && KCC_PHASE_GEN
+ #define MAXNODE 32	/* Split KGEN spills excess nodes to dynamic blocks. */
+#else
  #define MAXNODE 100	/* 5/91 changed 4000 to 100, see PPS 4232 */
+#endif
 #endif
 #ifndef MAXCASE		/* CCGSWI: Max # of cases per switch (CCGSWI) */
  #define MAXCASE 513	/*	All possible values of char, plus 1 */
 #endif
 #ifndef MAXCODE		/* CCCODE: Size of peephole buffer */
+#if HOST_DAIMOS && KCC_PHASE_GEN
+ #define MAXCODE (1<<6)	/* Split KGEN: 64-entry streaming peephole ring. */
+#else
  #define MAXCODE (1<<8)	/*	(256) Must be a power of 2! */
+#endif
 #endif
 #ifndef ERRLSIZE        /* CCERR: Size of error context line */
  #define ERRLSIZE 256

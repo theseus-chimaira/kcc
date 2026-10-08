@@ -537,24 +537,36 @@ syminit(void)
     smapinit();				/* Init symbol map stuff */
 #endif
 
+#if KCC_PHASE_GEN
+    /* KIR1 owns the module symbol root and KGEN never enters parser scopes.
+    ** Avoid allocating two parser-only dummy SYMBOL nodes; kir_read_header()
+    ** installs its static root before any graph or global symbols are read. */
+    symbol = symtail = locsymbol = loctail = NULL;
+    lsymhead = NULL;
+#else
     inisymlist(&symbol, &symtail);	/* Initialize global symbol list */
     inisymlist(&locsymbol, &loctail);	/* Initialize local symbol list */
     lsymhead = NULL;			/* Currently at top level */
+#endif
 
-    /* Clear out symbol hash table and set initial reserved-word symbols */
-    for (i = 0 ; i < MAXHSH ; i++)	/* Clear hash table */
+    /* Clear out symbol hash table.  Split KGEN never lexes C source, so
+    ** pre-creating every language keyword is pure heap pressure there; KIR1
+    ** supplies the real module symbols explicitly.  The parser still needs
+    ** the complete reserved-word set. */
+    for (i = 0 ; i < MAXHSH ; i++)
 	htable[i] = NULL;
-    for (i = 0; ++i < NTOKDEFS;)	/* Enter all reserved words */
+#if !KCC_PHASE_GEN
+    for (i = 0; ++i < NTOKDEFS;)
 	{
-	switch (tok[i].tktype)	/* Check token table for RW's */
+	switch (tok[i].tktype)
 	    {
 	    default:
-		continue;			/* Nope, keep scanning */
+		continue;
 	    case TKTY_RWTYPE:
 	    case TKTY_RWSC:
 	    case TKTY_RWCOMP:
 	    case TKTY_RWOP:
-		break;			/* Is reserved word, hack it! */
+		break;
 	    }
 	if ((f = tok[i].tkprec)&(RWF_ANSI+RWF_KCC+RWF_C99+RWF_C11))
 	    {
@@ -567,15 +579,15 @@ syminit(void)
 	    if ((f & RWF_C11) && cstdmode != CSTD_LEGACY && !clevkcc)
 		continue;
 	    }
-	/* Make reserved-word symbol! */
-	s = symgcreat(tokstr[i]);	/* Make symbol for the word */
-	s->Sclass = SC_RW;		/* Say it's a reserved word */
-	s->Stoken = i;			/* Set token number */
-	s->Skey = tok[i].tktype;	/* and token's type */
+	s = symgcreat(tokstr[i]);
+	s->Sclass = SC_RW;
+	s->Stoken = i;
+	s->Skey = tok[i].tktype;
 	}
-    minsym = symtail;		/* Crock for CCDUMP's symdump, someday flush */
+#endif
+    minsym = symtail;
 
-    typeinit();		/* Now initialize tables etc. for C data types */
+    typeinit();		/* KGEN still needs canonical basic type objects. */
 #endif /* !KCC_PHASE_CPP */
 }
 

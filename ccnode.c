@@ -47,7 +47,9 @@ static NODE *nget();
 #endif
 
 /* Internal data & defs */
-#if 0	/* __MSDOS__ */
+#if HOST_DAIMOS && KCC_PHASE_GEN
+ #define NODEBLKSIZ 32		/* Keep KGEN overflow allocations bounded. */
+#elif 0	/* __MSDOS__ */
  #define NODEBLKSIZ 20		/* Dynamically alloc in increments of this */
 #else
  #define NODEBLKSIZ 100

@@ -11,15 +11,6 @@ static char *tokbuf;
 static unsigned int tokcap;
 static int pushed;
 static int stream_eof;
-#if HOST_DAIMOS
-static int native_trace_count;
-extern unsigned long dsys_brk(unsigned long);
-extern int dsys_getpid(void);
-struct native_procinfo {
-    unsigned long pid, ppid, state, words, comm;
-};
-extern int dsys_procinfo(unsigned int, struct native_procinfo *);
-#endif
 
 static int
 getbyte(FILE *fp)
@@ -93,10 +84,6 @@ ensure_tokbuf(unsigned int n)
         cap *= 2U;
     }
     p = (char *)realloc(tokbuf, (size_t)cap);
-#if HOST_DAIMOS
-    fprintf(stderr, "KPIN: realloc n=%u cap=%u p=%lo brk=%lo\n",
-        n, cap, (unsigned long)p, dsys_brk(0UL));
-#endif
     if (p == NULL)
         return -1;
     tokbuf = p;
@@ -115,17 +102,6 @@ ppinit(void)
     pushed = 0;
     stream_eof = 0;
     eof = 0;
-#if HOST_DAIMOS
-    native_trace_count = 0;
-    {
-        struct native_procinfo pi;
-        int pid = dsys_getpid();
-        pi.words = 0UL;
-        (void)dsys_procinfo((unsigned int)pid, &pi);
-        fprintf(stderr, "KPIN: init pid=%d words=%lo brk=%lo\n",
-            pid, pi.words, dsys_brk(0UL));
-    }
-#endif
     a = getbyte(in);
     b = getbyte(in);
     c = getbyte(in);
@@ -160,13 +136,6 @@ nextpp(void)
 
     for (;;) {
         tag = getbyte(in);
-#if HOST_DAIMOS
-        if (native_trace_count < 24) {
-            fprintf(stderr, "KPIN: tag[%d]=%d brk=%lo\n",
-                native_trace_count, tag, dsys_brk(0UL));
-            ++native_trace_count;
-        }
-#endif
         if (tag < 0)
             jerr("Unexpected EOF in KCC preprocessor stream");
 
@@ -193,12 +162,6 @@ nextpp(void)
             jerr("Corrupt token type %d in KCC preprocessor stream", tag);
         if (get16(in, &n) != 0)
             jerr("Corrupt token record in KCC preprocessor stream");
-#if HOST_DAIMOS
-        if (native_trace_count < 48) {
-            fprintf(stderr, "KPIN: token=%d n=%u brk=%lo\n",
-                tag, n, dsys_brk(0UL));
-        }
-#endif
         if (ensure_tokbuf(n) != 0 || getchars(in, tokbuf, n) != 0)
             jerr("Corrupt token record in KCC preprocessor stream");
 

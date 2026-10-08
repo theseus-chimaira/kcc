@@ -5,6 +5,10 @@
 
 extern void syminit(void), nodeinit(void), gencode(NODE *), outinit(void),
     outdone(int);
+#if HOST_DAIMOS
+extern int daimos_exec_kopt(char *, char *);
+extern void daimos_unlink_path(char *);
+#endif
 
 static void
 init_pdp6_target(int optimize)
@@ -33,12 +37,18 @@ int
 main(int argc, char **argv)
 {
     char *inname, *outname;
+#if HOST_DAIMOS
+    char *chainout;
+#endif
     NODE *root;
     int kind;
     int optimize;
     int i;
 
     inname = outname = NULL;
+#if HOST_DAIMOS
+    chainout = NULL;
+#endif
     optimize = 1;
     for (i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "-n")) {
@@ -49,6 +59,10 @@ main(int argc, char **argv)
             outname = argv[++i];
         } else if (!strncmp(argv[i], "-R=", 3)) {
             outname = argv[i] + 3;
+#if HOST_DAIMOS
+        } else if (!strncmp(argv[i], "-X=", 3)) {
+            chainout = argv[i] + 3;
+#endif
         } else if (inname == NULL) {
             inname = argv[i];
         } else {
@@ -82,6 +96,12 @@ main(int argc, char **argv)
         fprintf(stderr, "kgen: invalid KIR1 input\n");
         fclose(in);
         fclose(out);
+#if HOST_DAIMOS
+        if (chainout != NULL) {
+            daimos_unlink_path(inname);
+            daimos_unlink_path(outname);
+        }
+#endif
         return 1;
     }
     outinit();
@@ -101,6 +121,19 @@ main(int argc, char **argv)
             fclose(in);
             fclose(out);
             kir_free_module();
+#if HOST_DAIMOS
+            if (chainout != NULL) {
+                int chainrc;
+
+                daimos_unlink_path(inname);
+                if (nerrors == 0) {
+                    chainrc = daimos_exec_kopt(outname, chainout);
+                    daimos_unlink_path(outname);
+                    return chainrc;
+                }
+                daimos_unlink_path(outname);
+            }
+#endif
             return nerrors == 0 ? 0 : 1;
         }
         fprintf(stderr, "kgen: unexpected KIR1 record\n");
@@ -109,5 +142,11 @@ main(int argc, char **argv)
     fclose(in);
     fclose(out);
     kir_free_module();
+#if HOST_DAIMOS
+    if (chainout != NULL) {
+        daimos_unlink_path(inname);
+        daimos_unlink_path(outname);
+    }
+#endif
     return 1;
 }

@@ -6,9 +6,6 @@
 #include <string.h>
 
 extern int nextpp(void);
-#if HOST_DAIMOS
-static int ppout_trace_count;
-#endif
 static int
 putbyte(FILE *fp, unsigned int v)
 {
@@ -86,13 +83,6 @@ put_token(FILE *fp, int tok)
     if (tok <= 0 || tok >= NTOKDEFS || tok == KCC_PHASE_LOCATION ||
         n > KCC_PHASE_MAX_PAYLOAD)
         return -1;
-#if HOST_DAIMOS
-    if (ppout_trace_count < 24) {
-        fprintf(stderr, "KPOUT: tok[%d]=%d n=%u\n",
-            ppout_trace_count, tok, n);
-        ++ppout_trace_count;
-    }
-#endif
     if (putbyte(fp, (unsigned int)tok) != 0 || put16(fp, n) != 0)
         return -1;
     return n != 0U ? putchars(fp, s, n) : 0;
@@ -101,9 +91,6 @@ put_token(FILE *fp, int tok)
 int
 ppstream_write(FILE *fp)
 {
-#if HOST_DAIMOS
-    ppout_trace_count = 0;
-#endif
     char lastfile[FNAMESIZE];
     int lastfline;
     int lasttline;

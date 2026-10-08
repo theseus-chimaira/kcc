@@ -128,6 +128,14 @@ static int set_level (int level); /* KAR-8/92, support leveled headers PPS 4516 
 
 extern char *mlbuf, *mlbptr;		/* mixed listing */
 char *savofnam = NULL;			/* KAR-3/92, save -R= name */
+#if HOST_DAIMOS && KCC_PHASE_PARSE
+static char *daimos_chain_kp1 = NULL;
+static char *daimos_chain_out = NULL;
+static char *daimos_chain_input = NULL;
+static int daimos_chain_noopt;
+extern int daimos_exec_kgen(char *, char *, char *, int);
+extern void daimos_unlink_path(char *);
+#endif
 #if !KCC_PHASE_CORELIKE
 static void getimestr(char *src_fname);
 #endif
@@ -885,6 +893,26 @@ cswitch (char *s, int *aac, char ***aav)
 		return 1;
 #endif
 
+#if HOST_DAIMOS && KCC_PHASE_PARSE
+	    case 'X':			/* internal: KGEN KPCODE output */
+		if (s[1] == '=' && s[2] != '\0') {
+		    daimos_chain_kp1 = s + 2;
+		    return 1;
+		}
+		jerr("No KPCODE pathname for native KPARSE continuation");
+		return 1;
+	    case 'Y':			/* internal: final assembly output */
+		if (s[1] == '=' && s[2] != '\0') {
+		    daimos_chain_out = s + 2;
+		    return 1;
+		}
+		jerr("No final pathname for native KPARSE continuation");
+		return 1;
+	    case 'Z':			/* internal: disable KGEN optimization */
+		daimos_chain_noopt = 1;
+		return 1;
+#endif
+
 	    case 'v':			/* -v  Verbosity level (same as -v=) */
 
 		if (s[1] == '=')	/* -v=<flags>	If extended syntax, */
@@ -1599,9 +1627,6 @@ module_loop:
 
 #if KCC_PHASE_PARSE
 	extern void bindopt(NODE *);
-#if HOST_DAIMOS
-	fprintf(stderr, "KPARSE: lexer ready\n");
-#endif
 	if (kir_write_header(out) != 0)
 	    {
 	    jerr("Could not write KIR1 header");
@@ -1624,9 +1649,6 @@ module_loop:
 	    nodeinit();
 	    curfn = NULL;
 	    n = extdef();
-#if HOST_DAIMOS
-	    fprintf(stderr, "KPARSE: extdef parsed\n");
-#endif
 	    if (optgen)
 		bindopt(n);
 	    if (kir_write_extdef(out, n) != 0)
@@ -1634,9 +1656,6 @@ module_loop:
 		jerr("Could not write KIR1 external definition");
 		break;
 		}
-#if HOST_DAIMOS
-	    fprintf(stderr, "KPARSE: extdef written\n");
-#endif
 	    }
 
 	if (!module_pragma)
@@ -1655,21 +1674,31 @@ module_loop:
 		}
 	    nodeinit();
 	    }
-#if HOST_DAIMOS
-	fprintf(stderr, "KPARSE: tentatives done\n");
-#endif
 
 	mainflg = mainsymp();
-#if HOST_DAIMOS
-	fprintf(stderr, "KPARSE: mainsym=%d globals begin\n", mainflg);
-#endif
 	if (kir_write_globals(out, symbol) != 0
 	  || kir_write_module_end(out, mainflg) != 0)
 	    jerr("Could not finish KIR1 module");
+	if (fclose(out) == EOF)
+	    jerr("Could not flush KIR1 output");
 #if HOST_DAIMOS
-	fprintf(stderr, "KPARSE: module written\n");
+	if (daimos_chain_kp1 != NULL && daimos_chain_out != NULL &&
+	    savofnam != NULL) {
+	    int chainrc;
+
+	    if (daimos_chain_input != NULL)
+		daimos_unlink_path(daimos_chain_input);
+	    if (nerrors == 0) {
+		chainrc = daimos_exec_kgen(savofnam, daimos_chain_kp1,
+		    daimos_chain_out, !daimos_chain_noopt);
+		daimos_unlink_path(savofnam);
+		daimos_unlink_path(daimos_chain_kp1);
+		exit(chainrc);
+	    }
+	    daimos_unlink_path(savofnam);
+	    daimos_unlink_path(daimos_chain_kp1);
+	}
 #endif
-	fclose(out);
 	return asmdflg;
 #else
 
@@ -1825,6 +1854,9 @@ files (char *fname)
 #endif
     char	ext[FNAMESIZE];		/* Temp to hold parsed extension */
 
+#if HOST_DAIMOS && KCC_PHASE_PARSE
+    daimos_chain_input = fname;
+#endif
 
     /*
      * All filename components and the reconstructed source name use the

@@ -464,6 +464,12 @@ kir_write_globals(FILE *fp, SYMBOL *head)
     INT delta;
 
     for (s = head != NULL ? head->Snext : NULL; s != NULL; s = s->Snext) {
+        /* Reserved words are lexer/parser state, not module symbols.  Split
+         * KGEN consumes an already parsed graph and must not spend heap or
+         * KIR bandwidth reconstructing keyword entries that cannot be
+         * referenced by generated code. */
+        if (s->Sclass == SC_RW)
+            continue;
         id = globalsymid(s);
         if (id == 0U)
             return -1;

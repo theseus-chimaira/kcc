@@ -19,8 +19,6 @@
 
 static char kcpp_path[]   = "/OPTION/BASE/LIBEXEC/KCC/KCPP";
 static char kparse_path[] = "/OPTION/BASE/LIBEXEC/KCC/KPARSE";
-static char kgen_path[]   = "/OPTION/BASE/LIBEXEC/KCC/KGEN";
-static char kopt_path[]   = "/OPTION/BASE/LIBEXEC/KCC/KOPT";
 
 static int
 pack_record(kword_t *dst, unsigned int *used, char *text)
@@ -79,6 +77,30 @@ run_child(char *path, char **argv, unsigned int argc)
     return (int)SYS_WAIT_STATUS_VALUE(status);
 }
 
+static int
+exec_child(char *path, char **argv, unsigned int argc)
+{
+    kword_t block[KDRV_BLOCK_WORDS];
+    struct sys_exec_v1 *exec;
+    unsigned int used;
+    unsigned int i;
+
+    if (argc == 0U || argc > KDRV_ARG_MAX)
+        return 126;
+    used = SYS_EXEC_V1_FIXED_WORDS;
+    if (pack_record(block, &used, path) != 0)
+        return 126;
+    for (i = 0U; i < argc; ++i)
+        if (pack_record(block, &used, argv[i]) != 0)
+            return 126;
+    exec = (struct sys_exec_v1 *)block;
+    exec->version_words = SYS_RUN_HEADER(SYS_EXEC_VERSION_1, used);
+    exec->argc = (kword_t)argc;
+    exec->envc = 0UL;
+    i = (unsigned int)dsys_exec(exec);
+    return 126;
+}
+
 static void
 append_octal(char *dst, unsigned int *pos, unsigned int value)
 {
@@ -99,7 +121,11 @@ temp_name(char *dst, char *suffix)
     unsigned int pos;
     unsigned int i;
 
-    strcpy(dst, "/TEMP/KCC");
+    /* Compiler IR is cold serialized data, often several thousand words.
+     * Keep it on the secondary D6FS drum scratch set instead of charging
+     * scarce physical core to MEMFS or churning the root filesystem.  Each
+     * consumed phase file is unlinked by the continuation chain. */
+    strcpy(dst, "/SCRATCH/KCC");
     pos = (unsigned int)strlen(dst);
     append_octal(dst, &pos, (unsigned int)dsys_getpid() & 077777U);
     for (i = 0U; suffix[i] != 0; ++i)
@@ -108,7 +134,7 @@ temp_name(char *dst, char *suffix)
 }
 
 static int
-output_arg(char *dst, unsigned int cap, char *path)
+phase_arg(char *dst, unsigned int cap, int option, char *path)
 {
     unsigned int n;
 
@@ -116,7 +142,7 @@ output_arg(char *dst, unsigned int cap, char *path)
     if (cap < n + 4U)
         return -1;
     dst[0] = '-';
-    dst[1] = 'R';
+    dst[1] = (char)option;
     dst[2] = '=';
     strcpy(dst + 3, path);
     return 0;
@@ -139,9 +165,9 @@ compile_one(char *source, char *output, int optimize)
     char kp1[40];
     char kptarg[44];
     char kirarg[44];
-    char kp1arg[44];
-    char outarg[SYS_RUN_ARG_MAX_CHARS + 1U];
-    char *av[5];
+    char kp1chain[SYS_RUN_ARG_MAX_CHARS + 1U];
+    char outchain[SYS_RUN_ARG_MAX_CHARS + 1U];
+    char *av[7];
     int rc;
 
     temp_name(kpt, ".KPT");
@@ -150,10 +176,10 @@ compile_one(char *source, char *output, int optimize)
     remove_file(kpt);
     remove_file(kir);
     remove_file(kp1);
-    if (output_arg(kptarg, sizeof(kptarg), kpt) != 0 ||
-        output_arg(kirarg, sizeof(kirarg), kir) != 0 ||
-        output_arg(kp1arg, sizeof(kp1arg), kp1) != 0 ||
-        output_arg(outarg, sizeof(outarg), output) != 0)
+    if (phase_arg(kptarg, sizeof(kptarg), 'R', kpt) != 0 ||
+        phase_arg(kirarg, sizeof(kirarg), 'R', kir) != 0 ||
+        phase_arg(kp1chain, sizeof(kp1chain), 'X', kp1) != 0 ||
+        phase_arg(outchain, sizeof(outchain), 'Y', output) != 0)
         return 126;
 
     av[0] = "KCPP";
@@ -165,33 +191,17 @@ compile_one(char *source, char *output, int optimize)
 
     av[0] = "KPARSE";
     av[1] = kirarg;
-    av[2] = kpt;
-    rc = run_child(kparse_path, av, 3U);
-    if (rc != 0)
-        goto done;
-    remove_file(kpt);
-
-    av[0] = "KGEN";
+    av[2] = kp1chain;
+    av[3] = outchain;
     if (optimize) {
-        av[1] = kir;
-        av[2] = kp1arg;
-        rc = run_child(kgen_path, av, 3U);
+        av[4] = kpt;
+        rc = exec_child(kparse_path, av, 5U);
     } else {
-        av[1] = "-N";
-        av[2] = kir;
-        av[3] = kp1arg;
-        rc = run_child(kgen_path, av, 4U);
+        av[4] = "-Z";
+        av[5] = kpt;
+        rc = exec_child(kparse_path, av, 6U);
     }
-    if (rc != 0)
-        goto done;
-    remove_file(kir);
-
-    av[0] = "KOPT";
-    av[1] = kp1;
-    av[2] = outarg;
-    rc = run_child(kopt_path, av, 3U);
-    if (rc == 0)
-        remove_file(kp1);
+    /* Successful EXEC never returns.  KPARSE chains through KGEN/KOPT. */
 
 done:
     remove_file(kpt);

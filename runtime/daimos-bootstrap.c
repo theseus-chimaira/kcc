@@ -9,6 +9,7 @@
  */
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -24,6 +25,7 @@
 #define KIO_S6_TYPE_SHIFT 30U
 #define KIO_S6_TEXT        1UL
 #define KIO_S6_LEN_MASK    077777777UL
+#define KIO_WRITE_WORDS     0200U
 
 struct kio_stream {
         int fd;
@@ -37,6 +39,8 @@ struct kio_stream {
         unsigned int record_left;
         unsigned int record_newline;
         kword_t word;
+        kword_t *write_words;
+        unsigned int write_count;
 };
 
 static FILE kstdin_handle = 0;
@@ -47,9 +51,6 @@ FILE *stdout = &kstdout_handle;
 FILE *stderr = &kstderr_handle;
 static FILE handles[KIO_STREAMS];
 static struct kio_stream streams[KIO_STREAMS];
-static int kio_trace_reads;
-static int kio_trace_binary_words;
-static int kio_trace_writes;
 
 /* DAIMOS enters native programs with argv pointing at counted SIXBIT records,
  * while the historical KCC sources expect conventional C strings.  Keep this
@@ -63,15 +64,12 @@ extern int main(int, char **);
 int
 kcc_native_start(int argc, kword_t **argv, kword_t **envp)
 {
-        kword_t trace_brk_entry;
-        kword_t trace_brk_argv;
         unsigned int count;
         unsigned int i;
         unsigned int j;
         unsigned int word;
         unsigned int shift;
 
-        trace_brk_entry = dsys_brk(0UL);
         (void)envp;
         if (argc < 0 || (unsigned int)argc > SYS_RUN_ARG_MAX ||
             (argc != 0 && argv == 0))
@@ -92,9 +90,6 @@ kcc_native_start(int argc, kword_t **argv, kword_t **envp)
                 kcc_argv[i] = kcc_argv_text[i];
         }
         kcc_argv[argc] = 0;
-        trace_brk_argv = dsys_brk(0UL);
-        fprintf(stderr, "KSTART: entry=%lo argv=%lo\n",
-            trace_brk_entry, trace_brk_argv);
         return main(argc, kcc_argv);
 }
 
@@ -112,30 +107,48 @@ kio_stream(FILE *fp)
 }
 
 static int
+kio_flush_words(struct kio_stream *s)
+{
+        unsigned int done;
+
+        done = 0U;
+        while (done < s->write_count) {
+                int rc;
+
+                rc = dsys_write_words(s->fd, s->write_words + done,
+                    s->write_count - done);
+                if (rc <= 0) {
+                        s->error = 1U;
+                        return EOF;
+                }
+                done += (unsigned int)rc;
+        }
+        s->write_count = 0U;
+        return 0;
+}
+
+static int
 kio_write_word(struct kio_stream *s)
 {
-        int rc;
-
-        rc = dsys_write_words(s->fd, &s->word, 1U);
-        if (kio_trace_writes < 32) {
-                fprintf(stderr, "KWRITE[%d]: fd=%d rc=%d field=%u word=%012lo\n",
-                    kio_trace_writes, s->fd, rc, s->field, s->word);
-                ++kio_trace_writes;
+        if (s->write_words == 0) {
+                s->write_words = (kword_t *)malloc(
+                    KIO_WRITE_WORDS * sizeof(kword_t));
+                if (s->write_words == 0) {
+                        s->error = 1U;
+                        return EOF;
+                }
         }
-        if (rc != 1) {
-                s->error = 1U;
-                return EOF;
-        }
+        s->write_words[s->write_count++] = s->word;
         s->word = 0UL;
         s->field = 0U;
+        if (s->write_count == KIO_WRITE_WORDS)
+                return kio_flush_words(s);
         return 0;
 }
 
 FILE *
 fopen(char *name, char *mode)
 {
-        kword_t trace_before;
-        kword_t trace_after;
         kword_t path[U_PATH_WORDS];
         unsigned int flags;
         int id;
@@ -152,11 +165,7 @@ fopen(char *name, char *mode)
                 flags = SYS_O_WRONLY | SYS_O_CREAT | SYS_O_APPEND;
         else
                 return 0;
-        trace_before = dsys_brk(0UL);
         fd = dsys_open(path, flags);
-        trace_after = dsys_brk(0UL);
-        fprintf(stderr, "KFOPEN: %s before=%lo after=%lo fd=%d\n",
-            name, trace_before, trace_after, fd);
         if (fd < 0)
                 return 0;
         for (id = 3; id < KIO_STREAMS; ++id)
@@ -185,9 +194,9 @@ fflush(FILE *fp)
         s = kio_stream(fp);
         if (s == 0 || (s->flags & KIO_WRITE) == 0U)
                 return fp == stdin ? 0 : EOF;
-        if (s->field != 0U)
-                return kio_write_word(s);
-        return 0;
+        if (s->field != 0U && kio_write_word(s) == EOF)
+                return EOF;
+        return s->write_count != 0U ? kio_flush_words(s) : 0;
 }
 
 int
@@ -204,6 +213,8 @@ fclose(FILE *fp)
         rc = (s->flags & KIO_WRITE) != 0U ? fflush(fp) : 0;
         if (dsys_close(s->fd) != 0)
                 rc = EOF;
+        if (s->write_words != 0)
+                free(s->write_words);
         memset(s, 0, sizeof(*s));
         return rc;
 }
@@ -265,16 +276,6 @@ kio_read_word(struct kio_stream *s)
         int rc;
 
         rc = dsys_read_words(s->fd, &s->word, 1U);
-        if (kio_trace_reads < 16) {
-                fprintf(stderr, "KREAD[%d]: fd=%d rc=%d field=%u word=%lo\n",
-                    kio_trace_reads, s->fd, rc, s->field, s->word);
-                ++kio_trace_reads;
-        }
-        if ((s->flags & KIO_BINARY) != 0U && kio_trace_binary_words < 32) {
-                fprintf(stderr, "KBINW[%d]: fd=%d rc=%d word=%012lo\n",
-                    kio_trace_binary_words, s->fd, rc, s->word);
-                ++kio_trace_binary_words;
-        }
         if (rc == 0) {
                 s->eof = 1U;
                 return 0;
