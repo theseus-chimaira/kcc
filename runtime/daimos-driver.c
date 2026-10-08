@@ -12,10 +12,15 @@
 #include "u.h"
 
 #define KDRV_REC_WORDS      18U
-#define KDRV_ARG_MAX        SYS_RUN_ARG_MAX
+#define KDRV_ARG_MAX        12U
 #define KDRV_BLOCK_WORDS \
     (SYS_RUN_V2_FIXED_WORDS + KDRV_REC_WORDS + \
      KDRV_ARG_MAX * KDRV_REC_WORDS + 2U)
+
+/* Child RUN and destructive EXEC never overlap.  Reuse one compact
+ * launch buffer in BSS instead of charging the tiny native process stack
+ * with a several-hundred-word local on each call. */
+static kword_t kdrv_launch_block[KDRV_BLOCK_WORDS];
 
 static char kcpp_path[]   = "/OPTION/BASE/LIBEXEC/KCC/KCPP";
 static char kparse_path[] = "/OPTION/BASE/LIBEXEC/KCC/KPARSE";
@@ -40,7 +45,7 @@ pack_record(kword_t *dst, unsigned int *used, char *text)
 static int
 run_child(char *path, char **argv, unsigned int argc)
 {
-    kword_t block[KDRV_BLOCK_WORDS];
+    kword_t *block = kdrv_launch_block;
     struct sys_run_v2 *run;
     kword_t status;
     unsigned int used;
@@ -80,7 +85,7 @@ run_child(char *path, char **argv, unsigned int argc)
 static int
 exec_child(char *path, char **argv, unsigned int argc)
 {
-    kword_t block[KDRV_BLOCK_WORDS];
+    kword_t *block = kdrv_launch_block;
     struct sys_exec_v1 *exec;
     unsigned int used;
     unsigned int i;
@@ -245,7 +250,9 @@ main(int argc, char **argv)
             !strncmp(argv[i], "-H", 2) ||
             !strncmp(argv[i], "-P", 2) ||
             !strncmp(argv[i], "-x", 2) ||
-            !strncmp(argv[i], "-m", 2)) {
+            !strncmp(argv[i], "-X", 2) ||
+            !strncmp(argv[i], "-m", 2) ||
+            !strncmp(argv[i], "-M", 2)) {
             if (cpp_option_count >= KDRV_ARG_MAX - 3U) {
                 fprintf(stderr, "kcc: too many preprocessor options\n");
                 return 2;

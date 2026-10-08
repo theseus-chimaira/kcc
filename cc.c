@@ -301,6 +301,20 @@ main (int argc, char **argv)
     for (av = argv+1, ac = argc; --ac > 0; ++av)
 	if (**av == '-')
 	    {
+#if HOST_DAIMOS && KCC_PHASE_CPP
+	    /* DAIMOS argv is SIXBIT: command arguments arrive uppercased.
+	     * Restore the case-sensitive KCC -x/-m spellings and profile
+	     * values before the existing switch parser sees them.  Do NOT
+	     * lowercase -D macro names, include paths, or source filenames. */
+	    char *sw = *av;
+	    char *v;
+	    if (sw[1] == 'X' || sw[1] == 'M')
+	        sw[1] = (char)(sw[1] + ('a' - 'A'));
+	    if (sw[1] == 'x' || sw[1] == 'm' || sw[1] == 'P')
+	        for (v = sw + 2; *v != 0; ++v)
+	            if (*v >= 'A' && *v <= 'Z')
+	                *v = (char)(*v + ('a' - 'A'));
+#endif
 	    if (cswitch(*av, &ac, &av))	/* Process a switch */
 		*av = NULL;		/* OK to zap it now */
 	    }
