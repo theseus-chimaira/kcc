@@ -136,7 +136,10 @@ static int
 replay(FILE *fp)
 {
     struct kpcode_header h;
-    INT w[KPCODE_MAX_RECORD_WORDS];
+    /* KPCODE_MAX_RECORD_WORDS is 2048.  Do not place this fixed streaming
+     * buffer on the small native process stack: KOPT is non-reentrant and
+     * processes only one record at a time. */
+    static INT w[KPCODE_MAX_RECORD_WORDS];
     unsigned int kind, n;
     char *s;
     SYMBOL *sym;
