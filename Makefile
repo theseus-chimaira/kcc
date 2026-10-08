@@ -249,7 +249,8 @@ $(NATIVE_BUILD_DIR):
 $(NATIVE_RUNTIME_DIR):
 	mkdir -p $@
 
-$(NATIVE_DAIMOS_LIBC): $(KCC)
+$(NATIVE_DAIMOS_LIBC): $(KCC) $(wildcard $(DAIMOS_REPO)/userland/libc/*.[cs]) \
+	$(DAIMOS_REPO)/userland/libc/Makefile
 	$(MAKE) -C $(DAIMOS_REPO)/userland/libc build \
 		PDP10_PREFIX='$(PDP10_PREFIX)' BUILD_ROOT='$(NATIVE_DAIMOS_LIBC_ROOT)' \
 		CC='$(abspath $(KCC))'
