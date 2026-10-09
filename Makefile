@@ -41,28 +41,24 @@ SRCS = \
 	ccerr.c cceval.c ccgen.c ccgen1.c ccgen2.c ccgswi.c ccjskp.c cclex.c \
 	ccnode.c ccout.c ccoututil.c ccpp.c ccsrc.c ccreg.c ccstmt.c ccsym.c cctype.c ccopt.c \
 	ccvla.c
-OBJS = \
-	$(HOST_BUILD_DIR)/cc.o $(HOST_BUILD_DIR)/ccasmb.o $(HOST_BUILD_DIR)/cccreg.o $(HOST_BUILD_DIR)/cccse.o $(HOST_BUILD_DIR)/cccode.o \
-	$(HOST_BUILD_DIR)/ccdata.o $(HOST_BUILD_DIR)/ccdbug.o $(HOST_BUILD_DIR)/ccdecl.o $(HOST_BUILD_DIR)/ccerr.o $(HOST_BUILD_DIR)/cceval.o \
-	$(HOST_BUILD_DIR)/ccgen.o $(HOST_BUILD_DIR)/ccgen1.o $(HOST_BUILD_DIR)/ccgen2.o $(HOST_BUILD_DIR)/ccgswi.o $(HOST_BUILD_DIR)/ccjskp.o \
-	$(HOST_BUILD_DIR)/cclex.o $(HOST_BUILD_DIR)/ccnode.o $(HOST_BUILD_DIR)/ccout.o $(HOST_BUILD_DIR)/ccoututil.o $(HOST_BUILD_DIR)/ccpp.o \
-	$(HOST_BUILD_DIR)/ccsrc.o $(HOST_BUILD_DIR)/ccreg.o $(HOST_BUILD_DIR)/ccstmt.o $(HOST_BUILD_DIR)/ccsym.o $(HOST_BUILD_DIR)/cctype.o \
-	$(HOST_BUILD_DIR)/ccopt.o $(HOST_BUILD_DIR)/ccvla.o
-ASMS = \
-	$(HOST_BUILD_DIR)/cc.s $(HOST_BUILD_DIR)/ccasmb.s $(HOST_BUILD_DIR)/cccreg.s $(HOST_BUILD_DIR)/cccse.s $(HOST_BUILD_DIR)/cccode.s \
-	$(HOST_BUILD_DIR)/ccdata.s $(HOST_BUILD_DIR)/ccdbug.s $(HOST_BUILD_DIR)/ccdecl.s $(HOST_BUILD_DIR)/ccerr.s $(HOST_BUILD_DIR)/cceval.s \
-	$(HOST_BUILD_DIR)/ccgen.s $(HOST_BUILD_DIR)/ccgen1.s $(HOST_BUILD_DIR)/ccgen2.s $(HOST_BUILD_DIR)/ccgswi.s $(HOST_BUILD_DIR)/ccjskp.s \
-	$(HOST_BUILD_DIR)/cclex.s $(HOST_BUILD_DIR)/ccnode.s $(HOST_BUILD_DIR)/ccout.s $(HOST_BUILD_DIR)/ccoututil.s $(HOST_BUILD_DIR)/ccpp.s \
-	$(HOST_BUILD_DIR)/ccsrc.s $(HOST_BUILD_DIR)/ccreg.s $(HOST_BUILD_DIR)/ccstmt.s $(HOST_BUILD_DIR)/ccsym.s $(HOST_BUILD_DIR)/cctype.s \
-	$(HOST_BUILD_DIR)/ccopt.s $(HOST_BUILD_DIR)/ccvla.s
-NATIVE_ASMS = \
-	$(NATIVE_BUILD_DIR)/cc.s $(NATIVE_BUILD_DIR)/ccasmb.s $(NATIVE_BUILD_DIR)/cccreg.s $(NATIVE_BUILD_DIR)/cccse.s $(NATIVE_BUILD_DIR)/cccode.s \
-	$(NATIVE_BUILD_DIR)/ccdata.s $(NATIVE_BUILD_DIR)/ccdbug.s $(NATIVE_BUILD_DIR)/ccdecl.s $(NATIVE_BUILD_DIR)/ccerr.s $(NATIVE_BUILD_DIR)/cceval.s \
-	$(NATIVE_BUILD_DIR)/ccgen.s $(NATIVE_BUILD_DIR)/ccgen1.s $(NATIVE_BUILD_DIR)/ccgen2.s $(NATIVE_BUILD_DIR)/ccgswi.s $(NATIVE_BUILD_DIR)/ccjskp.s \
-	$(NATIVE_BUILD_DIR)/cclex.s $(NATIVE_BUILD_DIR)/ccnode.s $(NATIVE_BUILD_DIR)/ccout.s $(NATIVE_BUILD_DIR)/ccoututil.s $(NATIVE_BUILD_DIR)/ccpp.s \
-	$(NATIVE_BUILD_DIR)/ccsrc.s $(NATIVE_BUILD_DIR)/ccreg.s $(NATIVE_BUILD_DIR)/ccstmt.s $(NATIVE_BUILD_DIR)/ccsym.s $(NATIVE_BUILD_DIR)/cctype.s \
-	$(NATIVE_BUILD_DIR)/ccopt.s $(NATIVE_BUILD_DIR)/ccvla.s
-NATIVE_OBJS = $(NATIVE_ASMS:.s=.dobj)
+# A prefixed, source-suffixed list permits portable GNU/BSD substitutions.
+HOST_BUILD_SRCS = \
+	$(HOST_BUILD_DIR)/cc.c $(HOST_BUILD_DIR)/ccasmb.c $(HOST_BUILD_DIR)/cccreg.c $(HOST_BUILD_DIR)/cccse.c $(HOST_BUILD_DIR)/cccode.c $(HOST_BUILD_DIR)/ccdata.c \
+	$(HOST_BUILD_DIR)/ccdbug.c $(HOST_BUILD_DIR)/ccdecl.c $(HOST_BUILD_DIR)/ccerr.c $(HOST_BUILD_DIR)/cceval.c $(HOST_BUILD_DIR)/ccgen.c $(HOST_BUILD_DIR)/ccgen1.c \
+	$(HOST_BUILD_DIR)/ccgen2.c $(HOST_BUILD_DIR)/ccgswi.c $(HOST_BUILD_DIR)/ccjskp.c $(HOST_BUILD_DIR)/cclex.c $(HOST_BUILD_DIR)/ccnode.c $(HOST_BUILD_DIR)/ccout.c \
+	$(HOST_BUILD_DIR)/ccoututil.c $(HOST_BUILD_DIR)/ccpp.c $(HOST_BUILD_DIR)/ccsrc.c $(HOST_BUILD_DIR)/ccreg.c $(HOST_BUILD_DIR)/ccstmt.c $(HOST_BUILD_DIR)/ccsym.c \
+	$(HOST_BUILD_DIR)/cctype.c $(HOST_BUILD_DIR)/ccopt.c $(HOST_BUILD_DIR)/ccvla.c
+OBJS = $(HOST_BUILD_SRCS:.c=.o)
+ASMS = $(HOST_BUILD_SRCS:.c=.s)
+
+NATIVE_BUILD_SRCS = \
+	$(NATIVE_BUILD_DIR)/cc.c $(NATIVE_BUILD_DIR)/ccasmb.c $(NATIVE_BUILD_DIR)/cccreg.c $(NATIVE_BUILD_DIR)/cccse.c $(NATIVE_BUILD_DIR)/cccode.c $(NATIVE_BUILD_DIR)/ccdata.c \
+	$(NATIVE_BUILD_DIR)/ccdbug.c $(NATIVE_BUILD_DIR)/ccdecl.c $(NATIVE_BUILD_DIR)/ccerr.c $(NATIVE_BUILD_DIR)/cceval.c $(NATIVE_BUILD_DIR)/ccgen.c $(NATIVE_BUILD_DIR)/ccgen1.c \
+	$(NATIVE_BUILD_DIR)/ccgen2.c $(NATIVE_BUILD_DIR)/ccgswi.c $(NATIVE_BUILD_DIR)/ccjskp.c $(NATIVE_BUILD_DIR)/cclex.c $(NATIVE_BUILD_DIR)/ccnode.c $(NATIVE_BUILD_DIR)/ccout.c \
+	$(NATIVE_BUILD_DIR)/ccoututil.c $(NATIVE_BUILD_DIR)/ccpp.c $(NATIVE_BUILD_DIR)/ccsrc.c $(NATIVE_BUILD_DIR)/ccreg.c $(NATIVE_BUILD_DIR)/ccstmt.c $(NATIVE_BUILD_DIR)/ccsym.c \
+	$(NATIVE_BUILD_DIR)/cctype.c $(NATIVE_BUILD_DIR)/ccopt.c $(NATIVE_BUILD_DIR)/ccvla.c
+NATIVE_ASMS = $(NATIVE_BUILD_SRCS:.c=.s)
+NATIVE_OBJS = $(NATIVE_BUILD_SRCS:.c=.dobj)
 NATIVE_RUNTIME_DIR = $(NATIVE_BUILD_DIR)/runtime
 NATIVE_DAIMOS_LIBC_ROOT = $(KCC_ROOT)/$(NATIVE_BUILD_DIR)/daimos-libc
 NATIVE_DAIMOS_LIBC_DIR = $(NATIVE_DAIMOS_LIBC_ROOT)/libc
@@ -84,20 +80,8 @@ NATIVE_HEADERS = \
 	ccsym.h cctoks.h ccvla.h kcchst.h self/include/ctype.h \
 	self/include/errno.h self/include/limits.h self/include/muuo.h self/include/stdarg.h self/include/stddef.h \
 	self/include/stdio.h self/include/stdlib.h self/include/string.h self/include/time.h
-NATIVE_PHASE_ASMS = \
-	$(NATIVE_BUILD_DIR)/ccppout.s $(NATIVE_BUILD_DIR)/ccppin.s \
-	$(NATIVE_BUILD_DIR)/cc-cpp.s $(NATIVE_BUILD_DIR)/ccout-cpp.s $(NATIVE_BUILD_DIR)/ccerr-cpp.s \
-	$(NATIVE_BUILD_DIR)/ccsym-cpp.s $(NATIVE_BUILD_DIR)/ccdata-cpp.s \
-	$(NATIVE_BUILD_DIR)/ccdata-core.s $(NATIVE_BUILD_DIR)/ccerr-core.s \
-	$(NATIVE_BUILD_DIR)/ccout-core.s $(NATIVE_BUILD_DIR)/ccgen-core.s $(NATIVE_BUILD_DIR)/cc-core.s \
-	$(NATIVE_BUILD_DIR)/cckgen-gen.s $(NATIVE_BUILD_DIR)/ccdata-gen.s $(NATIVE_BUILD_DIR)/cccode-gen.s \
-	$(NATIVE_BUILD_DIR)/ccnode-gen.s $(NATIVE_BUILD_DIR)/ccsym-gen.s $(NATIVE_BUILD_DIR)/ccerr-gen.s \
-	$(NATIVE_BUILD_DIR)/ccevalgen.s $(NATIVE_BUILD_DIR)/cctype-gen.s $(NATIVE_BUILD_DIR)/ccgen1-gen.s \
-	$(NATIVE_BUILD_DIR)/ccgen-gen.s $(NATIVE_BUILD_DIR)/ccppin-gen.s $(NATIVE_BUILD_DIR)/cckpout-gen.s \
-	$(NATIVE_BUILD_DIR)/cckpwrite-gen.s $(NATIVE_BUILD_DIR)/cc-parse.s $(NATIVE_BUILD_DIR)/ccerr-parse.s \
-	$(NATIVE_BUILD_DIR)/ccdata-parse.s $(NATIVE_BUILD_DIR)/ccbind-parse.s \
-	$(NATIVE_BUILD_DIR)/cckopt-opt.s $(NATIVE_BUILD_DIR)/ccdata-opt.s \
-	$(NATIVE_BUILD_DIR)/ccout-opt.s $(NATIVE_BUILD_DIR)/ccerr-opt.s $(NATIVE_BUILD_DIR)/cckpread-opt.s
+NATIVE_PHASE_ASMS = $(NATIVE_CPP_ASMS) $(NATIVE_CORE_ASMS) $(NATIVE_GEN_ASMS) \
+	$(NATIVE_PARSE_ASMS) $(NATIVE_OPT_ASMS)
 
 NATIVE_KCPP_OBJS = \
 	$(NATIVE_BUILD_DIR)/cc-cpp.dobj $(NATIVE_BUILD_DIR)/ccasmb.dobj \
@@ -284,27 +268,157 @@ $(NATIVE_KOPT_DXR): $(NATIVE_KOPT_OBJS) $(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_L
 
 $(NATIVE_ASMS) $(NATIVE_PHASE_ASMS): $(NATIVE_HEADERS)
 
-include mk/native.mk
+# Native source dependencies; shared recipes vary only by phase.
 
-runtime: $(RUNTIME)
+# PLAIN assembly variant.
+NATIVE_PLAIN_ASMS = \
+	$(NATIVE_BUILD_DIR)/cc.s $(NATIVE_BUILD_DIR)/ccasmb.s $(NATIVE_BUILD_DIR)/cccreg.s $(NATIVE_BUILD_DIR)/cccse.s $(NATIVE_BUILD_DIR)/cccode.s \
+	$(NATIVE_BUILD_DIR)/ccdata.s $(NATIVE_BUILD_DIR)/ccdbug.s $(NATIVE_BUILD_DIR)/ccdecl.s $(NATIVE_BUILD_DIR)/ccerr.s $(NATIVE_BUILD_DIR)/cceval.s \
+	$(NATIVE_BUILD_DIR)/ccgen.s $(NATIVE_BUILD_DIR)/ccgen1.s $(NATIVE_BUILD_DIR)/ccgen2.s $(NATIVE_BUILD_DIR)/ccgswi.s $(NATIVE_BUILD_DIR)/ccjskp.s \
+	$(NATIVE_BUILD_DIR)/cclex.s $(NATIVE_BUILD_DIR)/ccnode.s $(NATIVE_BUILD_DIR)/ccout.s $(NATIVE_BUILD_DIR)/ccoututil.s $(NATIVE_BUILD_DIR)/ccpp.s \
+	$(NATIVE_BUILD_DIR)/ccsrc.s $(NATIVE_BUILD_DIR)/ccreg.s $(NATIVE_BUILD_DIR)/ccstmt.s $(NATIVE_BUILD_DIR)/ccsym.s $(NATIVE_BUILD_DIR)/cctype.s \
+	$(NATIVE_BUILD_DIR)/ccopt.s $(NATIVE_BUILD_DIR)/ccvla.s $(NATIVE_BUILD_DIR)/cckirread.s $(NATIVE_BUILD_DIR)/cckirwrite.s
 
-install: all
-	$(INSTALL) -d $(DESTDIR)$(BINDIR)
-	$(INSTALL) -m 755 $(HOST_BUILD_DIR)/kcc $(DESTDIR)$(BINDIR)/kcc
-	cmp $(HOST_BUILD_DIR)/kcc $(DESTDIR)$(BINDIR)/kcc
-	$(MAKE) install-runtime
+$(NATIVE_PLAIN_ASMS): $(KCC)
+	@mkdir -p $(NATIVE_BUILD_DIR)
+	@name="$@"; name=$${name##*/}; name=$${name%.s}; \
+	    $(COMPILE_NATIVE) -S "$$name.c" -o "$@"
 
-install-runtime: runtime
-	$(INSTALL) -d $(DESTDIR)$(KCCLIBDIR)
-	$(INSTALL) -m 644 $(RUNTIME) $(DESTDIR)$(KCCLIBDIR)/
+# CPP assembly variant.
+NATIVE_CPP_ASMS = \
+	$(NATIVE_BUILD_DIR)/ccppout.s $(NATIVE_BUILD_DIR)/cc-cpp.s $(NATIVE_BUILD_DIR)/ccout-cpp.s $(NATIVE_BUILD_DIR)/ccerr-cpp.s $(NATIVE_BUILD_DIR)/ccsym-cpp.s \
+	$(NATIVE_BUILD_DIR)/ccdata-cpp.s
 
-uninstall:
-	$(RM) $(DESTDIR)$(BINDIR)/kcc
-	@for f in $(RUNTIME); do \
-		$(RM) "$(DESTDIR)$(KCCLIBDIR)/$${f##*/}"; \
-	done
+$(NATIVE_CPP_ASMS): $(KCC)
+	@mkdir -p $(NATIVE_BUILD_DIR)
+	@name="$@"; name=$${name##*/}; name=$${name%.s}; \
+	    name=$${name%-cpp}; \
+	    $(COMPILE_NATIVE) -DKCC_PHASE_CPP=1 -S "$$name.c" -o "$@"
 
-include mk/host.mk
+# CORE assembly variant.
+NATIVE_CORE_ASMS = \
+	$(NATIVE_BUILD_DIR)/ccppin.s $(NATIVE_BUILD_DIR)/ccdata-core.s $(NATIVE_BUILD_DIR)/ccerr-core.s $(NATIVE_BUILD_DIR)/ccout-core.s $(NATIVE_BUILD_DIR)/ccgen-core.s \
+	$(NATIVE_BUILD_DIR)/cc-core.s
+
+$(NATIVE_CORE_ASMS): $(KCC)
+	@mkdir -p $(NATIVE_BUILD_DIR)
+	@name="$@"; name=$${name##*/}; name=$${name%.s}; \
+	    name=$${name%-core}; \
+	    $(COMPILE_NATIVE) -DKCC_PHASE_CORE=1 -S "$$name.c" -o "$@"
+
+# GEN assembly variant.
+NATIVE_GEN_ASMS = \
+	$(NATIVE_BUILD_DIR)/cckgen-gen.s $(NATIVE_BUILD_DIR)/ccdata-gen.s $(NATIVE_BUILD_DIR)/cccode-gen.s $(NATIVE_BUILD_DIR)/ccnode-gen.s $(NATIVE_BUILD_DIR)/ccsym-gen.s \
+	$(NATIVE_BUILD_DIR)/ccerr-gen.s $(NATIVE_BUILD_DIR)/ccevalgen.s $(NATIVE_BUILD_DIR)/cctype-gen.s $(NATIVE_BUILD_DIR)/ccgen1-gen.s $(NATIVE_BUILD_DIR)/ccgen-gen.s \
+	$(NATIVE_BUILD_DIR)/ccppin-gen.s $(NATIVE_BUILD_DIR)/cckpout-gen.s $(NATIVE_BUILD_DIR)/cckpwrite-gen.s
+
+$(NATIVE_GEN_ASMS): $(KCC)
+	@mkdir -p $(NATIVE_BUILD_DIR)
+	@name="$@"; name=$${name##*/}; name=$${name%.s}; \
+	    name=$${name%-gen}; \
+	    $(COMPILE_NATIVE) -DKCC_PHASE_GEN=1 -S "$$name.c" -o "$@"
+
+# PARSE assembly variant.
+NATIVE_PARSE_ASMS = \
+	$(NATIVE_BUILD_DIR)/cc-parse.s $(NATIVE_BUILD_DIR)/ccerr-parse.s $(NATIVE_BUILD_DIR)/ccdata-parse.s $(NATIVE_BUILD_DIR)/ccbind-parse.s
+
+$(NATIVE_PARSE_ASMS): $(KCC)
+	@mkdir -p $(NATIVE_BUILD_DIR)
+	@name="$@"; name=$${name##*/}; name=$${name%.s}; \
+	    name=$${name%-parse}; \
+	    $(COMPILE_NATIVE) -DKCC_PHASE_PARSE=1 -S "$$name.c" -o "$@"
+
+# OPT assembly variant.
+NATIVE_OPT_ASMS = \
+	$(NATIVE_BUILD_DIR)/cckopt-opt.s $(NATIVE_BUILD_DIR)/ccdata-opt.s $(NATIVE_BUILD_DIR)/ccout-opt.s $(NATIVE_BUILD_DIR)/ccerr-opt.s $(NATIVE_BUILD_DIR)/cckpread-opt.s
+
+$(NATIVE_OPT_ASMS): $(KCC)
+	@mkdir -p $(NATIVE_BUILD_DIR)
+	@name="$@"; name=$${name##*/}; name=$${name%.s}; \
+	    name=$${name%-opt}; \
+	    $(COMPILE_NATIVE) -DKCC_PHASE_OPT=1 -S "$$name.c" -o "$@"
+
+
+# Exact native source dependencies (all variants sharing each source).
+$(NATIVE_BUILD_DIR)/cc.s $(NATIVE_BUILD_DIR)/cc-cpp.s $(NATIVE_BUILD_DIR)/cc-core.s $(NATIVE_BUILD_DIR)/cc-parse.s: cc.c
+$(NATIVE_BUILD_DIR)/ccasmb.s: ccasmb.c
+$(NATIVE_BUILD_DIR)/cccreg.s: cccreg.c
+$(NATIVE_BUILD_DIR)/cccse.s: cccse.c
+$(NATIVE_BUILD_DIR)/cccode.s $(NATIVE_BUILD_DIR)/cccode-gen.s: cccode.c
+$(NATIVE_BUILD_DIR)/ccdata.s $(NATIVE_BUILD_DIR)/ccdata-cpp.s $(NATIVE_BUILD_DIR)/ccdata-core.s $(NATIVE_BUILD_DIR)/ccdata-gen.s $(NATIVE_BUILD_DIR)/ccdata-parse.s $(NATIVE_BUILD_DIR)/ccdata-opt.s: ccdata.c
+$(NATIVE_BUILD_DIR)/ccdbug.s: ccdbug.c
+$(NATIVE_BUILD_DIR)/ccdecl.s: ccdecl.c
+$(NATIVE_BUILD_DIR)/ccerr.s $(NATIVE_BUILD_DIR)/ccerr-cpp.s $(NATIVE_BUILD_DIR)/ccerr-core.s $(NATIVE_BUILD_DIR)/ccerr-gen.s $(NATIVE_BUILD_DIR)/ccerr-parse.s $(NATIVE_BUILD_DIR)/ccerr-opt.s: ccerr.c
+$(NATIVE_BUILD_DIR)/cceval.s: cceval.c
+$(NATIVE_BUILD_DIR)/ccgen.s $(NATIVE_BUILD_DIR)/ccgen-core.s $(NATIVE_BUILD_DIR)/ccgen-gen.s: ccgen.c
+$(NATIVE_BUILD_DIR)/ccgen1.s $(NATIVE_BUILD_DIR)/ccgen1-gen.s: ccgen1.c
+$(NATIVE_BUILD_DIR)/ccgen2.s: ccgen2.c
+$(NATIVE_BUILD_DIR)/ccgswi.s: ccgswi.c
+$(NATIVE_BUILD_DIR)/ccjskp.s: ccjskp.c
+$(NATIVE_BUILD_DIR)/cclex.s: cclex.c
+$(NATIVE_BUILD_DIR)/ccnode.s $(NATIVE_BUILD_DIR)/ccnode-gen.s: ccnode.c
+$(NATIVE_BUILD_DIR)/ccout.s $(NATIVE_BUILD_DIR)/ccout-cpp.s $(NATIVE_BUILD_DIR)/ccout-core.s $(NATIVE_BUILD_DIR)/ccout-opt.s: ccout.c
+$(NATIVE_BUILD_DIR)/ccoututil.s: ccoututil.c
+$(NATIVE_BUILD_DIR)/ccpp.s: ccpp.c
+$(NATIVE_BUILD_DIR)/ccsrc.s: ccsrc.c
+$(NATIVE_BUILD_DIR)/ccreg.s: ccreg.c
+$(NATIVE_BUILD_DIR)/ccstmt.s: ccstmt.c
+$(NATIVE_BUILD_DIR)/ccsym.s $(NATIVE_BUILD_DIR)/ccsym-cpp.s $(NATIVE_BUILD_DIR)/ccsym-gen.s: ccsym.c
+$(NATIVE_BUILD_DIR)/cctype.s $(NATIVE_BUILD_DIR)/cctype-gen.s: cctype.c
+$(NATIVE_BUILD_DIR)/ccopt.s: ccopt.c
+$(NATIVE_BUILD_DIR)/ccvla.s: ccvla.c
+$(NATIVE_BUILD_DIR)/cckirread.s: cckirread.c
+$(NATIVE_BUILD_DIR)/cckirwrite.s: cckirwrite.c
+$(NATIVE_BUILD_DIR)/ccppout.s: ccppout.c
+$(NATIVE_BUILD_DIR)/ccppin.s $(NATIVE_BUILD_DIR)/ccppin-gen.s: ccppin.c
+$(NATIVE_BUILD_DIR)/cckgen-gen.s: cckgen.c
+$(NATIVE_BUILD_DIR)/ccevalgen.s: ccevalgen.c
+$(NATIVE_BUILD_DIR)/cckpout-gen.s: cckpout.c
+$(NATIVE_BUILD_DIR)/cckpwrite-gen.s: cckpwrite.c
+$(NATIVE_BUILD_DIR)/ccbind-parse.s: ccbind.c
+$(NATIVE_BUILD_DIR)/cckopt-opt.s: cckopt.c
+$(NATIVE_BUILD_DIR)/cckpread-opt.s: cckpread.c
+
+# Explicit dependencies with common GNU/BSD make recipes.
+
+$(OBJS):
+	@mkdir -p $(HOST_BUILD_DIR)
+	@name="$@"; name=$${name##*/}; name=$${name%.o}; \
+	    $(CC) $(CFLAGS) -c "$$name.c" -o "$@"
+
+$(ASMS): $(HOST_BUILD_DIR)/kcc
+	@mkdir -p $(HOST_BUILD_DIR)
+	@name="$@"; name=$${name##*/}; name=$${name%.s}; \
+	    $(KCC) $(KCC_SELF_FLAGS) -S "$$name.c" -o "$@"
+
+# Exact host source dependencies.
+$(HOST_BUILD_DIR)/cc.o $(HOST_BUILD_DIR)/cc.s: cc.c
+$(HOST_BUILD_DIR)/ccasmb.o $(HOST_BUILD_DIR)/ccasmb.s: ccasmb.c
+$(HOST_BUILD_DIR)/cccreg.o $(HOST_BUILD_DIR)/cccreg.s: cccreg.c
+$(HOST_BUILD_DIR)/cccse.o $(HOST_BUILD_DIR)/cccse.s: cccse.c
+$(HOST_BUILD_DIR)/cccode.o $(HOST_BUILD_DIR)/cccode.s: cccode.c
+$(HOST_BUILD_DIR)/ccdata.o $(HOST_BUILD_DIR)/ccdata.s: ccdata.c
+$(HOST_BUILD_DIR)/ccdbug.o $(HOST_BUILD_DIR)/ccdbug.s: ccdbug.c
+$(HOST_BUILD_DIR)/ccdecl.o $(HOST_BUILD_DIR)/ccdecl.s: ccdecl.c
+$(HOST_BUILD_DIR)/ccerr.o $(HOST_BUILD_DIR)/ccerr.s: ccerr.c
+$(HOST_BUILD_DIR)/cceval.o $(HOST_BUILD_DIR)/cceval.s: cceval.c
+$(HOST_BUILD_DIR)/ccgen.o $(HOST_BUILD_DIR)/ccgen.s: ccgen.c
+$(HOST_BUILD_DIR)/ccgen1.o $(HOST_BUILD_DIR)/ccgen1.s: ccgen1.c
+$(HOST_BUILD_DIR)/ccgen2.o $(HOST_BUILD_DIR)/ccgen2.s: ccgen2.c
+$(HOST_BUILD_DIR)/ccgswi.o $(HOST_BUILD_DIR)/ccgswi.s: ccgswi.c
+$(HOST_BUILD_DIR)/ccjskp.o $(HOST_BUILD_DIR)/ccjskp.s: ccjskp.c
+$(HOST_BUILD_DIR)/cclex.o $(HOST_BUILD_DIR)/cclex.s: cclex.c
+$(HOST_BUILD_DIR)/ccnode.o $(HOST_BUILD_DIR)/ccnode.s: ccnode.c
+$(HOST_BUILD_DIR)/ccout.o $(HOST_BUILD_DIR)/ccout.s: ccout.c
+$(HOST_BUILD_DIR)/ccoututil.o $(HOST_BUILD_DIR)/ccoututil.s: ccoututil.c
+$(HOST_BUILD_DIR)/ccpp.o $(HOST_BUILD_DIR)/ccpp.s: ccpp.c
+$(HOST_BUILD_DIR)/ccsrc.o $(HOST_BUILD_DIR)/ccsrc.s: ccsrc.c
+$(HOST_BUILD_DIR)/ccreg.o $(HOST_BUILD_DIR)/ccreg.s: ccreg.c
+$(HOST_BUILD_DIR)/ccstmt.o $(HOST_BUILD_DIR)/ccstmt.s: ccstmt.c
+$(HOST_BUILD_DIR)/ccsym.o $(HOST_BUILD_DIR)/ccsym.s: ccsym.c
+$(HOST_BUILD_DIR)/cctype.o $(HOST_BUILD_DIR)/cctype.s: cctype.c
+$(HOST_BUILD_DIR)/ccopt.o $(HOST_BUILD_DIR)/ccopt.s: ccopt.c
+$(HOST_BUILD_DIR)/ccvla.o $(HOST_BUILD_DIR)/ccvla.s: ccvla.c
 
 clean:
 	$(RM) -r $(HOST_BUILD_DIR) $(NATIVE_BUILD_DIR)
