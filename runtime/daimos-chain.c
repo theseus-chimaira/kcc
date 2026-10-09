@@ -97,6 +97,7 @@ daimos_exec_kgen(char *input, char *kp1, char *output, int optimize)
                 av[4] = outarg;
                 argc = 5U;
         }
+        fprintf(stderr, "kcc-debug: KPARSE exec KGEN\n");
         return daimos_exec_image(kgen_path, av, argc);
 }
 
@@ -119,5 +120,6 @@ daimos_exec_kopt(char *input, char *output)
         av[1] = "-D";                 /* private: remove consumed KP1 */
         av[2] = input;
         av[3] = outarg;
+        fprintf(stderr, "kcc-debug: KGEN exec KOPT\n");
         return daimos_exec_image(kopt_path, av, 4U);
 }

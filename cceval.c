@@ -281,6 +281,10 @@ chkovf(void)			/* check for arithmetic overflow */
 #endif
 {		
 #ifdef __COMPILER_KCC__
+    /* On the PDP-6 JFCL 011 also tests the PC-change flag.  Normal
+     * branches set that flag, so it is NOT a numeric overflow indicator.
+     * AR overflow (JFCL 010) covers arithmetic including floating overflow.
+     * Keep the test before SETZ so the flag is consumed exactly once. */
     asm("\tSETO	1,\n");		/* PREPARE TO RETURN TRUE (OVERFLOW) */
 #if SYS_CSI			/* FEW 2A(40) 29-Jul-92 */
     if (unsign)
@@ -291,9 +295,9 @@ chkovf(void)			/* check for arithmetic overflow */
 	    asm ("\tPOPJ 17,\n"); /* unsigned subtraction: true if clear */
 	}
     else
-	asm("\tJFCL   11, .+2\n");	/* JUMP IF OVERFLOW (AND CLEAR FLAG) */
+	asm("\tJFCL   10, .+2\n");	/* Test AR overflow only; not PC-change flag */
 #else
-    asm("\tJFCL   11, .+2\n");	/* JUMP IF OVERFLOW (AND CLEAR FLAG) */
+    asm("\tJFCL   10, .+2\n");	/* Test AR overflow only; not PC-change flag */
 #endif
     asm("\tSETZ	1,\n");		/* IF NO OVERFLOW, RETURN FALSE      */
 #else

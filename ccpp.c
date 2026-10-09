@@ -1384,6 +1384,15 @@ nextch (void)
     else
 	{
 	ch = ccsrc_getc(&srcin);
+#ifdef KCC_NATIVE_PHASE_TRACE
+	/* Count physical input bytes independently of logical source lines. */
+	if (ch != EOF) {
+	    static unsigned int trace_chars;
+	    if ((++trace_chars & 0777U) == 0U)
+		fprintf(stderr, "kcc-phase: KCPP input chars %u %s:%d\n",
+		    trace_chars, inpfname, fline);
+	}
+#endif
 	if (ch == '\r')
 	    {
 	    int next = ccsrc_getc(&srcin);
@@ -1600,6 +1609,11 @@ nextch (void)
 	line++;			/* new line, same page */
 	fline++;
 	tline++;
+#ifdef KCC_NATIVE_PHASE_TRACE
+	/* Report actual top-level input progress, not merely CPU activity. */
+	if (inlevel == 0 && (fline & 0177) == 0)
+	    fprintf(stderr, "kcc-phase: KCPP input line %d\n", fline);
+#endif
 
 	if (mlist && (inlevel <= 0))
 	    {

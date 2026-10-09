@@ -208,6 +208,9 @@ static const _char7 *debugscreen = "\n\
 int
 main (int argc, char **argv)
     {
+#if HOST_DAIMOS && KCC_PHASE_CPP && defined(KCC_NATIVE_PHASE_TRACE)
+    fprintf(stderr, "kcc-phase: KCPP main\n");
+#endif
 #if defined(__COMPILER_KCC__) && !HOST_DAIMOS
     extern int JOBERR;
 #endif
@@ -285,6 +288,9 @@ main (int argc, char **argv)
 
     /* Have initial command line; now scan for any indirect files (@file) */
     cindfiles(&argc, &argv);  
+#if HOST_DAIMOS && KCC_PHASE_CPP && defined(KCC_NATIVE_PHASE_TRACE)
+    fprintf(stderr, "kcc-phase: KCPP arguments ready\n");
+#endif
     /* Now have complete command line, report it if desired.
     ** This debugging switch needs to be patched in by hand, because at this
     ** point it cannot have been set yet from the command line!
@@ -395,6 +401,9 @@ main (int argc, char **argv)
 	for (av = argv+1, ac = argc; --ac > 0; ++av)
 	    if (*av && **av != '-')
 		{
+#if HOST_DAIMOS && KCC_PHASE_CPP && defined(KCC_NATIVE_PHASE_TRACE)
+		fprintf(stderr, "kcc-phase: KCPP begin source %s\n", *av);
+#endif
 		if (cfile(*av) == 0)	/* Compile a file */
 		    asmfiles++;		/* Count deferred assemblies */
 
@@ -1657,12 +1666,16 @@ module_loop:
 		warn("Null source file");
 	    }
 
-	while (!eof && token != T_EOF)
+    while (!eof && token != T_EOF)
 	    {
 	    savelits = 0;
 	    nodeinit();
 	    curfn = NULL;
+	    fprintf(stderr, "kcc-debug: KPARSE begin %s:%d\n",
+	        inpfname, fline);
 	    n = extdef();
+	    fprintf(stderr, "kcc-debug: KPARSE parsed %s:%d errors=%d\n",
+	        inpfname, fline, nerrors);
 	    if (optgen)
 		bindopt(n);
 	    if (kir_write_extdef(out, n) != 0)
@@ -1670,6 +1683,8 @@ module_loop:
 		jerr("Could not write KIR1 external definition");
 		break;
 		}
+	    fprintf(stderr, "kcc-debug: KPARSE extdef %s:%d errors=%d\n",
+	        inpfname, fline, nerrors);
 	    }
 
 	if (!module_pragma)
@@ -1894,11 +1909,17 @@ files (char *fname)
 
     /* in __MSDOS__  fnparse() calls fnsplit() */
 
+#if HOST_DAIMOS && KCC_PHASE_CPP && defined(KCC_NATIVE_PHASE_TRACE)
+    fprintf(stderr, "kcc-phase: KCPP before fnparse\n");
+#endif
     if ((cp = fnparse (fname, inpfdir, inpfmodule, ext, inpfsuf)) != NULL)
 	{
 	jerr ("Bad filename arg (%s): \"%s\"", cp, fname);	/* Ugh */
 	return 0;			/* and don't try to compile */
 	}
+#if HOST_DAIMOS && KCC_PHASE_CPP && defined(KCC_NATIVE_PHASE_TRACE)
+    fprintf(stderr, "kcc-phase: KCPP after fnparse\n");
+#endif
 
     if (fnxisrel(ext))	/* .obj for DOS */
 	return 0;
@@ -1989,6 +2010,9 @@ files (char *fname)
 	}
 #endif
     
+#if HOST_DAIMOS && KCC_PHASE_CPP && defined(KCC_NATIVE_PHASE_TRACE)
+    fprintf(stderr, "kcc-phase: KCPP first fopen returned\n");
+#endif
     if (in == NULL)
 	{
 #if KCC_PHASE_CORELIKE

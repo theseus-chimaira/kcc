@@ -26,6 +26,7 @@
 #define KIO_S6_TEXT        1UL
 #define KIO_S6_LEN_MASK    077777777UL
 #define KIO_WRITE_WORDS     0200U
+#define KIO_READ_WORDS      0200U
 
 struct kio_stream {
         int fd;
@@ -39,6 +40,9 @@ struct kio_stream {
         unsigned int record_left;
         unsigned int record_newline;
         kword_t word;
+        kword_t *read_words;
+        unsigned int read_next;
+        unsigned int read_count;
         kword_t *write_words;
         unsigned int write_count;
 };
@@ -215,6 +219,8 @@ fclose(FILE *fp)
                 rc = EOF;
         if (s->write_words != 0)
                 free(s->write_words);
+        if (s->read_words != 0)
+                free(s->read_words);
         memset(s, 0, sizeof(*s));
         return rc;
 }
@@ -275,15 +281,27 @@ kio_read_word(struct kio_stream *s)
 {
         int rc;
 
-        rc = dsys_read_words(s->fd, &s->word, 1U);
-        if (rc == 0) {
-                s->eof = 1U;
-                return 0;
+        if (s->read_next == s->read_count) {
+                if (s->read_words == 0) {
+                        s->read_words = (kword_t *)malloc(
+                            KIO_READ_WORDS * sizeof(kword_t));
+                        if (s->read_words == 0) {
+                                s->error = 1U;
+                                return 0;
+                        }
+                }
+                rc = dsys_read_words(s->fd, s->read_words, KIO_READ_WORDS);
+                if (rc <= 0 || (unsigned int)rc > KIO_READ_WORDS) {
+                        if (rc == 0)
+                                s->eof = 1U;
+                        else
+                                s->error = 1U;
+                        return 0;
+                }
+                s->read_next = 0U;
+                s->read_count = (unsigned int)rc;
         }
-        if (rc != 1) {
-                s->error = 1U;
-                return 0;
-        }
+        s->word = s->read_words[s->read_next++];
         return 1;
 }
 
@@ -437,6 +455,7 @@ fseek(FILE *fp, long offset, int whence)
         s->text_kind = KIO_TEXT_UNKNOWN;
         s->record_left = s->record_newline = 0U;
         s->word = 0UL;
+        s->read_next = s->read_count = 0U;
         return 0;
 }
 

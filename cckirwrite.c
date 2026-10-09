@@ -9,12 +9,16 @@ struct kir_wgraph {
     TYPE **types; unsigned nt, ct;
     SYMBOL **syms; unsigned *symids; unsigned ns, cs, nlocal;
     NODE **nodes; unsigned nn, cn;
+    /* Two address bounds per identity array, not a per-object hash table.
+     * Out-of-range pointers have never been inserted and need no scan. */
+    unsigned INT tmin, tmax, smin, smax, nmin, nmax;
 };
 
 struct kir_wmodule {
     SYMBOL **syms;
     INT *lastrefs;
     unsigned ns, cs;
+    unsigned INT pmin, pmax;
 };
 
 static struct kir_wmodule module_syms;
@@ -28,7 +32,8 @@ static void packint(INT *, INT);
 static unsigned addtype(struct kir_wgraph *, TYPE *);
 static unsigned addsym(struct kir_wgraph *, SYMBOL *);
 static unsigned addnode(struct kir_wgraph *, NODE *);
-static unsigned findptr(void **, unsigned, void *);
+static unsigned findptr(void **, unsigned, void *, const unsigned INT *);
+static void widenrange(unsigned INT *, unsigned INT *, unsigned, void *);
 static int grow(void ***, unsigned *, unsigned);
 static void freegraph(struct kir_wgraph *);
 static void freemodule(void);
@@ -67,12 +72,29 @@ packint(INT *d, INT v)
     }
 }
 
+/* Heap objects are commonly discovered outside the current address span.
+ * The numerical address test is only a NEGATIVE filter.  A possible match
+ * still receives the original exact pointer comparison, so identity/IDs do
+ * not change even on hosts where pointer representations contain tags. */
 static unsigned
-findptr(void **v, unsigned n, void *p)
+findptr(void **v, unsigned n, void *p, const unsigned INT *bounds)
 {
     unsigned i;
+    unsigned INT addr = (unsigned INT)p;
+    if (n == 0U || addr < bounds[0] || addr > bounds[1]) return 0;
     for (i = 0; i < n; ++i) if (v[i] == p) return i + 1;
     return 0;
+}
+
+static void
+widenrange(unsigned INT *lo, unsigned INT *hi, unsigned n, void *p)
+{
+    unsigned INT addr = (unsigned INT)p;
+    if (n == 0U) *lo = *hi = addr;
+    else {
+        if (addr < *lo) *lo = addr;
+        if (addr > *hi) *hi = addr;
+    }
 }
 
 static int
@@ -105,7 +127,8 @@ globalsymid(SYMBOL *s)
 
     if (s == NULL)
         return 0;
-    if ((id = findptr((void **)module_syms.syms, module_syms.ns, s)) != 0)
+    if ((id = findptr((void **)module_syms.syms, module_syms.ns, s,
+                      &module_syms.pmin)) != 0)
         return id;
     if (module_syms.ns == module_syms.cs) {
         nc = module_syms.cs ? module_syms.cs * 2U : 64U;
@@ -121,6 +144,7 @@ globalsymid(SYMBOL *s)
         module_syms.lastrefs = nr;
         module_syms.cs = nc;
     }
+    widenrange(&module_syms.pmin, &module_syms.pmax, module_syms.ns, s);
     module_syms.syms[module_syms.ns] = s;
     module_syms.lastrefs[module_syms.ns] = 0;
     ++module_syms.ns;
@@ -134,8 +158,10 @@ addtype(struct kir_wgraph *g, TYPE *t)
     NODE *bound;
     SYMBOL *bs;
     if (t == NULL) return 0;
-    if ((id = findptr((void **)g->types, g->nt, t)) != 0) return id;
+    if ((id = findptr((void **)g->types, g->nt, t, &g->tmin)) != 0)
+        return id;
     if (grow((void ***)&g->types, &g->ct, g->nt + 1)) return 0;
+    widenrange(&g->tmin, &g->tmax, g->nt, t);
     g->types[g->nt++] = t; id = g->nt;
     if (t->Tspec == TS_FUNCT || t->Tspec == TS_PARAM
       || t->Tspec == TS_PARVOID || t->Tspec == TS_PARINF)
@@ -159,9 +185,11 @@ addsym(struct kir_wgraph *g, SYMBOL *s)
     unsigned id, i;
     SYMBOL *base, *mark;
     if (s == NULL) return 0;
-    for (i = 0; i < g->ns; ++i)
-        if (g->syms[i] == s)
-            return g->symids[i];
+    if (g->ns != 0U && (unsigned INT)s >= g->smin &&
+        (unsigned INT)s <= g->smax)
+        for (i = 0; i < g->ns; ++i)
+            if (g->syms[i] == s)
+                return g->symids[i];
     if (g->ns == g->cs) {
         unsigned nc = g->cs ? g->cs * 2U : 64U;
         SYMBOL **sv = (SYMBOL **)realloc(g->syms, nc * sizeof(SYMBOL *));
@@ -180,9 +208,12 @@ addsym(struct kir_wgraph *g, SYMBOL *s)
     else
         id = (unsigned)KIR_LOCAL_ID_FLAG | ++g->nlocal;
     if (id == 0U) return 0;
+    widenrange(&g->smin, &g->smax, g->ns, s);
     g->syms[g->ns] = s;
     g->symids[g->ns] = id;
     ++g->ns;
+    if ((g->ns & 0377U) == 0U)
+        fprintf(stderr, "kcc-debug: KIR add-symbol count=%u\n", g->ns);
     (void)addtype(g, s->Stype);
     (void)addsym(g, s->Ssmnext);
     if (s->Sclass == SC_ISTATIC) (void)addsym(g, s->Ssym);
@@ -210,8 +241,10 @@ addnode(struct kir_wgraph *g, NODE *n)
 {
     unsigned id;
     if (n == NULL) return 0;
-    if ((id = findptr((void **)g->nodes, g->nn, n)) != 0) return id;
+    if ((id = findptr((void **)g->nodes, g->nn, n, &g->nmin)) != 0)
+        return id;
     if (grow((void ***)&g->nodes, &g->cn, g->nn + 1)) return 0;
+    widenrange(&g->nmin, &g->nmax, g->nn, n);
     g->nodes[g->nn++] = n; id = g->nn;
     (void)addtype(g, n->Ntype);
     switch (n->Nop) {
@@ -239,19 +272,23 @@ addnode(struct kir_wgraph *g, NODE *n)
 }
 
 static unsigned
-typeid(struct kir_wgraph *g, TYPE *p) { return findptr((void **)g->types, g->nt, p); }
+typeid(struct kir_wgraph *g, TYPE *p)
+{ return findptr((void **)g->types, g->nt, p, &g->tmin); }
 static unsigned
 symid(struct kir_wgraph *g, SYMBOL *p)
 {
     unsigned i;
     if (p == NULL) return 0;
-    for (i = 0; i < g->ns; ++i)
-        if (g->syms[i] == p)
-            return g->symids[i];
+    if (g->ns != 0U && (unsigned INT)p >= g->smin &&
+        (unsigned INT)p <= g->smax)
+        for (i = 0; i < g->ns; ++i)
+            if (g->syms[i] == p)
+                return g->symids[i];
     return 0;
 }
 static unsigned
-nodeid(struct kir_wgraph *g, NODE *p) { return findptr((void **)g->nodes, g->nn, p); }
+nodeid(struct kir_wgraph *g, NODE *p)
+{ return findptr((void **)g->nodes, g->nn, p, &g->nmin); }
 
 static int
 writetype(FILE *fp, struct kir_wgraph *g, unsigned id, TYPE *t)
@@ -279,6 +316,9 @@ writesym(FILE *fp, struct kir_wgraph *g, unsigned id, SYMBOL *s)
 {
     INT w[68]; unsigned n = 0, i, gid;
     INT refs;
+    if (fline >= 1000)
+        fprintf(stderr, "kcc-debug: writesym id=%u persistent-count=%u class=%d ptr=%o\n",
+            id, module_syms.ns, s->Sclass, (unsigned INT)s);
     w[n++] = id; w[n++] = s->Sreg; w[n++] = s->Sclass;
     packint(&w[n], s->Sflags); n += KIR_INT_CHUNKS;
     for (i = 0; i < IDENTSIZE; ++i) w[n++] = (unsigned char)s->Sname[i];
@@ -298,11 +338,18 @@ writesym(FILE *fp, struct kir_wgraph *g, unsigned id, SYMBOL *s)
     } else { w[n++] = 0; w[n++] = 0; }
     if (((unsigned INT)id & KIR_LOCAL_ID_FLAG) == 0) {
         gid = id;
+        if (gid == 0U || gid > module_syms.ns) {
+            fprintf(stderr, "kcc-debug: invalid persistent KIR ID=%u count=%u\n",
+                gid, module_syms.ns);
+            return -1;
+        }
         refs = (INT)s->Srefs - module_syms.lastrefs[gid - 1U];
         module_syms.lastrefs[gid - 1U] = (INT)s->Srefs;
     } else refs = (INT)s->Srefs;
     packint(&w[n], refs); n += KIR_INT_CHUNKS;
     w[n++] = s->Sinit; w[n++] = s->Sused;
+    if (fline >= 1000)
+        fprintf(stderr, "kcc-debug: writesym record id=%u count=%u\n", id, n);
     return writerec(fp, KIR_REC_SYMBOL, w, n);
 }
 
@@ -412,12 +459,18 @@ writegraph(FILE *fp, NODE *root)
 {
     struct kir_wgraph g; INT h[KIR_EXT_WORDS]; unsigned i;
     memset(&g, 0, sizeof(g));
+    fprintf(stderr, "kcc-debug: KIR writegraph enter\n");
     if (root != NULL && addnode(&g, root) == 0) { freegraph(&g); return -1; }
+    fprintf(stderr, "kcc-debug: KIR graph nodes=%u types=%u symbols=%u\n",
+        g.nn, g.nt, g.ns);
     if (curfn != NULL && addsym(&g, curfn) == 0) { freegraph(&g); return -1; }
+    fprintf(stderr, "kcc-debug: KIR after function symbols=%u\n", g.ns);
     for (i = 0; i < (unsigned)_reg_count; ++i)
         if (Reg_Id[i] != NULL && addsym(&g, Reg_Id[i]) == 0) {
             freegraph(&g); return -1;
         }
+    fprintf(stderr, "kcc-debug: KIR before serialize nodes=%u types=%u symbols=%u\n",
+        g.nn, g.nt, g.ns);
     memset(h, 0, sizeof(h));
     h[KIR_EXT_ROOT] = nodeid(&g, root);
     h[KIR_EXT_NTYPE] = g.nt;
@@ -439,16 +492,26 @@ writegraph(FILE *fp, NODE *root)
     for (i = 0; i < KIR_EXT_REGIDS; ++i)
         h[KIR_EXT_REGID0 + i] = (INT)symid(&g, Reg_Id[i]);
     if (writerec(fp, KIR_REC_EXTDEF, h, KIR_EXT_WORDS)) { freegraph(&g); return -1; }
+    fprintf(stderr, "kcc-debug: KIR header record written\n");
     for (i = 0; i < g.nt; ++i) if (writetype(fp, &g, i+1, g.types[i])) goto bad;
-    for (i = 0; i < g.ns; ++i)
+    fprintf(stderr, "kcc-debug: KIR type records written\n");
+    for (i = 0; i < g.ns; ++i) {
+        if (fline >= 1000)
+            fprintf(stderr, "kcc-debug: KIR serialize symbol i=%u of %u\n",
+                i, g.ns);
         if (writesym(fp, &g, g.symids[i], g.syms[i])) goto bad;
+    }
+    fprintf(stderr, "kcc-debug: KIR symbol records written\n");
     for (i = 0; i < g.nn; ++i) if (writenode(fp, &g, i+1, g.nodes[i])) goto bad;
+    fprintf(stderr, "kcc-debug: KIR node records written\n");
     for (i = 0; i < g.nn; ++i) if (writestring(fp, i+1, g.nodes[i])) goto bad;
     for (i = 0; i < g.nt; ++i) if (writevlatype(fp, &g, g.types[i])) goto bad;
     for (i = 0; i < g.ns; ++i) if (writevlaobject(fp, &g, g.syms[i])) goto bad;
     if (writerec(fp, KIR_REC_EXTEND, NULL, 0)) goto bad;
+    fprintf(stderr, "kcc-debug: KIR graph complete\n");
     freegraph(&g); return 0;
 bad:
+    fprintf(stderr, "kcc-debug: KIR serialization failed\n");
     freegraph(&g); return -1;
 }
 

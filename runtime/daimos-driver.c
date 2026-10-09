@@ -73,12 +73,28 @@ run_child(char *path, char **argv, unsigned int argc)
     run->envc = 0UL;
 
     pid = dsys_run(run);
-    if (pid < 0)
+    if (pid < 0) {
+        struct sys_meminfo mi;
+        fprintf(stderr, "kcc: cannot start phase %s (run=%d)\n", path, pid);
+        if (dsys_meminfo(&mi) == 0)
+            fprintf(stderr, "kcc: core %lu, extents %lu, process %lu, slots %lu/%lu, memfs %lu/%lu, files %lu/%lu\n",
+                (unsigned long)mi.total_words,
+                (unsigned long)mi.resident_words,
+                (unsigned long)mi.process_words,
+                (unsigned long)mi.process_slots_used,
+                (unsigned long)mi.process_slots_total,
+                (unsigned long)mi.memfs_used_words,
+                (unsigned long)mi.memfs_capacity_words,
+                (unsigned long)mi.file_slots_used,
+                (unsigned long)mi.file_slots_total);
         return 126;
+    }
     status = 0UL;
     if (dsys_wait((unsigned int)pid, &status, 0U) != pid ||
-        SYS_WAIT_STATUS_KIND(status) != SYS_WAIT_EXITED)
+        SYS_WAIT_STATUS_KIND(status) != SYS_WAIT_EXITED) {
+        fprintf(stderr, "kcc: phase wait failed: %s\n", path);
         return 126;
+    }
     return (int)SYS_WAIT_STATUS_VALUE(status);
 }
 
@@ -196,14 +212,25 @@ compile_one(char *source, char *output, int optimize,
     for (i = 0U; i < cpp_option_count; ++i)
         av[i + 2U] = cpp_options[i];
     av[2U + cpp_option_count] = source;
+#ifdef KCC_NATIVE_PHASE_TRACE
+    fprintf(stderr, "kcc-phase: enter KCPP\n");
+#endif
     rc = run_child(kcpp_path, av, 3U + cpp_option_count);
-    if (rc != 0)
+#ifdef KCC_NATIVE_PHASE_TRACE
+    fprintf(stderr, "kcc-phase: KCPP returned %d\n", rc);
+#endif
+    if (rc != 0) {
+        fprintf(stderr, "kcc: KCPP exited with status %d\n", rc);
         goto done;
+    }
 
     av[0] = "KPARSE";
     av[1] = kirarg;
     av[2] = kp1chain;
     av[3] = outchain;
+#ifdef KCC_NATIVE_PHASE_TRACE
+    fprintf(stderr, "kcc-phase: enter KPARSE\n");
+#endif
     if (optimize) {
         av[4] = kpt;
         rc = exec_child(kparse_path, av, 5U);
