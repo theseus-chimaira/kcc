@@ -4,8 +4,6 @@ KCC_SELF_FLAGS ?= -P=stdc+kcc -DHOST_UNIX=1 -Iself/include/ -Hself/include/
 PDP10_DAS ?= $(PDP10_PREFIX)/bin/das
 PDP10_DLINK ?= $(PDP10_PREFIX)/bin/dlink
 DAIMOS_REPO ?= ../DAIMOS
-# DAIMOS libc currently uses GNU-only rules; override with gmake on BSD hosts.
-DAIMOS_MAKE ?= make
 NATIVE_BUILD_DIR ?= build-native
 NATIVE_KCCFLAGS ?= -Pgnu99 -O -x=pdp6 -m=gas
 NATIVE_CPPFLAGS ?= -DHOST_DAIMOS=1 -DHOST_UNIX=0 -Iself/include/ -Hself/include/
@@ -219,7 +217,7 @@ $(NATIVE_RUNTIME_DIR):
 	mkdir -p $@
 
 $(NATIVE_DAIMOS_LIBC): $(KCC) $(DAIMOS_LIBC_SRCS)
-	env MAKEFLAGS= MFLAGS= $(DAIMOS_MAKE) -C $(DAIMOS_REPO)/userland/libc build \
+	$(MAKE) -C $(DAIMOS_REPO)/userland/libc build \
 		PDP10_PREFIX='$(PDP10_PREFIX)' BUILD_ROOT='$(NATIVE_DAIMOS_LIBC_ROOT)' \
 		CC='$(KCC_ABS)'
 
