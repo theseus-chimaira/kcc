@@ -36,11 +36,6 @@ HOST_BUILD_DIR ?= build
 KCC_ABS ?= $(KCC_ROOT)/$(HOST_BUILD_DIR)/kcc
 DAIMOS_LIBC_SRCS = $(DAIMOS_REPO)/userland/libc/Makefile $(DAIMOS_REPO)/userland/libc/crt0.s $(DAIMOS_REPO)/userland/libc/logevent.c $(DAIMOS_REPO)/userland/libc/memcpy.s $(DAIMOS_REPO)/userland/libc/memmove.s $(DAIMOS_REPO)/userland/libc/process_ctype.c $(DAIMOS_REPO)/userland/libc/stat_time.c $(DAIMOS_REPO)/userland/libc/stdlib.c $(DAIMOS_REPO)/userland/libc/string.c $(DAIMOS_REPO)/userland/libc/syscall.s $(DAIMOS_REPO)/userland/libc/syscall_helpers.s $(DAIMOS_REPO)/userland/libc/text.c $(DAIMOS_REPO)/userland/libc/u.c
 
-SRCS = \
-	cc.c ccasmb.c cccreg.c cccse.c cccode.c ccdata.c ccdbug.c ccdecl.c \
-	ccerr.c cceval.c ccgen.c ccgen1.c ccgen2.c ccgswi.c ccjskp.c cclex.c \
-	ccnode.c ccout.c ccoututil.c ccpp.c ccsrc.c ccreg.c ccstmt.c ccsym.c cctype.c ccopt.c \
-	ccvla.c
 # A prefixed, source-suffixed list permits portable GNU/BSD substitutions.
 HOST_BUILD_SRCS = \
 	$(HOST_BUILD_DIR)/cc.c $(HOST_BUILD_DIR)/ccasmb.c $(HOST_BUILD_DIR)/cccreg.c $(HOST_BUILD_DIR)/cccse.c $(HOST_BUILD_DIR)/cccode.c $(HOST_BUILD_DIR)/ccdata.c \
@@ -270,14 +265,10 @@ $(NATIVE_ASMS) $(NATIVE_PHASE_ASMS): $(NATIVE_HEADERS)
 
 # Native source dependencies; shared recipes vary only by phase.
 
-# PLAIN assembly variant.
-NATIVE_PLAIN_ASMS = \
-	$(NATIVE_BUILD_DIR)/cc.s $(NATIVE_BUILD_DIR)/ccasmb.s $(NATIVE_BUILD_DIR)/cccreg.s $(NATIVE_BUILD_DIR)/cccse.s $(NATIVE_BUILD_DIR)/cccode.s \
-	$(NATIVE_BUILD_DIR)/ccdata.s $(NATIVE_BUILD_DIR)/ccdbug.s $(NATIVE_BUILD_DIR)/ccdecl.s $(NATIVE_BUILD_DIR)/ccerr.s $(NATIVE_BUILD_DIR)/cceval.s \
-	$(NATIVE_BUILD_DIR)/ccgen.s $(NATIVE_BUILD_DIR)/ccgen1.s $(NATIVE_BUILD_DIR)/ccgen2.s $(NATIVE_BUILD_DIR)/ccgswi.s $(NATIVE_BUILD_DIR)/ccjskp.s \
-	$(NATIVE_BUILD_DIR)/cclex.s $(NATIVE_BUILD_DIR)/ccnode.s $(NATIVE_BUILD_DIR)/ccout.s $(NATIVE_BUILD_DIR)/ccoututil.s $(NATIVE_BUILD_DIR)/ccpp.s \
-	$(NATIVE_BUILD_DIR)/ccsrc.s $(NATIVE_BUILD_DIR)/ccreg.s $(NATIVE_BUILD_DIR)/ccstmt.s $(NATIVE_BUILD_DIR)/ccsym.s $(NATIVE_BUILD_DIR)/cctype.s \
-	$(NATIVE_BUILD_DIR)/ccopt.s $(NATIVE_BUILD_DIR)/ccvla.s $(NATIVE_BUILD_DIR)/cckirread.s $(NATIVE_BUILD_DIR)/cckirwrite.s
+# Ordinary native sources share their suffixes with the host source inventory.
+# The KIR reader and writer are native-only in the split bootstrap.
+NATIVE_PLAIN_ASMS = $(NATIVE_ASMS) $(NATIVE_BUILD_DIR)/cckirread.s \
+    $(NATIVE_BUILD_DIR)/cckirwrite.s
 
 $(NATIVE_PLAIN_ASMS): $(KCC)
 	@mkdir -p $(NATIVE_BUILD_DIR)
