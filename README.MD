@@ -138,3 +138,16 @@ The on-target graph is intentionally explicit. Changes to phase module lists
 must be reflected in `daimos.mk`'s object, archive and link rules. The
 `daimos-kcc-make-split-20261009-v1` test in daimos-testkit checks coverage
 and local header dependencies so missing object/header rules are detected.
+
+## Native MAKE graph preflight (2026-10-09)
+
+The initial on-target graph failed to parse because long cumulative `+=`
+assignments exceeded MAKE's bounded 256-character variable value buffer.
+Host/cross-only module inventories now reside in `unix.mk`; the shared root
+`Makefile` is a small platform selector. The full explicit incremental
+native graph is in `daimos.mk`, with local header prerequisites and phased
+archives. The host testkit verifies coverage against the Unix inventory.
+DAIMOS SIMH has passed native `MAKE -Q` (default and ALL), first-object
+`MAKE -N`, and `MAKE CLEAN`. A real CC-CPP.S build was attempted but timed
+out after reaching KCC and emitting `KCC000006`; native compilation and
+incremental rebuild of actual outputs remain pending acceptance gates.
