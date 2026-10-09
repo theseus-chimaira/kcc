@@ -4,6 +4,7 @@ KCC_SELF_FLAGS ?= -P=stdc+kcc -DHOST_UNIX=1 -Iself/include/ -Hself/include/
 PDP10_DAS ?= $(PDP10_PREFIX)/bin/das
 PDP10_DLINK ?= $(PDP10_PREFIX)/bin/dlink
 DAIMOS_REPO ?= ../DAIMOS
+MAKEDEPEND ?= $(HOST_BUILD_DIR)/makedepend-tool/makedepend
 NATIVE_BUILD_DIR ?= build-native
 NATIVE_KCCFLAGS ?= -Pgnu99 -O -x=pdp6 -m=gas
 NATIVE_CPPFLAGS ?= -DHOST_DAIMOS=1 -DHOST_UNIX=0 -Iself/include/ -Hself/include/
@@ -68,13 +69,6 @@ NATIVE_KOPT_DXR = $(NATIVE_BUILD_DIR)/KOPT.dxr
 NATIVE_DRIVER_DXR = $(NATIVE_BUILD_DIR)/KCC.dxr
 NATIVE_PHASE_DXRS = $(NATIVE_KCPP_DXR) $(NATIVE_KPARSE_DXR) \
 	$(NATIVE_KGEN_DXR) $(NATIVE_KOPT_DXR)
-NATIVE_HEADERS = \
-	c-env.h cc.h ccchar.h cccode.h ccerr.h \
-	ccgen.h cckir.h cckpcode.h cclex.h ccnode.h \
-	ccparm.h ccphase.h ccreg.h ccsite.h ccsrc.h \
-	ccsym.h cctoks.h ccvla.h kcchst.h self/include/ctype.h \
-	self/include/errno.h self/include/limits.h self/include/muuo.h self/include/stdarg.h self/include/stddef.h \
-	self/include/stdio.h self/include/stdlib.h self/include/string.h self/include/time.h
 NATIVE_PHASE_ASMS = $(NATIVE_CPP_ASMS) $(NATIVE_CORE_ASMS) $(NATIVE_GEN_ASMS) \
 	$(NATIVE_PARSE_ASMS) $(NATIVE_OPT_ASMS)
 
@@ -142,7 +136,10 @@ RUNTIME = \
 	$(RUNTIMEDIR)/ks10rt-kdfdv.s $(RUNTIMEDIR)/kccrt-zero.s \
 	$(RUNTIMEDIR)/kccrt-dimode-div.s
 
-all: $(HOST_BUILD_DIR)/kcc runtime
+all: depend
+	$(MAKE) host-built
+
+host-built: $(HOST_BUILD_DIR)/kcc runtime
 
 kcc: $(HOST_BUILD_DIR)/kcc
 
@@ -186,7 +183,10 @@ native-driver: $(NATIVE_DRIVER_DXR)
 # executables.
 # Keep the individual targets for iterative development; "make native"
 # must never leave an apparently prepared but incomplete bootstrap tree.
-native: $(HOST_BUILD_DIR)/kcc $(NATIVE_PHASE_DXRS) $(NATIVE_DRIVER_DXR) \
+native: depend
+	$(MAKE) native-built
+
+native-built: $(HOST_BUILD_DIR)/kcc $(NATIVE_PHASE_DXRS) $(NATIVE_DRIVER_DXR) \
 	$(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
 
 $(NATIVE_BUILD_DIR):
@@ -261,7 +261,6 @@ $(NATIVE_KOPT_DXR): $(NATIVE_KOPT_OBJS) $(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_L
 	$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KOPT.map \
 		$(NATIVE_LINK_RUNTIME) $(NATIVE_KOPT_OBJS) $(NATIVE_DAIMOS_LIBC)
 
-$(NATIVE_ASMS) $(NATIVE_PHASE_ASMS): $(NATIVE_HEADERS)
 
 # Native source dependencies; shared recipes vary only by phase.
 
@@ -330,45 +329,70 @@ $(NATIVE_OPT_ASMS): $(KCC)
 	    $(COMPILE_NATIVE) -DKCC_PHASE_OPT=1 -S "$$name.c" -o "$@"
 
 
-# Exact native source dependencies (all variants sharing each source).
-$(NATIVE_BUILD_DIR)/cc.s $(NATIVE_BUILD_DIR)/cc-cpp.s $(NATIVE_BUILD_DIR)/cc-core.s $(NATIVE_BUILD_DIR)/cc-parse.s: cc.c
-$(NATIVE_BUILD_DIR)/ccasmb.s: ccasmb.c
-$(NATIVE_BUILD_DIR)/cccreg.s: cccreg.c
-$(NATIVE_BUILD_DIR)/cccse.s: cccse.c
-$(NATIVE_BUILD_DIR)/cccode.s $(NATIVE_BUILD_DIR)/cccode-gen.s: cccode.c
-$(NATIVE_BUILD_DIR)/ccdata.s $(NATIVE_BUILD_DIR)/ccdata-cpp.s $(NATIVE_BUILD_DIR)/ccdata-core.s $(NATIVE_BUILD_DIR)/ccdata-gen.s $(NATIVE_BUILD_DIR)/ccdata-parse.s $(NATIVE_BUILD_DIR)/ccdata-opt.s: ccdata.c
-$(NATIVE_BUILD_DIR)/ccdbug.s: ccdbug.c
-$(NATIVE_BUILD_DIR)/ccdecl.s: ccdecl.c
-$(NATIVE_BUILD_DIR)/ccerr.s $(NATIVE_BUILD_DIR)/ccerr-cpp.s $(NATIVE_BUILD_DIR)/ccerr-core.s $(NATIVE_BUILD_DIR)/ccerr-gen.s $(NATIVE_BUILD_DIR)/ccerr-parse.s $(NATIVE_BUILD_DIR)/ccerr-opt.s: ccerr.c
-$(NATIVE_BUILD_DIR)/cceval.s: cceval.c
-$(NATIVE_BUILD_DIR)/ccgen.s $(NATIVE_BUILD_DIR)/ccgen-core.s $(NATIVE_BUILD_DIR)/ccgen-gen.s: ccgen.c
-$(NATIVE_BUILD_DIR)/ccgen1.s $(NATIVE_BUILD_DIR)/ccgen1-gen.s: ccgen1.c
-$(NATIVE_BUILD_DIR)/ccgen2.s: ccgen2.c
-$(NATIVE_BUILD_DIR)/ccgswi.s: ccgswi.c
-$(NATIVE_BUILD_DIR)/ccjskp.s: ccjskp.c
-$(NATIVE_BUILD_DIR)/cclex.s: cclex.c
-$(NATIVE_BUILD_DIR)/ccnode.s $(NATIVE_BUILD_DIR)/ccnode-gen.s: ccnode.c
-$(NATIVE_BUILD_DIR)/ccout.s $(NATIVE_BUILD_DIR)/ccout-cpp.s $(NATIVE_BUILD_DIR)/ccout-core.s $(NATIVE_BUILD_DIR)/ccout-opt.s: ccout.c
-$(NATIVE_BUILD_DIR)/ccoututil.s: ccoututil.c
-$(NATIVE_BUILD_DIR)/ccpp.s: ccpp.c
-$(NATIVE_BUILD_DIR)/ccsrc.s: ccsrc.c
-$(NATIVE_BUILD_DIR)/ccreg.s: ccreg.c
-$(NATIVE_BUILD_DIR)/ccstmt.s: ccstmt.c
-$(NATIVE_BUILD_DIR)/ccsym.s $(NATIVE_BUILD_DIR)/ccsym-cpp.s $(NATIVE_BUILD_DIR)/ccsym-gen.s: ccsym.c
-$(NATIVE_BUILD_DIR)/cctype.s $(NATIVE_BUILD_DIR)/cctype-gen.s: cctype.c
-$(NATIVE_BUILD_DIR)/ccopt.s: ccopt.c
-$(NATIVE_BUILD_DIR)/ccvla.s: ccvla.c
-$(NATIVE_BUILD_DIR)/cckirread.s: cckirread.c
-$(NATIVE_BUILD_DIR)/cckirwrite.s: cckirwrite.c
-$(NATIVE_BUILD_DIR)/ccppout.s: ccppout.c
-$(NATIVE_BUILD_DIR)/ccppin.s $(NATIVE_BUILD_DIR)/ccppin-gen.s: ccppin.c
-$(NATIVE_BUILD_DIR)/cckgen-gen.s: cckgen.c
-$(NATIVE_BUILD_DIR)/ccevalgen.s: ccevalgen.c
-$(NATIVE_BUILD_DIR)/cckpout-gen.s: cckpout.c
-$(NATIVE_BUILD_DIR)/cckpwrite-gen.s: cckpwrite.c
-$(NATIVE_BUILD_DIR)/ccbind-parse.s: ccbind.c
-$(NATIVE_BUILD_DIR)/cckopt-opt.s: cckopt.c
-$(NATIVE_BUILD_DIR)/cckpread-opt.s: cckpread.c
+HOST_SOURCE_FILES = \
+	cc.c ccasmb.c cccreg.c cccse.c cccode.c ccdata.c ccdbug.c \
+	ccdecl.c ccerr.c cceval.c ccgen.c ccgen1.c ccgen2.c ccgswi.c \
+	ccjskp.c cclex.c ccnode.c ccout.c ccoututil.c ccpp.c ccsrc.c \
+	ccreg.c ccstmt.c ccsym.c cctype.c ccopt.c ccvla.c
+NATIVE_SOURCE_FILES = $(HOST_SOURCE_FILES) cckirread.c cckirwrite.c \
+    ccppout.c ccppin.c cckgen.c ccevalgen.c cckpout.c cckpwrite.c \
+    ccbind.c cckopt.c cckpread.c
+
+NATIVE_VARIANTS = \
+	cc-cpp:cc.c:CPP cc-core:cc.c:CORE cc-parse:cc.c:PARSE cccode-gen:cccode.c:GEN ccdata-cpp:ccdata.c:CPP ccdata-core:ccdata.c:CORE ccdata-gen:ccdata.c:GEN \
+	ccdata-parse:ccdata.c:PARSE ccdata-opt:ccdata.c:OPT ccerr-cpp:ccerr.c:CPP ccerr-core:ccerr.c:CORE ccerr-gen:ccerr.c:GEN ccerr-parse:ccerr.c:PARSE ccerr-opt:ccerr.c:OPT \
+	ccgen-core:ccgen.c:CORE ccgen-gen:ccgen.c:GEN ccgen1-gen:ccgen1.c:GEN ccnode-gen:ccnode.c:GEN ccout-cpp:ccout.c:CPP ccout-core:ccout.c:CORE ccout-opt:ccout.c:OPT \
+	ccsym-cpp:ccsym.c:CPP ccsym-gen:ccsym.c:GEN cctype-gen:cctype.c:GEN ccppout:ccppout.c:CPP ccppin:ccppin.c:CORE ccppin-gen:ccppin.c:GEN cckgen-gen:cckgen.c:GEN \
+	ccevalgen:ccevalgen.c:GEN cckpout-gen:cckpout.c:GEN cckpwrite-gen:cckpwrite.c:GEN ccbind-parse:ccbind.c:PARSE cckopt-opt:cckopt.c:OPT cckpread-opt:cckpread.c:OPT
+
+# Generate exact source/header dependencies with the host-side X.Org scanner.
+# Both make implementations use an explicit first stage before parsing depend.mk.
+MAKEDEPEND_SRCS = $(DAIMOS_REPO)/userland/makedepend/main.c \
+    $(DAIMOS_REPO)/userland/makedepend/parse.c \
+    $(DAIMOS_REPO)/userland/makedepend/include.c \
+    $(DAIMOS_REPO)/userland/makedepend/pr.c \
+    $(DAIMOS_REPO)/userland/makedepend/cppsetup.c \
+    $(DAIMOS_REPO)/userland/makedepend/ifparser.c
+
+$(MAKEDEPEND): $(MAKEDEPEND_SRCS)
+	$(MAKE) -C $(DAIMOS_REPO)/userland/makedepend host \
+	    BUILD=$(KCC_ROOT)/$(HOST_BUILD_DIR)/makedepend-tool
+
+# The dependency file is regenerated before each user-requested build.
+# The second make invocation loads it; this avoids nonportable makefile remaking.
+depend: $(MAKEDEPEND)
+	@mkdir -p $(HOST_BUILD_DIR)
+	@set -e; output=$(HOST_BUILD_DIR)/depend.mk; temp=$$output.tmp; \
+	    host_inc=`$(CC) -print-file-name=include`; \
+	    $(MAKEDEPEND) -f- -p$(HOST_BUILD_DIR)/ -o.o \
+	        -I$$host_inc -I. $(HOST_SOURCE_FILES) > $$temp; \
+	    $(MAKEDEPEND) -f- -p$(HOST_BUILD_DIR)/ -o.s \
+	        -I$$host_inc -I. $(HOST_SOURCE_FILES) >> $$temp; \
+	    $(MAKEDEPEND) -f- -p$(NATIVE_BUILD_DIR)/ -o.s \
+	        -Yself/include -I. -Iself/include -D__COMPILER_KCC__=1 -DHOST_DAIMOS=1 -DHOST_UNIX=0 \
+	        $(NATIVE_SOURCE_FILES) >> $$temp; \
+	    for item in $(NATIVE_VARIANTS); do \
+	      target=$${item%%:*}; rest=$${item#*:}; source=$${rest%%:*}; phase=$${rest##*:}; \
+	      $(MAKEDEPEND) -f- -p$(NATIVE_BUILD_DIR)/ -o.s \
+	          -Yself/include -I. -Iself/include -D__COMPILER_KCC__=1 -DHOST_DAIMOS=1 -DHOST_UNIX=0 \
+	          -DKCC_PHASE_$$phase=1 $$source | \
+	          sed "s@^$(NATIVE_BUILD_DIR)/$${source%.c}\.s:@$(NATIVE_BUILD_DIR)/$$target.s:@" >> $$temp; \
+	    done; \
+	    for source in $(HOST_SOURCE_FILES); do \
+	      stem=$${source%.c}; \
+	      printf '%s: %s\n' "$(HOST_BUILD_DIR)/$$stem.o $(HOST_BUILD_DIR)/$$stem.s" "$$source" >> $$temp; \
+	    done; \
+	    for source in $(NATIVE_SOURCE_FILES); do \
+	      stem=$${source%.c}; \
+	      printf '%s: %s\n' "$(NATIVE_BUILD_DIR)/$$stem.s" "$$source" >> $$temp; \
+	    done; \
+	    for item in $(NATIVE_VARIANTS); do \
+	      target=$${item%%:*}; rest=$${item#*:}; source=$${rest%%:*}; \
+	      printf '%s: %s\n' "$(NATIVE_BUILD_DIR)/$$target.s" "$$source" >> $$temp; \
+	    done; \
+	    mv $$temp $$output
+
+-include $(HOST_BUILD_DIR)/depend.mk
 
 # Explicit dependencies with common GNU/BSD make recipes.
 
@@ -382,38 +406,9 @@ $(ASMS): $(HOST_BUILD_DIR)/kcc
 	@name="$@"; name=$${name##*/}; name=$${name%.s}; \
 	    $(KCC) $(KCC_SELF_FLAGS) -S "$$name.c" -o "$@"
 
-# Exact host source dependencies.
-$(HOST_BUILD_DIR)/cc.o $(HOST_BUILD_DIR)/cc.s: cc.c
-$(HOST_BUILD_DIR)/ccasmb.o $(HOST_BUILD_DIR)/ccasmb.s: ccasmb.c
-$(HOST_BUILD_DIR)/cccreg.o $(HOST_BUILD_DIR)/cccreg.s: cccreg.c
-$(HOST_BUILD_DIR)/cccse.o $(HOST_BUILD_DIR)/cccse.s: cccse.c
-$(HOST_BUILD_DIR)/cccode.o $(HOST_BUILD_DIR)/cccode.s: cccode.c
-$(HOST_BUILD_DIR)/ccdata.o $(HOST_BUILD_DIR)/ccdata.s: ccdata.c
-$(HOST_BUILD_DIR)/ccdbug.o $(HOST_BUILD_DIR)/ccdbug.s: ccdbug.c
-$(HOST_BUILD_DIR)/ccdecl.o $(HOST_BUILD_DIR)/ccdecl.s: ccdecl.c
-$(HOST_BUILD_DIR)/ccerr.o $(HOST_BUILD_DIR)/ccerr.s: ccerr.c
-$(HOST_BUILD_DIR)/cceval.o $(HOST_BUILD_DIR)/cceval.s: cceval.c
-$(HOST_BUILD_DIR)/ccgen.o $(HOST_BUILD_DIR)/ccgen.s: ccgen.c
-$(HOST_BUILD_DIR)/ccgen1.o $(HOST_BUILD_DIR)/ccgen1.s: ccgen1.c
-$(HOST_BUILD_DIR)/ccgen2.o $(HOST_BUILD_DIR)/ccgen2.s: ccgen2.c
-$(HOST_BUILD_DIR)/ccgswi.o $(HOST_BUILD_DIR)/ccgswi.s: ccgswi.c
-$(HOST_BUILD_DIR)/ccjskp.o $(HOST_BUILD_DIR)/ccjskp.s: ccjskp.c
-$(HOST_BUILD_DIR)/cclex.o $(HOST_BUILD_DIR)/cclex.s: cclex.c
-$(HOST_BUILD_DIR)/ccnode.o $(HOST_BUILD_DIR)/ccnode.s: ccnode.c
-$(HOST_BUILD_DIR)/ccout.o $(HOST_BUILD_DIR)/ccout.s: ccout.c
-$(HOST_BUILD_DIR)/ccoututil.o $(HOST_BUILD_DIR)/ccoututil.s: ccoututil.c
-$(HOST_BUILD_DIR)/ccpp.o $(HOST_BUILD_DIR)/ccpp.s: ccpp.c
-$(HOST_BUILD_DIR)/ccsrc.o $(HOST_BUILD_DIR)/ccsrc.s: ccsrc.c
-$(HOST_BUILD_DIR)/ccreg.o $(HOST_BUILD_DIR)/ccreg.s: ccreg.c
-$(HOST_BUILD_DIR)/ccstmt.o $(HOST_BUILD_DIR)/ccstmt.s: ccstmt.c
-$(HOST_BUILD_DIR)/ccsym.o $(HOST_BUILD_DIR)/ccsym.s: ccsym.c
-$(HOST_BUILD_DIR)/cctype.o $(HOST_BUILD_DIR)/cctype.s: cctype.c
-$(HOST_BUILD_DIR)/ccopt.o $(HOST_BUILD_DIR)/ccopt.s: ccopt.c
-$(HOST_BUILD_DIR)/ccvla.o $(HOST_BUILD_DIR)/ccvla.s: ccvla.c
-
 clean:
 	$(RM) -r $(HOST_BUILD_DIR) $(NATIVE_BUILD_DIR)
 
-.PHONY: kcc all asm self-asm native-asm native-objects native-kcpp-objects \
+.PHONY: depend host-built native-built kcc all asm self-asm native-asm native-objects native-kcpp-objects \
 	native-kcc1-objects native-kparse-objects native-kgen-objects native-kopt-objects native-phase-objects native-phase-dxrs native-driver native runtime install install-runtime \
 	uninstall clean
