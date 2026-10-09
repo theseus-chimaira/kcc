@@ -14,12 +14,12 @@ LDFLAGS ?=
 INSTALL ?= install
 RM ?= rm -f
 PREFIX ?= /usr/local
-PDP10_PREFIX ?= $(PREFIX)
-BINDIR ?= $(PDP10_PREFIX)/bin
-KCCLIBDIR ?= $(PDP10_PREFIX)/lib/kcc
-KCC ?= $(HOST_BUILD_DIR)/kcc
-KCC_ABS ?= $(KCC_ROOT)/$(HOST_BUILD_DIR)/kcc
-MAKEDEPEND ?= $(HOST_BUILD_DIR)/makedepend-tool/makedepend
+PDP10_PREFIX ?= $(HOME)/git/local
+BINDIR ?= $(PREFIX)/bin
+LIBDIR ?= $(PREFIX)/lib
+KCCLIBDIR ?= $(LIBDIR)/kcc
+KCC ?= $(KCC_ROOT)/$(HOST_BUILD_DIR)/kcc
+MAKEDEPEND ?= makedepend
 KCC_SELF_FLAGS ?= -P=stdc+kcc -DHOST_UNIX=1 -Iself/include/ -Hself/include/
 
 # PDP-10 assembler/linker and native compilation personality.
@@ -138,16 +138,16 @@ RUNTIME = \
 all: depend
 	$(MAKE) host-built
 
-host-built: $(HOST_BUILD_DIR)/kcc runtime
+host-built: $(KCC) runtime
 
-kcc: $(HOST_BUILD_DIR)/kcc
+kcc: $(KCC)
 
 $(HOST_BUILD_DIR):
 	mkdir -p $@
 
 .DELETE_ON_ERROR:
 
-$(HOST_BUILD_DIR)/kcc: $(OBJS)
+$(KCC): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $(OBJS)
 
 $(HOST_BUILD_DIR)/ccgen.o $(HOST_BUILD_DIR)/ccgen1.o $(HOST_BUILD_DIR)/ccgen2.o: cc.h ccgen.h
@@ -185,7 +185,7 @@ native-driver: $(NATIVE_DRIVER_DXR)
 native: depend
 	$(MAKE) native-built
 
-native-built: $(HOST_BUILD_DIR)/kcc $(NATIVE_PHASE_DXRS) $(NATIVE_DRIVER_DXR) \
+native-built: $(KCC) $(NATIVE_PHASE_DXRS) $(NATIVE_DRIVER_DXR) \
 	$(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
 
 $(NATIVE_BUILD_DIR):
@@ -197,7 +197,7 @@ $(NATIVE_RUNTIME_DIR):
 $(NATIVE_DAIMOS_LIBC): $(KCC) $(DAIMOS_LIBC_SRCS)
 	$(MAKE) -C $(DAIMOS_REPO)/userland/libc build \
 		PDP10_PREFIX='$(PDP10_PREFIX)' BUILD_ROOT='$(NATIVE_DAIMOS_LIBC_ROOT)' \
-		CC='$(KCC_ABS)'
+		CC='$(KCC)'
 
 $(NATIVE_DAIMOS_SYSCALL_OBJ): $(DAIMOS_REPO)/userland/libc/syscall.s $(NATIVE_DAIMOS_LIBC)
 	$(PDP10_DAS) -F -C -O $@ $(DAIMOS_REPO)/userland/libc/syscall.s
@@ -348,21 +348,12 @@ NATIVE_VARIANTS = \
 
 # Generate exact source/header dependencies with the host-side X.Org scanner.
 # Both make implementations use an explicit first stage before parsing depend.mk.
-# Source inventory for the X.Org host dependency scanner imported in DAIMOS.
-MAKEDEPEND_SRCS = $(DAIMOS_REPO)/userland/makedepend/main.c \
-    $(DAIMOS_REPO)/userland/makedepend/parse.c \
-    $(DAIMOS_REPO)/userland/makedepend/include.c \
-    $(DAIMOS_REPO)/userland/makedepend/pr.c \
-    $(DAIMOS_REPO)/userland/makedepend/cppsetup.c \
-    $(DAIMOS_REPO)/userland/makedepend/ifparser.c
-
-$(MAKEDEPEND): $(MAKEDEPEND_SRCS)
-	$(MAKE) -C $(DAIMOS_REPO)/userland/makedepend host \
-	    BUILD=$(KCC_ROOT)/$(HOST_BUILD_DIR)/makedepend-tool
+# makedepend is a standard host command, installed independently from KCC.
+# Supply MAKEDEPEND=/path/to/makedepend when it is not on PATH.
 
 # The dependency file is regenerated before each user-requested build.
 # The second make invocation loads it; this avoids nonportable makefile remaking.
-depend: $(MAKEDEPEND)
+depend:
 	@mkdir -p $(HOST_BUILD_DIR)
 	@set -e; output=$(HOST_BUILD_DIR)/depend.mk; temp=$$output.tmp; \
 	    host_inc=`$(CC) -print-file-name=include`; \
@@ -403,10 +394,28 @@ $(OBJS):
 	@name="$@"; name=$${name##*/}; name=$${name%.o}; \
 	    $(CC) $(CFLAGS) -c "$$name.c" -o "$@"
 
-$(ASMS): $(HOST_BUILD_DIR)/kcc
+$(ASMS): $(KCC)
 	@mkdir -p $(HOST_BUILD_DIR)
 	@name="$@"; name=$${name##*/}; name=$${name%.s}; \
 	    $(KCC) $(KCC_SELF_FLAGS) -S "$$name.c" -o "$@"
+
+runtime: $(RUNTIME)
+
+# Host installation is independent of the cross-toolchain search prefix.
+install: all
+	$(INSTALL) -d $(DESTDIR)$(BINDIR)
+	$(INSTALL) -m 755 $(KCC) $(DESTDIR)$(BINDIR)/kcc
+	$(MAKE) install-runtime
+
+install-runtime: runtime
+	$(INSTALL) -d $(DESTDIR)$(KCCLIBDIR)
+	$(INSTALL) -m 644 $(RUNTIME) $(DESTDIR)$(KCCLIBDIR)/
+
+uninstall:
+	$(RM) $(DESTDIR)$(BINDIR)/kcc
+	@for f in $(RUNTIME); do \
+	    $(RM) "$(DESTDIR)$(KCCLIBDIR)/$${f##*/}"; \
+	done
 
 clean:
 	$(RM) -r $(HOST_BUILD_DIR) $(NATIVE_BUILD_DIR)
