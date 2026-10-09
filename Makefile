@@ -1,41 +1,55 @@
-CC ?= cc
-KCC ?= build/kcc
-KCC_SELF_FLAGS ?= -P=stdc+kcc -DHOST_UNIX=1 -Iself/include/ -Hself/include/
-PDP10_DAS ?= $(PDP10_PREFIX)/bin/das
-PDP10_DLINK ?= $(PDP10_PREFIX)/bin/dlink
-DAIMOS_REPO ?= ../DAIMOS
-MAKEDEPEND ?= $(HOST_BUILD_DIR)/makedepend-tool/makedepend
+# Build layout and external source trees.
+# Override DAIMOS_REPO to use a different checkout; never assume KCC and
+# DAIMOS are sibling directories. The default matches the project layout.
+KCC_ROOT != pwd
+DAIMOS_REPO ?= $(HOME)/git/DAIMOS
+HOST_BUILD_DIR ?= build
 NATIVE_BUILD_DIR ?= build-native
-NATIVE_KCCFLAGS ?= -Pgnu99 -O -x=pdp6 -m=gas
-NATIVE_CPPFLAGS ?= -DHOST_DAIMOS=1 -DHOST_UNIX=0 -Iself/include/ -Hself/include/
+RUNTIMEDIR = runtime
 
+# Host compiler and installation locations.
+CC ?= cc
 CFLAGS += -std=c99 -funsigned-char
 LDFLAGS ?=
 INSTALL ?= install
 RM ?= rm -f
-
 PREFIX ?= /usr/local
 PDP10_PREFIX ?= $(PREFIX)
 BINDIR ?= $(PDP10_PREFIX)/bin
 KCCLIBDIR ?= $(PDP10_PREFIX)/lib/kcc
+KCC ?= $(HOST_BUILD_DIR)/kcc
+KCC_ABS ?= $(KCC_ROOT)/$(HOST_BUILD_DIR)/kcc
+MAKEDEPEND ?= $(HOST_BUILD_DIR)/makedepend-tool/makedepend
+KCC_SELF_FLAGS ?= -P=stdc+kcc -DHOST_UNIX=1 -Iself/include/ -Hself/include/
+
+# PDP-10 assembler/linker and native compilation personality.
+PDP10_DAS ?= $(PDP10_PREFIX)/bin/das
+PDP10_DLINK ?= $(PDP10_PREFIX)/bin/dlink
+NATIVE_KCCFLAGS ?= -Pgnu99 -O -x=pdp6 -m=gas
+NATIVE_CPPFLAGS ?= -DHOST_DAIMOS=1 -DHOST_UNIX=0 -Iself/include/ -Hself/include/
+COMPILE_NATIVE = $(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS)
+ASSEMBLE_NATIVE = $(PDP10_DAS) -F -C -O $@ $<
+
+# DAIMOS libc include paths and inputs used to detect native ABI changes.
 DAIMOS_CPP_INCLUDES = -I$(DAIMOS_REPO)/userland/libc \
 	-I$(DAIMOS_REPO)/system/kernel/boot -I$(DAIMOS_REPO)/system/kernel/core \
 	-I$(DAIMOS_REPO)/system/kernel/drivers -I$(DAIMOS_REPO)/system/kernel/fs \
 	-I$(DAIMOS_REPO)/system/kernel/mm -I$(DAIMOS_REPO)/system/kernel/modules \
 	-I$(DAIMOS_REPO)/system/kernel/proc -I$(DAIMOS_REPO)/system/kernel/storage \
 	-I$(PDP10_PREFIX)/include
-RUNTIMEDIR = runtime
+DAIMOS_LIBC_SRCS = $(DAIMOS_REPO)/userland/libc/Makefile \
+	$(DAIMOS_REPO)/userland/libc/crt0.s $(DAIMOS_REPO)/userland/libc/logevent.c \
+	$(DAIMOS_REPO)/userland/libc/memcpy.s $(DAIMOS_REPO)/userland/libc/memmove.s \
+	$(DAIMOS_REPO)/userland/libc/process_ctype.c $(DAIMOS_REPO)/userland/libc/stat_time.c \
+	$(DAIMOS_REPO)/userland/libc/stdlib.c $(DAIMOS_REPO)/userland/libc/string.c \
+	$(DAIMOS_REPO)/userland/libc/syscall.s $(DAIMOS_REPO)/userland/libc/syscall_helpers.s \
+	$(DAIMOS_REPO)/userland/libc/text.c $(DAIMOS_REPO)/userland/libc/u.c
+
+# Discard built-in suffix rules; retain only PDP-10 assembly inference.
 .SUFFIXES:
 .SUFFIXES: .s .dobj
 .s.dobj:
 	$(ASSEMBLE_NATIVE)
-
-ASSEMBLE_NATIVE = $(PDP10_DAS) -F -C -O $@ $<
-COMPILE_NATIVE = $(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS)
-KCC_ROOT != pwd
-HOST_BUILD_DIR ?= build
-KCC_ABS ?= $(KCC_ROOT)/$(HOST_BUILD_DIR)/kcc
-DAIMOS_LIBC_SRCS = $(DAIMOS_REPO)/userland/libc/Makefile $(DAIMOS_REPO)/userland/libc/crt0.s $(DAIMOS_REPO)/userland/libc/logevent.c $(DAIMOS_REPO)/userland/libc/memcpy.s $(DAIMOS_REPO)/userland/libc/memmove.s $(DAIMOS_REPO)/userland/libc/process_ctype.c $(DAIMOS_REPO)/userland/libc/stat_time.c $(DAIMOS_REPO)/userland/libc/stdlib.c $(DAIMOS_REPO)/userland/libc/string.c $(DAIMOS_REPO)/userland/libc/syscall.s $(DAIMOS_REPO)/userland/libc/syscall_helpers.s $(DAIMOS_REPO)/userland/libc/text.c $(DAIMOS_REPO)/userland/libc/u.c
 
 # A prefixed, source-suffixed list permits portable GNU/BSD substitutions.
 HOST_BUILD_SRCS = \
@@ -72,6 +86,8 @@ NATIVE_PHASE_DXRS = $(NATIVE_KCPP_DXR) $(NATIVE_KPARSE_DXR) \
 NATIVE_PHASE_ASMS = $(NATIVE_CPP_ASMS) $(NATIVE_CORE_ASMS) $(NATIVE_GEN_ASMS) \
 	$(NATIVE_PARSE_ASMS) $(NATIVE_OPT_ASMS)
 
+# Native phase link membership: different phases select different ABI
+# personalities for certain shared C sources. Keep this ordering stable.
 NATIVE_KCPP_OBJS = \
 	$(NATIVE_BUILD_DIR)/cc-cpp.dobj $(NATIVE_BUILD_DIR)/ccasmb.dobj \
 	$(NATIVE_BUILD_DIR)/ccdata-cpp.dobj $(NATIVE_BUILD_DIR)/ccerr-cpp.dobj $(NATIVE_BUILD_DIR)/ccout-cpp.dobj \
@@ -125,6 +141,7 @@ NATIVE_KOPT_OBJS = \
 	$(NATIVE_BUILD_DIR)/ccoututil.dobj $(NATIVE_BUILD_DIR)/ccdata-opt.dobj \
 	$(NATIVE_BUILD_DIR)/ccerr-opt.dobj $(NATIVE_BUILD_DIR)/ccasmb.dobj
 
+# Architecture-specific runtime assembly installed alongside host KCC.
 RUNTIME = \
 	$(RUNTIMEDIR)/pdp6rt-adjbp.s $(RUNTIMEDIR)/pdp6rt-kdfad.s \
 	$(RUNTIMEDIR)/pdp6rt-kdfsb.s $(RUNTIMEDIR)/pdp6rt-kdfmp.s \
@@ -329,6 +346,7 @@ $(NATIVE_OPT_ASMS): $(KCC)
 	    $(COMPILE_NATIVE) -DKCC_PHASE_OPT=1 -S "$$name.c" -o "$@"
 
 
+# Sources scanned by host makedepend (ordinary KCC and native-only files).
 HOST_SOURCE_FILES = \
 	cc.c ccasmb.c cccreg.c cccse.c cccode.c ccdata.c ccdbug.c \
 	ccdecl.c ccerr.c cceval.c ccgen.c ccgen1.c ccgen2.c ccgswi.c \
@@ -338,6 +356,7 @@ NATIVE_SOURCE_FILES = $(HOST_SOURCE_FILES) cckirread.c cckirwrite.c \
     ccppout.c ccppin.c cckgen.c ccevalgen.c cckpout.c cckpwrite.c \
     ccbind.c cckopt.c cckpread.c
 
+# target:source:phase triples for variant-specific preprocessing dependencies.
 NATIVE_VARIANTS = \
 	cc-cpp:cc.c:CPP cc-core:cc.c:CORE cc-parse:cc.c:PARSE cccode-gen:cccode.c:GEN ccdata-cpp:ccdata.c:CPP ccdata-core:ccdata.c:CORE ccdata-gen:ccdata.c:GEN \
 	ccdata-parse:ccdata.c:PARSE ccdata-opt:ccdata.c:OPT ccerr-cpp:ccerr.c:CPP ccerr-core:ccerr.c:CORE ccerr-gen:ccerr.c:GEN ccerr-parse:ccerr.c:PARSE ccerr-opt:ccerr.c:OPT \
@@ -347,6 +366,7 @@ NATIVE_VARIANTS = \
 
 # Generate exact source/header dependencies with the host-side X.Org scanner.
 # Both make implementations use an explicit first stage before parsing depend.mk.
+# Source inventory for the X.Org host dependency scanner imported in DAIMOS.
 MAKEDEPEND_SRCS = $(DAIMOS_REPO)/userland/makedepend/main.c \
     $(DAIMOS_REPO)/userland/makedepend/parse.c \
     $(DAIMOS_REPO)/userland/makedepend/include.c \
