@@ -12,6 +12,7 @@ struct kir_wgraph {
     /* Two address bounds per identity array, not a per-object hash table.
      * Out-of-range pointers have never been inserted and need no scan. */
     unsigned INT tmin, tmax, smin, smax, nmin, nmax;
+    int failed;                 /* sticky recursive allocation/identity failure */
 };
 
 struct kir_wmodule {
@@ -160,7 +161,9 @@ addtype(struct kir_wgraph *g, TYPE *t)
     if (t == NULL) return 0;
     if ((id = findptr((void **)g->types, g->nt, t, &g->tmin)) != 0)
         return id;
-    if (grow((void ***)&g->types, &g->ct, g->nt + 1)) return 0;
+    if (grow((void ***)&g->types, &g->ct, g->nt + 1)) {
+        g->failed = 1; return 0;
+    }
     widenrange(&g->tmin, &g->tmax, g->nt, t);
     g->types[g->nt++] = t; id = g->nt;
     if (t->Tspec == TS_FUNCT || t->Tspec == TS_PARAM
@@ -197,7 +200,7 @@ addsym(struct kir_wgraph *g, SYMBOL *s)
         if (sv == NULL || iv == NULL) {
             if (sv != NULL) g->syms = sv;
             if (iv != NULL) g->symids = iv;
-            return 0;
+            g->failed = 1; return 0;
         }
         g->syms = sv;
         g->symids = iv;
@@ -207,7 +210,7 @@ addsym(struct kir_wgraph *g, SYMBOL *s)
         id = globalsymid(s);
     else
         id = (unsigned)KIR_LOCAL_ID_FLAG | ++g->nlocal;
-    if (id == 0U) return 0;
+    if (id == 0U) { g->failed = 1; return 0; }
     widenrange(&g->smin, &g->smax, g->ns, s);
     g->syms[g->ns] = s;
     g->symids[g->ns] = id;
@@ -241,7 +244,9 @@ addnode(struct kir_wgraph *g, NODE *n)
     if (n == NULL) return 0;
     if ((id = findptr((void **)g->nodes, g->nn, n, &g->nmin)) != 0)
         return id;
-    if (grow((void ***)&g->nodes, &g->cn, g->nn + 1)) return 0;
+    if (grow((void ***)&g->nodes, &g->cn, g->nn + 1)) {
+        g->failed = 1; return 0;
+    }
     widenrange(&g->nmin, &g->nmax, g->nn, n);
     g->nodes[g->nn++] = n; id = g->nn;
     (void)addtype(g, n->Ntype);
@@ -451,6 +456,7 @@ static int
 writegraph(FILE *fp, NODE *root)
 {
     struct kir_wgraph g; INT h[KIR_EXT_WORDS]; unsigned i;
+    const char *stage = "header";
     memset(&g, 0, sizeof(g));
     if (root != NULL && addnode(&g, root) == 0) { freegraph(&g); return -1; }
     if (curfn != NULL && addsym(&g, curfn) == 0) { freegraph(&g); return -1; }
@@ -458,6 +464,11 @@ writegraph(FILE *fp, NODE *root)
         if (Reg_Id[i] != NULL && addsym(&g, Reg_Id[i]) == 0) {
             freegraph(&g); return -1;
         }
+    if (g.failed) {
+        fprintf(stderr, "KIR graph allocation/identity failure: types=%u symbols=%u nodes=%u\n",
+            g.nt, g.ns, g.nn);
+        freegraph(&g); return -1;
+    }
     memset(h, 0, sizeof(h));
     h[KIR_EXT_ROOT] = nodeid(&g, root);
     h[KIR_EXT_NTYPE] = g.nt;
@@ -479,16 +490,25 @@ writegraph(FILE *fp, NODE *root)
     for (i = 0; i < KIR_EXT_REGIDS; ++i)
         h[KIR_EXT_REGID0 + i] = (INT)symid(&g, Reg_Id[i]);
     if (writerec(fp, KIR_REC_EXTDEF, h, KIR_EXT_WORDS)) { freegraph(&g); return -1; }
+    stage = "types";
     for (i = 0; i < g.nt; ++i) if (writetype(fp, &g, i+1, g.types[i])) goto bad;
+    stage = "symbols";
     for (i = 0; i < g.ns; ++i)
         if (writesym(fp, &g, g.symids[i], g.syms[i])) goto bad;
+    stage = "nodes";
     for (i = 0; i < g.nn; ++i) if (writenode(fp, &g, i+1, g.nodes[i])) goto bad;
+    stage = "strings";
     for (i = 0; i < g.nn; ++i) if (writestring(fp, i+1, g.nodes[i])) goto bad;
+    stage = "VLA types";
     for (i = 0; i < g.nt; ++i) if (writevlatype(fp, &g, g.types[i])) goto bad;
+    stage = "VLA objects";
     for (i = 0; i < g.ns; ++i) if (writevlaobject(fp, &g, g.syms[i])) goto bad;
+    stage = "terminator";
     if (writerec(fp, KIR_REC_EXTEND, NULL, 0)) goto bad;
     freegraph(&g); return 0;
 bad:
+    fprintf(stderr, "KIR graph write failed in %s at %u: types=%u symbols=%u nodes=%u ferror=%d\n",
+        stage, i, g.nt, g.ns, g.nn, ferror(fp));
     freegraph(&g); return -1;
 }
 
