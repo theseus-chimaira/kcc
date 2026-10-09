@@ -453,16 +453,25 @@ kir_write_header(FILE *fp)
 }
 
 static int
+failedgraph(struct kir_wgraph *g, const char *where)
+{
+    fprintf(stderr, "KIR graph discovery failure in %s: types=%u symbols=%u nodes=%u sticky=%d\n",
+        where, g->nt, g->ns, g->nn, g->failed);
+    freegraph(g);
+    return -1;
+}
+
+static int
 writegraph(FILE *fp, NODE *root)
 {
     struct kir_wgraph g; INT h[KIR_EXT_WORDS]; unsigned i;
     const char *stage = "header";
     memset(&g, 0, sizeof(g));
-    if (root != NULL && addnode(&g, root) == 0) { freegraph(&g); return -1; }
-    if (curfn != NULL && addsym(&g, curfn) == 0) { freegraph(&g); return -1; }
+    if (root != NULL && addnode(&g, root) == 0) return failedgraph(&g, "root");
+    if (curfn != NULL && addsym(&g, curfn) == 0) return failedgraph(&g, "current function");
     for (i = 0; i < (unsigned)_reg_count; ++i)
         if (Reg_Id[i] != NULL && addsym(&g, Reg_Id[i]) == 0) {
-            freegraph(&g); return -1;
+            return failedgraph(&g, "register symbol");
         }
     if (g.failed) {
         fprintf(stderr, "KIR graph allocation/identity failure: types=%u symbols=%u nodes=%u\n",
