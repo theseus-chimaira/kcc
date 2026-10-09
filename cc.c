@@ -1671,11 +1671,7 @@ module_loop:
 	    savelits = 0;
 	    nodeinit();
 	    curfn = NULL;
-	    fprintf(stderr, "kcc-debug: KPARSE begin %s:%d\n",
-	        inpfname, fline);
 	    n = extdef();
-	    fprintf(stderr, "kcc-debug: KPARSE parsed %s:%d errors=%d\n",
-	        inpfname, fline, nerrors);
 	    if (optgen)
 		bindopt(n);
 	    if (kir_write_extdef(out, n) != 0)
@@ -1683,8 +1679,6 @@ module_loop:
 		jerr("Could not write KIR1 external definition");
 		break;
 		}
-	    fprintf(stderr, "kcc-debug: KPARSE extdef %s:%d errors=%d\n",
-	        inpfname, fline, nerrors);
 	    }
 
 	if (!module_pragma)

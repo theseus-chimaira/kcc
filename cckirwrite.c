@@ -212,8 +212,6 @@ addsym(struct kir_wgraph *g, SYMBOL *s)
     g->syms[g->ns] = s;
     g->symids[g->ns] = id;
     ++g->ns;
-    if ((g->ns & 0377U) == 0U)
-        fprintf(stderr, "kcc-debug: KIR add-symbol count=%u\n", g->ns);
     (void)addtype(g, s->Stype);
     (void)addsym(g, s->Ssmnext);
     if (s->Sclass == SC_ISTATIC) (void)addsym(g, s->Ssym);
@@ -316,9 +314,6 @@ writesym(FILE *fp, struct kir_wgraph *g, unsigned id, SYMBOL *s)
 {
     INT w[68]; unsigned n = 0, i, gid;
     INT refs;
-    if (fline >= 1000)
-        fprintf(stderr, "kcc-debug: writesym id=%u persistent-count=%u class=%d ptr=%o\n",
-            id, module_syms.ns, s->Sclass, (unsigned INT)s);
     w[n++] = id; w[n++] = s->Sreg; w[n++] = s->Sclass;
     packint(&w[n], s->Sflags); n += KIR_INT_CHUNKS;
     for (i = 0; i < IDENTSIZE; ++i) w[n++] = (unsigned char)s->Sname[i];
@@ -339,7 +334,7 @@ writesym(FILE *fp, struct kir_wgraph *g, unsigned id, SYMBOL *s)
     if (((unsigned INT)id & KIR_LOCAL_ID_FLAG) == 0) {
         gid = id;
         if (gid == 0U || gid > module_syms.ns) {
-            fprintf(stderr, "kcc-debug: invalid persistent KIR ID=%u count=%u\n",
+            fprintf(stderr, "KIR invalid persistent symbol ID=%u (count=%u)\n",
                 gid, module_syms.ns);
             return -1;
         }
@@ -348,8 +343,6 @@ writesym(FILE *fp, struct kir_wgraph *g, unsigned id, SYMBOL *s)
     } else refs = (INT)s->Srefs;
     packint(&w[n], refs); n += KIR_INT_CHUNKS;
     w[n++] = s->Sinit; w[n++] = s->Sused;
-    if (fline >= 1000)
-        fprintf(stderr, "kcc-debug: writesym record id=%u count=%u\n", id, n);
     return writerec(fp, KIR_REC_SYMBOL, w, n);
 }
 
@@ -459,18 +452,12 @@ writegraph(FILE *fp, NODE *root)
 {
     struct kir_wgraph g; INT h[KIR_EXT_WORDS]; unsigned i;
     memset(&g, 0, sizeof(g));
-    fprintf(stderr, "kcc-debug: KIR writegraph enter\n");
     if (root != NULL && addnode(&g, root) == 0) { freegraph(&g); return -1; }
-    fprintf(stderr, "kcc-debug: KIR graph nodes=%u types=%u symbols=%u\n",
-        g.nn, g.nt, g.ns);
     if (curfn != NULL && addsym(&g, curfn) == 0) { freegraph(&g); return -1; }
-    fprintf(stderr, "kcc-debug: KIR after function symbols=%u\n", g.ns);
     for (i = 0; i < (unsigned)_reg_count; ++i)
         if (Reg_Id[i] != NULL && addsym(&g, Reg_Id[i]) == 0) {
             freegraph(&g); return -1;
         }
-    fprintf(stderr, "kcc-debug: KIR before serialize nodes=%u types=%u symbols=%u\n",
-        g.nn, g.nt, g.ns);
     memset(h, 0, sizeof(h));
     h[KIR_EXT_ROOT] = nodeid(&g, root);
     h[KIR_EXT_NTYPE] = g.nt;
@@ -492,26 +479,16 @@ writegraph(FILE *fp, NODE *root)
     for (i = 0; i < KIR_EXT_REGIDS; ++i)
         h[KIR_EXT_REGID0 + i] = (INT)symid(&g, Reg_Id[i]);
     if (writerec(fp, KIR_REC_EXTDEF, h, KIR_EXT_WORDS)) { freegraph(&g); return -1; }
-    fprintf(stderr, "kcc-debug: KIR header record written\n");
     for (i = 0; i < g.nt; ++i) if (writetype(fp, &g, i+1, g.types[i])) goto bad;
-    fprintf(stderr, "kcc-debug: KIR type records written\n");
-    for (i = 0; i < g.ns; ++i) {
-        if (fline >= 1000)
-            fprintf(stderr, "kcc-debug: KIR serialize symbol i=%u of %u\n",
-                i, g.ns);
+    for (i = 0; i < g.ns; ++i)
         if (writesym(fp, &g, g.symids[i], g.syms[i])) goto bad;
-    }
-    fprintf(stderr, "kcc-debug: KIR symbol records written\n");
     for (i = 0; i < g.nn; ++i) if (writenode(fp, &g, i+1, g.nodes[i])) goto bad;
-    fprintf(stderr, "kcc-debug: KIR node records written\n");
     for (i = 0; i < g.nn; ++i) if (writestring(fp, i+1, g.nodes[i])) goto bad;
     for (i = 0; i < g.nt; ++i) if (writevlatype(fp, &g, g.types[i])) goto bad;
     for (i = 0; i < g.ns; ++i) if (writevlaobject(fp, &g, g.syms[i])) goto bad;
     if (writerec(fp, KIR_REC_EXTEND, NULL, 0)) goto bad;
-    fprintf(stderr, "kcc-debug: KIR graph complete\n");
     freegraph(&g); return 0;
 bad:
-    fprintf(stderr, "kcc-debug: KIR serialization failed\n");
     freegraph(&g); return -1;
 }
 
