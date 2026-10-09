@@ -86,60 +86,42 @@ NATIVE_PHASE_DXRS = $(NATIVE_KCPP_DXR) $(NATIVE_KPARSE_DXR) \
 NATIVE_PHASE_ASMS = $(NATIVE_CPP_ASMS) $(NATIVE_CORE_ASMS) $(NATIVE_GEN_ASMS) \
 	$(NATIVE_PARSE_ASMS) $(NATIVE_OPT_ASMS)
 
-# Native phase link membership: different phases select different ABI
-# personalities for certain shared C sources. Keep this ordering stable.
-NATIVE_KCPP_OBJS = \
-	$(NATIVE_BUILD_DIR)/cc-cpp.dobj $(NATIVE_BUILD_DIR)/ccasmb.dobj \
-	$(NATIVE_BUILD_DIR)/ccdata-cpp.dobj $(NATIVE_BUILD_DIR)/ccerr-cpp.dobj $(NATIVE_BUILD_DIR)/ccout-cpp.dobj \
-	$(NATIVE_BUILD_DIR)/ccpp.dobj $(NATIVE_BUILD_DIR)/ccppout.dobj \
-	$(NATIVE_BUILD_DIR)/ccsym-cpp.dobj $(NATIVE_BUILD_DIR)/ccsrc.dobj
+# Native phase link membership: each list names logical .c variants, some of
+# which are not physical source files (for example ccdata-gen.c). Compile
+# rules map variants to their real sources and select the phase defines.
+# Portable GNU/BSD suffix substitution derives .dobj paths; runtime objects
+# retain their separate directory. Preserve link order.
+NATIVE_KCPP_MODULES = \
+	$(NATIVE_BUILD_DIR)/cc-cpp.c $(NATIVE_BUILD_DIR)/ccasmb.c $(NATIVE_BUILD_DIR)/ccdata-cpp.c $(NATIVE_BUILD_DIR)/ccerr-cpp.c $(NATIVE_BUILD_DIR)/ccout-cpp.c $(NATIVE_BUILD_DIR)/ccpp.c \
+	$(NATIVE_BUILD_DIR)/ccppout.c $(NATIVE_BUILD_DIR)/ccsym-cpp.c $(NATIVE_BUILD_DIR)/ccsrc.c
+NATIVE_KCPP_OBJS = $(NATIVE_KCPP_MODULES:.c=.dobj)
 
-NATIVE_KCC1_OBJS = \
-	$(NATIVE_BUILD_DIR)/cc-core.dobj $(NATIVE_BUILD_DIR)/ccasmb.dobj \
-	$(NATIVE_BUILD_DIR)/cccreg.dobj $(NATIVE_BUILD_DIR)/cccse.dobj \
-	$(NATIVE_BUILD_DIR)/cccode.dobj $(NATIVE_BUILD_DIR)/ccdata-core.dobj \
-	$(NATIVE_BUILD_DIR)/ccdbug.dobj $(NATIVE_BUILD_DIR)/ccdecl.dobj \
-	$(NATIVE_BUILD_DIR)/ccerr-core.dobj $(NATIVE_BUILD_DIR)/cceval.dobj \
-	$(NATIVE_BUILD_DIR)/ccgen-core.dobj $(NATIVE_BUILD_DIR)/ccgen1.dobj \
-	$(NATIVE_BUILD_DIR)/ccgen2.dobj $(NATIVE_BUILD_DIR)/ccgswi.dobj \
-	$(NATIVE_BUILD_DIR)/ccjskp.dobj $(NATIVE_BUILD_DIR)/cclex.dobj \
-	$(NATIVE_BUILD_DIR)/ccnode.dobj $(NATIVE_BUILD_DIR)/ccout-core.dobj \
-	$(NATIVE_BUILD_DIR)/ccreg.dobj $(NATIVE_BUILD_DIR)/ccstmt.dobj \
-	$(NATIVE_BUILD_DIR)/ccsym.dobj $(NATIVE_BUILD_DIR)/cctype.dobj \
-	$(NATIVE_BUILD_DIR)/ccopt.dobj $(NATIVE_BUILD_DIR)/ccoututil.dobj \
-	$(NATIVE_BUILD_DIR)/ccppin.dobj $(NATIVE_BUILD_DIR)/ccvla.dobj
+# Historical standalone CORE object target (not linked by make native).
+NATIVE_KCC1_MODULES = \
+	$(NATIVE_BUILD_DIR)/cc-core.c $(NATIVE_BUILD_DIR)/ccasmb.c $(NATIVE_BUILD_DIR)/cccreg.c $(NATIVE_BUILD_DIR)/cccse.c $(NATIVE_BUILD_DIR)/cccode.c $(NATIVE_BUILD_DIR)/ccdata-core.c \
+	$(NATIVE_BUILD_DIR)/ccdbug.c $(NATIVE_BUILD_DIR)/ccdecl.c $(NATIVE_BUILD_DIR)/ccerr-core.c $(NATIVE_BUILD_DIR)/cceval.c $(NATIVE_BUILD_DIR)/ccgen-core.c $(NATIVE_BUILD_DIR)/ccgen1.c \
+	$(NATIVE_BUILD_DIR)/ccgen2.c $(NATIVE_BUILD_DIR)/ccgswi.c $(NATIVE_BUILD_DIR)/ccjskp.c $(NATIVE_BUILD_DIR)/cclex.c $(NATIVE_BUILD_DIR)/ccnode.c $(NATIVE_BUILD_DIR)/ccout-core.c \
+	$(NATIVE_BUILD_DIR)/ccreg.c $(NATIVE_BUILD_DIR)/ccstmt.c $(NATIVE_BUILD_DIR)/ccsym.c $(NATIVE_BUILD_DIR)/cctype.c $(NATIVE_BUILD_DIR)/ccopt.c $(NATIVE_BUILD_DIR)/ccoututil.c \
+	$(NATIVE_BUILD_DIR)/ccppin.c $(NATIVE_BUILD_DIR)/ccvla.c
+NATIVE_KCC1_OBJS = $(NATIVE_KCC1_MODULES:.c=.dobj)
 
-NATIVE_KPARSE_OBJS = \
-	$(NATIVE_BUILD_DIR)/cc-parse.dobj $(NATIVE_RUNTIME_DIR)/daimos-chain.dobj $(NATIVE_RUNTIME_DIR)/daimos-path.dobj \
-	$(NATIVE_BUILD_DIR)/ccasmb.dobj \
-	$(NATIVE_BUILD_DIR)/ccdata-parse.dobj $(NATIVE_BUILD_DIR)/ccbind-parse.dobj $(NATIVE_BUILD_DIR)/ccdbug.dobj \
-	$(NATIVE_BUILD_DIR)/ccdecl.dobj $(NATIVE_BUILD_DIR)/ccerr-parse.dobj \
-	$(NATIVE_BUILD_DIR)/cceval.dobj $(NATIVE_BUILD_DIR)/cclex.dobj \
-	$(NATIVE_BUILD_DIR)/ccnode.dobj $(NATIVE_BUILD_DIR)/ccppin.dobj \
-	$(NATIVE_BUILD_DIR)/ccstmt.dobj $(NATIVE_BUILD_DIR)/ccsym.dobj \
-	$(NATIVE_BUILD_DIR)/cctype.dobj $(NATIVE_BUILD_DIR)/ccoututil.dobj \
-	$(NATIVE_BUILD_DIR)/cckirwrite.dobj $(NATIVE_BUILD_DIR)/ccvla.dobj
+NATIVE_KPARSE_MODULES = \
+	$(NATIVE_BUILD_DIR)/cc-parse.c $(NATIVE_BUILD_DIR)/ccasmb.c $(NATIVE_BUILD_DIR)/ccdata-parse.c $(NATIVE_BUILD_DIR)/ccbind-parse.c $(NATIVE_BUILD_DIR)/ccdbug.c $(NATIVE_BUILD_DIR)/ccdecl.c \
+	$(NATIVE_BUILD_DIR)/ccerr-parse.c $(NATIVE_BUILD_DIR)/cceval.c $(NATIVE_BUILD_DIR)/cclex.c $(NATIVE_BUILD_DIR)/ccnode.c $(NATIVE_BUILD_DIR)/ccppin.c $(NATIVE_BUILD_DIR)/ccstmt.c \
+	$(NATIVE_BUILD_DIR)/ccsym.c $(NATIVE_BUILD_DIR)/cctype.c $(NATIVE_BUILD_DIR)/ccoututil.c $(NATIVE_BUILD_DIR)/cckirwrite.c $(NATIVE_BUILD_DIR)/ccvla.c
+NATIVE_KPARSE_OBJS = $(NATIVE_KPARSE_MODULES:.c=.dobj) $(NATIVE_RUNTIME_DIR)/daimos-chain.dobj $(NATIVE_RUNTIME_DIR)/daimos-path.dobj
 
-NATIVE_KGEN_OBJS = \
-	$(NATIVE_BUILD_DIR)/cckgen-gen.dobj $(NATIVE_RUNTIME_DIR)/daimos-chain.dobj $(NATIVE_RUNTIME_DIR)/daimos-path.dobj \
-	$(NATIVE_BUILD_DIR)/cccreg.dobj $(NATIVE_BUILD_DIR)/cccse.dobj \
-	$(NATIVE_BUILD_DIR)/cccode-gen.dobj $(NATIVE_BUILD_DIR)/ccdata-gen.dobj \
-	$(NATIVE_BUILD_DIR)/ccdbug.dobj $(NATIVE_BUILD_DIR)/ccerr-gen.dobj \
-	$(NATIVE_BUILD_DIR)/ccevalgen.dobj \
-	$(NATIVE_BUILD_DIR)/ccgen-gen.dobj $(NATIVE_BUILD_DIR)/ccgen1-gen.dobj \
-	$(NATIVE_BUILD_DIR)/ccgen2.dobj $(NATIVE_BUILD_DIR)/ccgswi.dobj \
-	$(NATIVE_BUILD_DIR)/ccjskp.dobj \
-	$(NATIVE_BUILD_DIR)/ccnode-gen.dobj $(NATIVE_BUILD_DIR)/ccreg.dobj \
-	$(NATIVE_BUILD_DIR)/ccsym-gen.dobj \
-	$(NATIVE_BUILD_DIR)/cctype-gen.dobj $(NATIVE_BUILD_DIR)/ccopt.dobj \
-	$(NATIVE_BUILD_DIR)/ccoututil.dobj $(NATIVE_BUILD_DIR)/cckpout-gen.dobj \
-	$(NATIVE_BUILD_DIR)/cckpwrite-gen.dobj $(NATIVE_BUILD_DIR)/cckirread.dobj \
-	$(NATIVE_BUILD_DIR)/ccvla.dobj
+NATIVE_KGEN_MODULES = \
+	$(NATIVE_BUILD_DIR)/cckgen-gen.c $(NATIVE_BUILD_DIR)/cccreg.c $(NATIVE_BUILD_DIR)/cccse.c $(NATIVE_BUILD_DIR)/cccode-gen.c $(NATIVE_BUILD_DIR)/ccdata-gen.c $(NATIVE_BUILD_DIR)/ccdbug.c \
+	$(NATIVE_BUILD_DIR)/ccerr-gen.c $(NATIVE_BUILD_DIR)/ccevalgen.c $(NATIVE_BUILD_DIR)/ccgen-gen.c $(NATIVE_BUILD_DIR)/ccgen1-gen.c $(NATIVE_BUILD_DIR)/ccgen2.c $(NATIVE_BUILD_DIR)/ccgswi.c \
+	$(NATIVE_BUILD_DIR)/ccjskp.c $(NATIVE_BUILD_DIR)/ccnode-gen.c $(NATIVE_BUILD_DIR)/ccreg.c $(NATIVE_BUILD_DIR)/ccsym-gen.c $(NATIVE_BUILD_DIR)/cctype-gen.c $(NATIVE_BUILD_DIR)/ccopt.c \
+	$(NATIVE_BUILD_DIR)/ccoututil.c $(NATIVE_BUILD_DIR)/cckpout-gen.c $(NATIVE_BUILD_DIR)/cckpwrite-gen.c $(NATIVE_BUILD_DIR)/cckirread.c $(NATIVE_BUILD_DIR)/ccvla.c
+NATIVE_KGEN_OBJS = $(NATIVE_KGEN_MODULES:.c=.dobj) $(NATIVE_RUNTIME_DIR)/daimos-chain.dobj $(NATIVE_RUNTIME_DIR)/daimos-path.dobj
 
-NATIVE_KOPT_OBJS = \
-	$(NATIVE_BUILD_DIR)/cckopt-opt.dobj $(NATIVE_RUNTIME_DIR)/daimos-path.dobj $(NATIVE_BUILD_DIR)/cckpread-opt.dobj $(NATIVE_BUILD_DIR)/ccout-opt.dobj \
-	$(NATIVE_BUILD_DIR)/ccoututil.dobj $(NATIVE_BUILD_DIR)/ccdata-opt.dobj \
-	$(NATIVE_BUILD_DIR)/ccerr-opt.dobj $(NATIVE_BUILD_DIR)/ccasmb.dobj
+NATIVE_KOPT_MODULES = \
+	$(NATIVE_BUILD_DIR)/cckopt-opt.c $(NATIVE_BUILD_DIR)/cckpread-opt.c $(NATIVE_BUILD_DIR)/ccout-opt.c $(NATIVE_BUILD_DIR)/ccoututil.c $(NATIVE_BUILD_DIR)/ccdata-opt.c $(NATIVE_BUILD_DIR)/ccerr-opt.c \
+	$(NATIVE_BUILD_DIR)/ccasmb.c
+NATIVE_KOPT_OBJS = $(NATIVE_KOPT_MODULES:.c=.dobj) $(NATIVE_RUNTIME_DIR)/daimos-path.dobj
 
 # Architecture-specific runtime assembly installed alongside host KCC.
 RUNTIME = \
