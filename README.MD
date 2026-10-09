@@ -108,3 +108,33 @@ PREFER, IN ORDER:
 4. SMALLER DISK SIZE.
 
 AVOID FEATURE CREEP AND TARGET-SPECIFIC COMPLEXITY WITHOUT A DEMONSTRATED NEED.
+
+## Shared KCC Makefiles (2026-10-09)
+
+`Makefile` contains the authoritative native phase module inventories and the
+platform selector. `unix.mk` contains host KCC and cross-compiler bootstrap
+rules (the default `make` build); `daimos.mk` contains the on-target incremental
+build, with each source and its transitive local headers as prerequisites.
+Do not restore the old DAIMOS Python Makefile generator or separate generated
+phase Makefiles. Edit the KCC build description in this repository instead.
+
+On Unix:
+
+    make host-built
+    make native-built
+    make install-native
+
+For DAIMOS, stage the common `Makefile` and `daimos.mk` using DAIMOS's
+`scripts/stage-kcc-sources-v1.sh`. Staging changes `PLATFORM ?= unix` into
+`PLATFORM ?= daimos`, uppercases file names and text, converts Unix recipe
+prefixes into DAIMOS `>`/direct-RUN prefixes and encodes the result as S6REC.
+The resulting `/OPTION/SOURCE/KCC/MAKEFILE` includes `DAIMOS.MK`. Native
+`MAKE ALL` rebuilds the four phase DXRs and driver; `MAKE INSTALL` installs
+them. BOOT runtime objects and libc archive must already be staged. Archive
+chunks bound DLINK argument count. Run full native KCC compilation manually;
+this refactor has only received host parsing and staging preflight tests.
+
+The on-target graph is intentionally explicit. Changes to phase module lists
+must be reflected in `daimos.mk`'s object, archive and link rules. The
+`daimos-kcc-make-split-20261009-v1` test in daimos-testkit checks coverage
+and local header dependencies so missing object/header rules are detected.
