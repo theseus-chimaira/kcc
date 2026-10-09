@@ -15,6 +15,7 @@ INSTALL ?= install
 RM ?= rm -f
 PREFIX ?= /usr/local
 PDP10_PREFIX ?= $(HOME)/git/local
+NATIVE_BOOTSTRAP_DIR ?= $(PDP10_PREFIX)/lib/kcc/bootstrap
 BINDIR ?= $(PREFIX)/bin
 LIBDIR ?= $(PREFIX)/lib
 KCCLIBDIR ?= $(LIBDIR)/kcc
@@ -187,6 +188,22 @@ native: depend
 
 native-built: $(KCC) $(NATIVE_PHASE_DXRS) $(NATIVE_DRIVER_DXR) \
 	$(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
+
+# Bootstrap DXRs are installed separately from the Unix-hosted compiler.
+# DAIMOS reads these stable paths instead of private build-tree artifacts.
+install-native: native-built
+	$(INSTALL) -d $(NATIVE_BOOTSTRAP_DIR)
+	$(INSTALL) -m 555 $(NATIVE_DRIVER_DXR) $(NATIVE_BOOTSTRAP_DIR)/KCC.dxr
+	$(INSTALL) -m 555 $(NATIVE_KCPP_DXR) $(NATIVE_BOOTSTRAP_DIR)/KCPP.dxr
+	$(INSTALL) -m 555 $(NATIVE_KPARSE_DXR) $(NATIVE_BOOTSTRAP_DIR)/KPARSE.dxr
+	$(INSTALL) -m 555 $(NATIVE_KGEN_DXR) $(NATIVE_BOOTSTRAP_DIR)/KGEN.dxr
+	$(INSTALL) -m 555 $(NATIVE_KOPT_DXR) $(NATIVE_BOOTSTRAP_DIR)/KOPT.dxr
+	$(INSTALL) -d $(NATIVE_BOOTSTRAP_DIR)/runtime $(NATIVE_BOOTSTRAP_DIR)/daimos-libc/libc
+	$(INSTALL) -m 444 $(NATIVE_RUNTIME_DIR)/crt0.dobj $(NATIVE_BOOTSTRAP_DIR)/runtime/crt0-v1.dobj
+	$(INSTALL) -m 444 $(NATIVE_RUNTIME_DIR)/daimos-bootstrap.dobj $(NATIVE_BOOTSTRAP_DIR)/runtime/daimos-bootstrap-v1.dobj
+	$(INSTALL) -m 444 $(NATIVE_RUNTIME_DIR)/syscall-helpers.dobj $(NATIVE_BOOTSTRAP_DIR)/runtime/syscall-helpers-v1.dobj
+	$(INSTALL) -m 444 $(NATIVE_DAIMOS_SYSCALL_OBJ) $(NATIVE_BOOTSTRAP_DIR)/daimos-libc/libc/syscall.dobj
+	$(INSTALL) -m 444 $(NATIVE_DAIMOS_LIBC) $(NATIVE_BOOTSTRAP_DIR)/daimos-libc/libc/libc.a
 
 $(NATIVE_BUILD_DIR):
 	mkdir -p $@
