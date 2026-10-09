@@ -31,9 +31,10 @@
 # source-tar output
 /kcc-source.tar.gz
 
-# versioned native bootstrap outputs
-/build-native-v1/
 
 # editor/reject leftovers
 *~
 *.rej
+
+/build/
+/build-native/
