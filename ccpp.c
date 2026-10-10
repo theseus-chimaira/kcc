@@ -5685,14 +5685,6 @@ else
     }
 }
 
-/* DAIMOS includes are C-SIX text records; its binary stream mode
- * decodes packed nine-bit bytes instead.  Other hosts retain binary mode. */
-#if HOST_DAIMOS
-#define CPP_INCLUDE_MODE "r"
-#else
-#define CPP_INCLUDE_MODE "rb"
-#endif
-
 /* D_INCLUDE() - Process #include directive
 **
 **	 Note that this emulates the Un*x compiler behavior by
@@ -5725,7 +5717,7 @@ d_include (void)
     if (*f == '/')
 	{
 	estrcpy(f2, f);
-	fp = fopen(f2, CPP_INCLUDE_MODE);	/* Try to open just this one */
+	fp = fopen(f2, "rb");	/* Try to open just this one */
 	++done;				/* Always done now */
 	}
 else if (ftype != '>')
@@ -5740,13 +5732,13 @@ else if (ftype != '>')
 	{
 	estrcpy(estrcpy(estrcpy(f2,	/* Use source filename pref+suff */
 		inpfdir), f), inpfsuf);
-	if ((fp = fopen(f2, CPP_INCLUDE_MODE)) != NULL)
+	if ((fp = fopen(f2, "rb")) != NULL)
 	    ++done;
 else			/* V 2A(37): try the user's filespec
 						    exactly as given (SPR 9577) */
 	    {
 	    estrcpy(f2, f);
-	    if ((fp = fopen(f2, CPP_INCLUDE_MODE)) != NULL)
+	    if ((fp = fopen (f2, "rb")) != NULL)
 		++done;
 	    }
     }
@@ -5806,7 +5798,7 @@ cinctry(int n, char ** ptab, char * f2, char * f, FILE ** fp)
 #else
 	fstrcpy(f2, *ptab, f);		/* Build filename to try */
 #endif
-	if ((*fp = fopen(f2, CPP_INCLUDE_MODE)) != NULL)
+	if ((*fp = fopen(f2, "rb")) != NULL)
 	    return 1;			/* Won! */
 	}
     return 0;				/* No stop and no opens... */
