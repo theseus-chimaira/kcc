@@ -1,0 +1,247 @@
+# Shared inventories, settings, and dependency scanning for Unix-hosted KCC.
+# Host and cross build inventories.
+# Shared KCC build inventory. Use PLATFORM=DAIMOS for the native build.
+# The staged SIXBIT file is uppercased and uses DAIMOS.MK.
+PLATFORM ?= unix
+HOST_BUILD_DIR ?= build
+NATIVE_BUILD_DIR ?= build-native
+
+HOST_SOURCE_FILES = \
+	cc.c ccasmb.c cccreg.c cccse.c cccode.c ccdata.c ccdbug.c \
+	ccdecl.c ccerr.c cceval.c ccgen.c ccgen1.c ccgen2.c ccgswi.c \
+	ccjskp.c cclex.c ccnode.c ccout.c ccoututil.c ccpp.c ccsrc.c \
+	ccreg.c ccstmt.c ccsym.c cctype.c ccopt.c ccvla.c
+
+# A prefixed, source-suffixed list permits portable GNU/BSD substitutions.
+
+NATIVE_BUILD_SRCS != for src in $(HOST_SOURCE_FILES); do printf '%s/%s ' '$(NATIVE_BUILD_DIR)' "$$src"; done
+NATIVE_ASMS = $(NATIVE_BUILD_SRCS:.c=.s)
+NATIVE_OBJS = $(NATIVE_BUILD_SRCS:.c=.dobj)
+NATIVE_DAIMOS_LIBC_ROOT = $(KCC_ROOT)/$(NATIVE_BUILD_DIR)/daimos-libc
+NATIVE_DAIMOS_LIBC_DIR = $(NATIVE_DAIMOS_LIBC_ROOT)/libc
+NATIVE_DAIMOS_LIBC = $(NATIVE_DAIMOS_LIBC_DIR)/libc.a
+NATIVE_DAIMOS_SYSCALL_OBJ = $(NATIVE_DAIMOS_LIBC_DIR)/syscall.dobj
+NATIVE_LINK_RUNTIME = $(NATIVE_RUNTIME_DIR)/crt0.dobj
+NATIVE_LINK_RUNTIME += $(NATIVE_RUNTIME_DIR)/daimos-bootstrap.dobj \
+    $(NATIVE_DAIMOS_SYSCALL_OBJ) $(NATIVE_RUNTIME_DIR)/syscall-helpers.dobj
+NATIVE_KCPP_DXR = $(NATIVE_BUILD_DIR)/KCPP.dxr
+NATIVE_KPARSE_DXR = $(NATIVE_BUILD_DIR)/KPARSE.dxr
+NATIVE_KGEN_DXR = $(NATIVE_BUILD_DIR)/KGEN.dxr
+NATIVE_KOPT_DXR = $(NATIVE_BUILD_DIR)/KOPT.dxr
+NATIVE_DRIVER_DXR = $(NATIVE_BUILD_DIR)/KCC.dxr
+NATIVE_PHASE_DXRS = $(NATIVE_KCPP_DXR)
+NATIVE_PHASE_DXRS += $(NATIVE_KPARSE_DXR) $(NATIVE_KGEN_DXR) $(NATIVE_KOPT_DXR)
+NATIVE_PHASE_ASMS = $(NATIVE_CPP_ASMS)
+NATIVE_PHASE_ASMS += $(NATIVE_CORE_ASMS) $(NATIVE_GEN_ASMS) $(NATIVE_PARSE_ASMS) \
+    $(NATIVE_OPT_ASMS)
+
+# Native phase link membership: each list names logical .c variants, some of
+# which are not physical source files (for example ccdata-gen.c). Compile
+# rules map variants to their real sources and select the phase defines.
+# Portable GNU/BSD suffix substitution derives .dobj paths; runtime objects
+# retain their separate directory. Preserve link order.
+NATIVE_KCPP_MODULES = $(NATIVE_BUILD_DIR)/cc-cpp.c
+NATIVE_KCPP_MODULES += $(NATIVE_BUILD_DIR)/ccasmb.c \
+    $(NATIVE_BUILD_DIR)/ccdata-cpp.c $(NATIVE_BUILD_DIR)/ccerr-cpp.c \
+    $(NATIVE_BUILD_DIR)/ccout-cpp.c $(NATIVE_BUILD_DIR)/ccpp.c \
+    $(NATIVE_BUILD_DIR)/ccppout.c $(NATIVE_BUILD_DIR)/ccsym-cpp.c \
+    $(NATIVE_BUILD_DIR)/ccsrc.c
+NATIVE_KCPP_OBJS = $(NATIVE_KCPP_MODULES:.c=.dobj)
+
+# Historical standalone CORE object target (not linked by make native).
+NATIVE_KCC1_MODULES = $(NATIVE_BUILD_DIR)/cc-core.c
+NATIVE_KCC1_MODULES += $(NATIVE_BUILD_DIR)/ccasmb.c $(NATIVE_BUILD_DIR)/cccreg.c \
+    $(NATIVE_BUILD_DIR)/cccse.c $(NATIVE_BUILD_DIR)/cccode.c \
+    $(NATIVE_BUILD_DIR)/ccdata-core.c $(NATIVE_BUILD_DIR)/ccdbug.c \
+    $(NATIVE_BUILD_DIR)/ccdecl.c $(NATIVE_BUILD_DIR)/ccerr-core.c \
+    $(NATIVE_BUILD_DIR)/cceval.c $(NATIVE_BUILD_DIR)/ccgen-core.c \
+    $(NATIVE_BUILD_DIR)/ccgen1.c $(NATIVE_BUILD_DIR)/ccgen2.c \
+    $(NATIVE_BUILD_DIR)/ccgswi.c $(NATIVE_BUILD_DIR)/ccjskp.c \
+    $(NATIVE_BUILD_DIR)/cclex.c $(NATIVE_BUILD_DIR)/ccnode.c \
+    $(NATIVE_BUILD_DIR)/ccout-core.c $(NATIVE_BUILD_DIR)/ccreg.c \
+    $(NATIVE_BUILD_DIR)/ccstmt.c $(NATIVE_BUILD_DIR)/ccsym.c \
+    $(NATIVE_BUILD_DIR)/cctype.c $(NATIVE_BUILD_DIR)/ccopt.c \
+    $(NATIVE_BUILD_DIR)/ccoututil.c $(NATIVE_BUILD_DIR)/ccppin.c \
+    $(NATIVE_BUILD_DIR)/ccvla.c
+NATIVE_KCC1_OBJS = $(NATIVE_KCC1_MODULES:.c=.dobj)
+
+NATIVE_KPARSE_MODULES = $(NATIVE_BUILD_DIR)/cc-parse.c
+NATIVE_KPARSE_MODULES += $(NATIVE_BUILD_DIR)/ccasmb.c \
+    $(NATIVE_BUILD_DIR)/ccdata-parse.c $(NATIVE_BUILD_DIR)/ccbind-parse.c \
+    $(NATIVE_BUILD_DIR)/ccdbug.c $(NATIVE_BUILD_DIR)/ccdecl.c \
+    $(NATIVE_BUILD_DIR)/ccerr-parse.c $(NATIVE_BUILD_DIR)/cceval.c \
+    $(NATIVE_BUILD_DIR)/cclex.c $(NATIVE_BUILD_DIR)/ccnode.c \
+    $(NATIVE_BUILD_DIR)/ccppin.c $(NATIVE_BUILD_DIR)/ccstmt.c \
+    $(NATIVE_BUILD_DIR)/ccsym.c $(NATIVE_BUILD_DIR)/cctype.c \
+    $(NATIVE_BUILD_DIR)/ccoututil.c $(NATIVE_BUILD_DIR)/cckirwrite.c \
+    $(NATIVE_BUILD_DIR)/ccvla.c
+NATIVE_KPARSE_OBJS = $(NATIVE_KPARSE_MODULES:.c=.dobj) $(NATIVE_RUNTIME_DIR)/daimos-chain.dobj $(NATIVE_RUNTIME_DIR)/daimos-path.dobj
+
+NATIVE_KGEN_MODULES = $(NATIVE_BUILD_DIR)/cckgen-gen.c
+NATIVE_KGEN_MODULES += $(NATIVE_BUILD_DIR)/cccreg.c $(NATIVE_BUILD_DIR)/cccse.c \
+    $(NATIVE_BUILD_DIR)/cccode-gen.c $(NATIVE_BUILD_DIR)/ccdata-gen.c \
+    $(NATIVE_BUILD_DIR)/ccdbug.c $(NATIVE_BUILD_DIR)/ccerr-gen.c \
+    $(NATIVE_BUILD_DIR)/ccevalgen.c $(NATIVE_BUILD_DIR)/ccgen-gen.c \
+    $(NATIVE_BUILD_DIR)/ccgen1-gen.c $(NATIVE_BUILD_DIR)/ccgen2.c \
+    $(NATIVE_BUILD_DIR)/ccgswi.c $(NATIVE_BUILD_DIR)/ccjskp.c \
+    $(NATIVE_BUILD_DIR)/ccnode-gen.c $(NATIVE_BUILD_DIR)/ccreg.c \
+    $(NATIVE_BUILD_DIR)/ccsym-gen.c $(NATIVE_BUILD_DIR)/cctype-gen.c \
+    $(NATIVE_BUILD_DIR)/ccopt.c $(NATIVE_BUILD_DIR)/ccoututil.c \
+    $(NATIVE_BUILD_DIR)/cckpout-gen.c $(NATIVE_BUILD_DIR)/cckpwrite-gen.c \
+    $(NATIVE_BUILD_DIR)/cckirread.c $(NATIVE_BUILD_DIR)/ccvla.c
+NATIVE_KGEN_OBJS = $(NATIVE_KGEN_MODULES:.c=.dobj) $(NATIVE_RUNTIME_DIR)/daimos-chain.dobj $(NATIVE_RUNTIME_DIR)/daimos-path.dobj
+
+NATIVE_KOPT_MODULES = $(NATIVE_BUILD_DIR)/cckopt-opt.c
+NATIVE_KOPT_MODULES += $(NATIVE_BUILD_DIR)/cckpread-opt.c \
+    $(NATIVE_BUILD_DIR)/ccout-opt.c $(NATIVE_BUILD_DIR)/ccoututil.c \
+    $(NATIVE_BUILD_DIR)/ccdata-opt.c $(NATIVE_BUILD_DIR)/ccerr-opt.c \
+    $(NATIVE_BUILD_DIR)/ccasmb.c
+NATIVE_KOPT_OBJS = $(NATIVE_KOPT_MODULES:.c=.dobj) $(NATIVE_RUNTIME_DIR)/daimos-path.dobj
+
+
+
+# Unix-hosted KCC cross-compiler and native-bootstrap rules.
+# Both GNU make and BSD make support != shell assignment.  Generate each
+# prefixed inventory from the same ordered source list.
+HOST_BUILD_SRCS != for src in $(HOST_SOURCE_FILES); do printf '%s/%s ' '$(HOST_BUILD_DIR)' "$$src"; done
+OBJS = $(HOST_BUILD_SRCS:.c=.o)
+ASMS = $(HOST_BUILD_SRCS:.c=.s)
+
+# Build layout and external source trees.
+# Override DAIMOS_REPO to use a different checkout; never assume KCC and
+# DAIMOS are sibling directories. The default matches the project layout.
+KCC_ROOT != pwd
+DAIMOS_REPO ?= $(HOME)/git/DAIMOS
+NATIVE_RUNTIME_DIR = $(NATIVE_BUILD_DIR)/runtime
+RUNTIMEDIR = runtime
+
+# Host compiler and installation locations.
+CC ?= cc
+CFLAGS += -std=c99 -funsigned-char
+LDFLAGS ?=
+INSTALL ?= install
+RM ?= rm -f
+PREFIX ?= /usr/local
+PDP10_PREFIX ?= $(HOME)/git/local
+NATIVE_BOOTSTRAP_DIR ?= $(PDP10_PREFIX)/lib/kcc/bootstrap
+BINDIR ?= $(PREFIX)/bin
+LIBDIR ?= $(PREFIX)/lib
+KCCLIBDIR ?= $(LIBDIR)/kcc
+KCC ?= $(KCC_ROOT)/$(HOST_BUILD_DIR)/kcc
+MAKEDEPEND ?= makedepend
+KCC_SELF_FLAGS ?= -P=stdc+kcc -DHOST_UNIX=1 -Iself/include/ -Hself/include/
+
+# PDP-10 assembler/linker and native compilation personality.
+PDP10_DAS ?= $(PDP10_PREFIX)/bin/das
+PDP10_DLINK ?= $(PDP10_PREFIX)/bin/dlink
+NATIVE_KCCFLAGS ?= -Pgnu99 -O -x=pdp6 -m=gas
+NATIVE_CPPFLAGS ?= -DHOST_DAIMOS=1 -DHOST_UNIX=0 -Iself/include/ -Hself/include/
+COMPILE_NATIVE = $(KCC) $(NATIVE_KCCFLAGS) $(NATIVE_CPPFLAGS)
+ASSEMBLE_NATIVE = $(PDP10_DAS) -F -C -O $@ $<
+
+# DAIMOS libc include paths and inputs used to detect native ABI changes.
+DAIMOS_CPP_INCLUDES = -I$(DAIMOS_REPO)/userland/libc \
+	-I$(DAIMOS_REPO)/system/kernel/boot -I$(DAIMOS_REPO)/system/kernel/core \
+	-I$(DAIMOS_REPO)/system/kernel/drivers -I$(DAIMOS_REPO)/system/kernel/fs \
+	-I$(DAIMOS_REPO)/system/kernel/mm -I$(DAIMOS_REPO)/system/kernel/modules \
+	-I$(DAIMOS_REPO)/system/kernel/proc -I$(DAIMOS_REPO)/system/kernel/storage \
+	-I$(PDP10_PREFIX)/include
+DAIMOS_LIBC_SRCS = $(DAIMOS_REPO)/userland/libc/Makefile \
+	$(DAIMOS_REPO)/userland/libc/crt0.s $(DAIMOS_REPO)/userland/libc/logevent.c \
+	$(DAIMOS_REPO)/userland/libc/memcpy.s $(DAIMOS_REPO)/userland/libc/memmove.s \
+	$(DAIMOS_REPO)/userland/libc/process_ctype.c $(DAIMOS_REPO)/userland/libc/stat_time.c \
+	$(DAIMOS_REPO)/userland/libc/stdlib.c $(DAIMOS_REPO)/userland/libc/string.c \
+	$(DAIMOS_REPO)/userland/libc/syscall.s $(DAIMOS_REPO)/userland/libc/syscall_helpers.s \
+	$(DAIMOS_REPO)/userland/libc/text.c $(DAIMOS_REPO)/userland/libc/u.c
+
+# Discard built-in suffix rules; retain only PDP-10 assembly inference.
+.SUFFIXES:
+.SUFFIXES: .s .dobj
+.s.dobj:
+	$(ASSEMBLE_NATIVE)
+
+# Architecture-specific runtime assembly installed alongside host KCC.
+RUNTIME = \
+	$(RUNTIMEDIR)/pdp6rt-adjbp.s $(RUNTIMEDIR)/pdp6rt-kdfad.s \
+	$(RUNTIMEDIR)/pdp6rt-kdfsb.s $(RUNTIMEDIR)/pdp6rt-kdfmp.s \
+	$(RUNTIMEDIR)/pdp6rt-kdfdv.s $(RUNTIMEDIR)/ka10rt-adjbp.s \
+	$(RUNTIMEDIR)/ka10rt-kdfad.s $(RUNTIMEDIR)/ka10rt-kdfsb.s \
+	$(RUNTIMEDIR)/ka10rt-kdfmp.s $(RUNTIMEDIR)/ka10rt-kdfdv.s \
+	$(RUNTIMEDIR)/ks10rt-adjbp.s $(RUNTIMEDIR)/ks10rt-kdfad.s \
+	$(RUNTIMEDIR)/ks10rt-kdfsb.s $(RUNTIMEDIR)/ks10rt-kdfmp.s \
+	$(RUNTIMEDIR)/ks10rt-kdfdv.s $(RUNTIMEDIR)/kccrt-zero.s \
+	$(RUNTIMEDIR)/kccrt-dimode-div.s
+
+# Sources scanned by host makedepend (ordinary KCC and native-only files).
+NATIVE_SOURCE_FILES = $(HOST_SOURCE_FILES) cckirread.c cckirwrite.c \
+    ccppout.c ccppin.c cckgen.c ccevalgen.c cckpout.c cckpwrite.c \
+    ccbind.c cckopt.c cckpread.c
+
+# target:source:phase triples for variant-specific preprocessing dependencies.
+NATIVE_VARIANTS = \
+	cc-cpp:cc.c:CPP cc-core:cc.c:CORE cc-parse:cc.c:PARSE cccode-gen:cccode.c:GEN ccdata-cpp:ccdata.c:CPP ccdata-core:ccdata.c:CORE ccdata-gen:ccdata.c:GEN \
+	ccdata-parse:ccdata.c:PARSE ccdata-opt:ccdata.c:OPT ccerr-cpp:ccerr.c:CPP ccerr-core:ccerr.c:CORE ccerr-gen:ccerr.c:GEN ccerr-parse:ccerr.c:PARSE ccerr-opt:ccerr.c:OPT \
+	ccgen-core:ccgen.c:CORE ccgen-gen:ccgen.c:GEN ccgen1-gen:ccgen1.c:GEN ccnode-gen:ccnode.c:GEN ccout-cpp:ccout.c:CPP ccout-core:ccout.c:CORE ccout-opt:ccout.c:OPT \
+	ccsym-cpp:ccsym.c:CPP ccsym-gen:ccsym.c:GEN cctype-gen:cctype.c:GEN ccppout:ccppout.c:CPP ccppin:ccppin.c:CORE ccppin-gen:ccppin.c:GEN cckgen-gen:cckgen.c:GEN \
+	ccevalgen:ccevalgen.c:GEN cckpout-gen:cckpout.c:GEN cckpwrite-gen:cckpwrite.c:GEN ccbind-parse:ccbind.c:PARSE cckopt-opt:cckopt.c:OPT cckpread-opt:cckpread.c:OPT
+
+# Generate dependencies with the host compiler's own preprocessor.  Unlike
+# makedepend, it understands Clang/GCC builtins and uses the actual system
+# header search paths.  -MM excludes system headers; -MT names the output.
+# Both make implementations use an explicit first stage before reading them.
+
+# Keep the explicit first stage for GNU and BSD make.  Cache its output until
+# a source/header or relevant compiler option changes.  This avoids dozens of
+# silent preprocessing passes on every incremental build.
+depend:
+	@mkdir -p $(HOST_BUILD_DIR)
+	@set -e; output=$(HOST_BUILD_DIR)/depend.mk; temp=$$output.tmp; \
+	    signature=$$output.config; sigtmp=$$signature.tmp; \
+	    trap 'rm -f "$$temp" "$$temp.host" "$$sigtmp"' 0; \
+	    printf '%s\n' '$(CC)' '$(CFLAGS)' '$(HOST_SOURCE_FILES)' \
+	      '$(NATIVE_SOURCE_FILES)' '$(NATIVE_VARIANTS)' \
+	      '$(HOST_BUILD_DIR)' '$(NATIVE_BUILD_DIR)' > "$$sigtmp"; \
+	    stale=0; \
+	    if test ! -f "$$output" || test ! -f "$$signature" || \
+	       ! cmp -s "$$sigtmp" "$$signature"; then stale=1; fi; \
+	    if test $$stale -eq 0; then \
+      for input in Makefile unix.mk common.mk cross.mk native.mk *.c *.h self/include/*.h self/include/*/*.h; do \
+	        if test -f "$$input" && test "$$input" -nt "$$output"; then \
+	          stale=1; break; \
+	        fi; \
+	      done; \
+	    fi; \
+	    if test $$stale -eq 0; then \
+	      echo 'DEPEND up to date'; exit 0; \
+	    fi; \
+	    echo 'DEPEND host'; \
+	    $(CC) $(CFLAGS) -MM -I. $(HOST_SOURCE_FILES) > "$$temp.host"; \
+	    sed 's@^\([^ :]*\)\.o:@$(HOST_BUILD_DIR)/\1.o $(HOST_BUILD_DIR)/\1.s:@' \
+	      "$$temp.host" > "$$temp"; \
+	    echo 'DEPEND native'; \
+	    for source in $(NATIVE_SOURCE_FILES); do \
+	      stem=$${source%.c}; \
+	      $(CC) -MM -nostdinc -I. -Iself/include -D__COMPILER_KCC__=1 -DHOST_DAIMOS=1 -DHOST_UNIX=0 \
+	          -MT "$(NATIVE_BUILD_DIR)/$$stem.s" $$source >> $$temp; \
+	    done; \
+	    echo 'DEPEND phase variants'; \
+	    for item in $(NATIVE_VARIANTS); do \
+	      target=$${item%%:*}; rest=$${item#*:}; source=$${rest%%:*}; phase=$${rest##*:}; \
+	      $(CC) -MM -nostdinc -I. -Iself/include -D__COMPILER_KCC__=1 -DHOST_DAIMOS=1 -DHOST_UNIX=0 \
+	          -DKCC_PHASE_$$phase=1 -MT "$(NATIVE_BUILD_DIR)/$$target.s" $$source >> $$temp; \
+	    done; \
+	    for source in $(HOST_SOURCE_FILES); do \
+	      stem=$${source%.c}; \
+	      printf '%s: %s\n' "$(HOST_BUILD_DIR)/$$stem.o $(HOST_BUILD_DIR)/$$stem.s" "$$source" >> $$temp; \
+	    done; \
+	    for source in $(NATIVE_SOURCE_FILES); do \
+	      stem=$${source%.c}; \
+	      printf '%s: %s\n' "$(NATIVE_BUILD_DIR)/$$stem.s" "$$source" >> $$temp; \
+	    done; \
+	    for item in $(NATIVE_VARIANTS); do \
+	      target=$${item%%:*}; rest=$${item#*:}; source=$${rest%%:*}; \
+	      printf '%s: %s\n' "$(NATIVE_BUILD_DIR)/$$target.s" "$$source" >> $$temp; \
+	    done; \
+	    mv "$$temp" "$$output"; mv "$$sigtmp" "$$signature"
+
+-include $(HOST_BUILD_DIR)/depend.mk
