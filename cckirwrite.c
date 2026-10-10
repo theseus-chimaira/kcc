@@ -83,7 +83,13 @@ findptr(void **v, unsigned n, void *p, const unsigned INT *bounds)
     unsigned i;
     unsigned INT addr = (unsigned INT)p;
     if (n == 0U || addr < bounds[0] || addr > bounds[1]) return 0;
-    for (i = 0; i < n; ++i) if (v[i] == p) return i + 1;
+    /* Graph traversal usually refers to objects discovered most recently.
+     * Reverse lookup leaves stable discovery IDs unchanged, needs no index
+     * storage, and shortens the common recent-object search. */
+    for (i = n; i != 0U;) {
+        --i;
+        if (v[i] == p) return i + 1U;
+    }
     return 0;
 }
 
