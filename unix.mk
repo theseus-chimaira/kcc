@@ -393,20 +393,41 @@ NATIVE_VARIANTS = \
 # header search paths.  -MM excludes system headers; -MT names the output.
 # Both make implementations use an explicit first stage before reading them.
 
-# The dependency file is regenerated before each user-requested build.
-# The second make invocation loads it; this avoids nonportable makefile remaking.
+# Keep the explicit first stage for GNU and BSD make.  Cache its output until
+# a source/header or relevant compiler option changes.  This avoids dozens of
+# silent preprocessing passes on every incremental build.
 depend:
 	@mkdir -p $(HOST_BUILD_DIR)
 	@set -e; output=$(HOST_BUILD_DIR)/depend.mk; temp=$$output.tmp; \
-	    for source in $(HOST_SOURCE_FILES); do \
-	      stem=$${source%.c}; \
-	      $(CC) $(CFLAGS) -MM -I. -MT "$(HOST_BUILD_DIR)/$$stem.o $(HOST_BUILD_DIR)/$$stem.s" $$source >> $$temp; \
-	    done; \
+	    signature=$$output.config; sigtmp=$$signature.tmp; \
+	    trap 'rm -f "$$temp" "$$temp.host" "$$sigtmp"' 0; \
+	    printf '%s\n' '$(CC)' '$(CFLAGS)' '$(HOST_SOURCE_FILES)' \
+	      '$(NATIVE_SOURCE_FILES)' '$(NATIVE_VARIANTS)' \
+	      '$(HOST_BUILD_DIR)' '$(NATIVE_BUILD_DIR)' > "$$sigtmp"; \
+	    stale=0; \
+	    if test ! -f "$$output" || test ! -f "$$signature" || \
+	       ! cmp -s "$$sigtmp" "$$signature"; then stale=1; fi; \
+	    if test $$stale -eq 0; then \
+	      for input in Makefile unix.mk *.c *.h self/include/*.h self/include/*/*.h; do \
+	        if test -f "$$input" && test "$$input" -nt "$$output"; then \
+	          stale=1; break; \
+	        fi; \
+	      done; \
+	    fi; \
+	    if test $$stale -eq 0; then \
+	      echo 'DEPEND up to date'; exit 0; \
+	    fi; \
+	    echo 'DEPEND host'; \
+	    $(CC) $(CFLAGS) -MM -I. $(HOST_SOURCE_FILES) > "$$temp.host"; \
+	    sed 's@^\([^ :]*\)\.o:@$(HOST_BUILD_DIR)/\1.o $(HOST_BUILD_DIR)/\1.s:@' \
+	      "$$temp.host" > "$$temp"; \
+	    echo 'DEPEND native'; \
 	    for source in $(NATIVE_SOURCE_FILES); do \
 	      stem=$${source%.c}; \
 	      $(CC) -MM -nostdinc -I. -Iself/include -D__COMPILER_KCC__=1 -DHOST_DAIMOS=1 -DHOST_UNIX=0 \
 	          -MT "$(NATIVE_BUILD_DIR)/$$stem.s" $$source >> $$temp; \
 	    done; \
+	    echo 'DEPEND phase variants'; \
 	    for item in $(NATIVE_VARIANTS); do \
 	      target=$${item%%:*}; rest=$${item#*:}; source=$${rest%%:*}; phase=$${rest##*:}; \
 	      $(CC) -MM -nostdinc -I. -Iself/include -D__COMPILER_KCC__=1 -DHOST_DAIMOS=1 -DHOST_UNIX=0 \
@@ -424,7 +445,7 @@ depend:
 	      target=$${item%%:*}; rest=$${item#*:}; source=$${rest%%:*}; \
 	      printf '%s: %s\n' "$(NATIVE_BUILD_DIR)/$$target.s" "$$source" >> $$temp; \
 	    done; \
-	    mv $$temp $$output
+	    mv "$$temp" "$$output"; mv "$$sigtmp" "$$signature"
 
 -include $(HOST_BUILD_DIR)/depend.mk
 
