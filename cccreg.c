@@ -388,6 +388,14 @@ completely.  Sigh.  --KLH
 	    p->Preg == from || p->Preg == from - 1) return 0; /* or bad op */
 	return cregbefore (to, from, p, dguard, dstart); /* normal, continue */
 
+    case PRC_NOREG:
+        /* Data words and switch-table entries are control-flow fences;
+         * no accumulator produced earlier can be renamed across them.
+         * An ordinary NOP can safely be skipped. */
+        if ((p->Pop & POF_OPCODE) == P_NOP)
+            return cregbefore(to, from, p, dguard, dstart);
+        return 0;
+
     default:
 	int_error("creg: bad PRC_ val");
 					/* Drop through */
@@ -573,6 +581,9 @@ rvsset(struct pcode * p)
 {
     static int r;		/* Avoid stack fiddling, for speed */
     rvread = rvwrit = 0;
+    /* Switch-table literals, IFIW words and NOPs are data, not operations
+     * on a machine accumulator.  Do not inspect their address fields. */
+    if (rchange(p->Pop) == PRC_NOREG) return;
 
     /* First see how op deals with the Preg */
     switch (rchange(p->Pop)) {
@@ -680,6 +691,7 @@ rbincode(struct pcode * p)
 int
 rbinreg(struct pcode * p)
 {
+    if (rchange(p->Pop) == PRC_NOREG) return 0;
     switch (rchange(p->Pop)) {
 	case PRC_RSAME:	/* nice single word op? */
 	case PRC_RSET:
@@ -710,6 +722,7 @@ rbinreg(struct pcode * p)
 static int
 rbinmem(struct pcode * p, int r)
 {
+    if (rchange(p->Pop) == PRC_NOREG) return 0;
     switch (rchange(p->Pop)) {
 	case PRC_RSAME:	/* nice single word op? */
 	case PRC_RSET:
@@ -737,6 +750,7 @@ rbinmem(struct pcode * p, int r)
 int
 rbinaddr(struct pcode * p)
 {
+    if (rchange(p->Pop) == PRC_NOREG) return 0;
     switch (p->Ptype & PTF_ADRMODE) {
     case PTA_REGIS:			/* register to register */
 	return rbinmem(p, p->Pr2);	/* R used as E */
@@ -824,6 +838,7 @@ rinaddr(struct pcode * p, int reg)
 int
 rinreg(struct pcode * p, int reg)
 {
+    if (rchange(p->Pop) == PRC_NOREG) return 0;
 	switch (rchange(p->Pop)) {
 	    case PRC_RSAME:	/* nice single word op? */
 	    case PRC_RSET:

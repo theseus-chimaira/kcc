@@ -328,7 +328,7 @@ extern char popprc[];		/* PRC_ value for op */
 ** was as a single reg or a register pair.
 */
 enum rmod {
-    PRC_ILL,		/* Illegal value, should not be encountered */
+    PRC_NOREG,		/* Data/no-op pseudo: does not access registers */
     PRC_RSAME,		/* op affects memory or it skips but changes nothing */
     PRC_RSET,		/* op changes reg based only on the other operand */
     PRC_RSET_DSAME,	/* op changes reg based on doubleword operand */

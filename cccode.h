@@ -37,8 +37,8 @@
 */
 
 /* 0 */
-opcode(P_NOP,	"--", 0, PRC_ILL, b, c, d)	/* Keep this as zero */
-opcode(P_CVALUE,"", 0, PRC_ILL, b, c, d)
+opcode(P_NOP,	"--", 0, PRC_NOREG, b, c, d)	/* Keep this as zero */
+opcode(P_CVALUE,"", 0, PRC_NOREG, b, c, d)
 opcode(P_ADD,	"ADD",	PF_OPIMB,	PRC_RCHG, b, c, d)
 opcode(P_ADJBP,	"ADJBP", 0,		PRC_RCHG, b, c, d)
 opcode(P_ADJSP,	"ADJSP",PF_EIMM,	PRC_RCHG, b, c, d)
@@ -81,7 +81,7 @@ opcode(P_HRRZ,	"HRRZ",	0,		PRC_RSET, b, c, d)
 opcode(P_IBP,	"IBP",	PF_MEMCHG,	PRC_RSAME, b, c, d)
 opcode(P_IDIV,	"IDIV",	PF_OPIMB,	PRC_DCHG_RSAME, b, c, d)
 opcode(P_IDPB,	"IDPB",	PF_MEMCHG,	PRC_RSAME, b, c, d)
-opcode(P_IFIW,	"SETZ",	0,		PRC_ILL, b, c, d)
+opcode(P_IFIW,	"SETZ",	0,		PRC_NOREG, b, c, d)
 /* 40 */
 opcode(P_ILDB,	"ILDB",	PF_MEMCHG,	PRC_RSET, b, c, d)
 opcode(P_IMUL,	"IMUL",	PF_OPIMB,	PRC_RCHG, b, c, d)
