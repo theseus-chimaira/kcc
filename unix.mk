@@ -2,23 +2,18 @@
 # Shared KCC build inventory. Use PLATFORM=DAIMOS for the native build.
 # The staged SIXBIT file is uppercased and uses DAIMOS.MK.
 PLATFORM ?= unix
+HOST_BUILD_DIR ?= build
+NATIVE_BUILD_DIR ?= build-native
+
+HOST_SOURCE_FILES = \
+	cc.c ccasmb.c cccreg.c cccse.c cccode.c ccdata.c ccdbug.c \
+	ccdecl.c ccerr.c cceval.c ccgen.c ccgen1.c ccgen2.c ccgswi.c \
+	ccjskp.c cclex.c ccnode.c ccout.c ccoututil.c ccpp.c ccsrc.c \
+	ccreg.c ccstmt.c ccsym.c cctype.c ccopt.c ccvla.c
 
 # A prefixed, source-suffixed list permits portable GNU/BSD substitutions.
 
-NATIVE_BUILD_SRCS = $(NATIVE_BUILD_DIR)/cc.c
-NATIVE_BUILD_SRCS += $(NATIVE_BUILD_DIR)/ccasmb.c $(NATIVE_BUILD_DIR)/cccreg.c \
-    $(NATIVE_BUILD_DIR)/cccse.c $(NATIVE_BUILD_DIR)/cccode.c \
-    $(NATIVE_BUILD_DIR)/ccdata.c $(NATIVE_BUILD_DIR)/ccdbug.c \
-    $(NATIVE_BUILD_DIR)/ccdecl.c $(NATIVE_BUILD_DIR)/ccerr.c \
-    $(NATIVE_BUILD_DIR)/cceval.c $(NATIVE_BUILD_DIR)/ccgen.c \
-    $(NATIVE_BUILD_DIR)/ccgen1.c $(NATIVE_BUILD_DIR)/ccgen2.c \
-    $(NATIVE_BUILD_DIR)/ccgswi.c $(NATIVE_BUILD_DIR)/ccjskp.c \
-    $(NATIVE_BUILD_DIR)/cclex.c $(NATIVE_BUILD_DIR)/ccnode.c \
-    $(NATIVE_BUILD_DIR)/ccout.c $(NATIVE_BUILD_DIR)/ccoututil.c \
-    $(NATIVE_BUILD_DIR)/ccpp.c $(NATIVE_BUILD_DIR)/ccsrc.c \
-    $(NATIVE_BUILD_DIR)/ccreg.c $(NATIVE_BUILD_DIR)/ccstmt.c \
-    $(NATIVE_BUILD_DIR)/ccsym.c $(NATIVE_BUILD_DIR)/cctype.c \
-    $(NATIVE_BUILD_DIR)/ccopt.c $(NATIVE_BUILD_DIR)/ccvla.c
+NATIVE_BUILD_SRCS != for src in $(HOST_SOURCE_FILES); do printf '%s/%s ' '$(NATIVE_BUILD_DIR)' "$$src"; done
 NATIVE_ASMS = $(NATIVE_BUILD_SRCS:.c=.s)
 NATIVE_OBJS = $(NATIVE_BUILD_SRCS:.c=.dobj)
 NATIVE_DAIMOS_LIBC_ROOT = $(KCC_ROOT)/$(NATIVE_BUILD_DIR)/daimos-libc
@@ -105,17 +100,9 @@ NATIVE_KOPT_OBJS = $(NATIVE_KOPT_MODULES:.c=.dobj) $(NATIVE_RUNTIME_DIR)/daimos-
 
 
 # Unix-hosted KCC cross-compiler and native-bootstrap rules.
-HOST_BUILD_SRCS = $(HOST_BUILD_DIR)/cc.c
-HOST_BUILD_SRCS += $(HOST_BUILD_DIR)/ccasmb.c $(HOST_BUILD_DIR)/cccreg.c \
-    $(HOST_BUILD_DIR)/cccse.c $(HOST_BUILD_DIR)/cccode.c $(HOST_BUILD_DIR)/ccdata.c \
-    $(HOST_BUILD_DIR)/ccdbug.c $(HOST_BUILD_DIR)/ccdecl.c $(HOST_BUILD_DIR)/ccerr.c \
-    $(HOST_BUILD_DIR)/cceval.c $(HOST_BUILD_DIR)/ccgen.c $(HOST_BUILD_DIR)/ccgen1.c \
-    $(HOST_BUILD_DIR)/ccgen2.c $(HOST_BUILD_DIR)/ccgswi.c \
-    $(HOST_BUILD_DIR)/ccjskp.c $(HOST_BUILD_DIR)/cclex.c $(HOST_BUILD_DIR)/ccnode.c \
-    $(HOST_BUILD_DIR)/ccout.c $(HOST_BUILD_DIR)/ccoututil.c \
-    $(HOST_BUILD_DIR)/ccpp.c $(HOST_BUILD_DIR)/ccsrc.c $(HOST_BUILD_DIR)/ccreg.c \
-    $(HOST_BUILD_DIR)/ccstmt.c $(HOST_BUILD_DIR)/ccsym.c $(HOST_BUILD_DIR)/cctype.c \
-    $(HOST_BUILD_DIR)/ccopt.c $(HOST_BUILD_DIR)/ccvla.c
+# Both GNU make and BSD make support != shell assignment.  Generate each
+# prefixed inventory from the same ordered source list.
+HOST_BUILD_SRCS != for src in $(HOST_SOURCE_FILES); do printf '%s/%s ' '$(HOST_BUILD_DIR)' "$$src"; done
 OBJS = $(HOST_BUILD_SRCS:.c=.o)
 ASMS = $(HOST_BUILD_SRCS:.c=.s)
 
@@ -124,8 +111,6 @@ ASMS = $(HOST_BUILD_SRCS:.c=.s)
 # DAIMOS are sibling directories. The default matches the project layout.
 KCC_ROOT != pwd
 DAIMOS_REPO ?= $(HOME)/git/DAIMOS
-HOST_BUILD_DIR ?= build
-NATIVE_BUILD_DIR ?= build-native
 NATIVE_RUNTIME_DIR = $(NATIVE_BUILD_DIR)/runtime
 RUNTIMEDIR = runtime
 
@@ -277,7 +262,8 @@ $(NATIVE_RUNTIME_DIR)/daimos-path.dobj: $(NATIVE_RUNTIME_DIR)/daimos-path.s
 	$(PDP10_DAS) -F -C -O $@ $(NATIVE_RUNTIME_DIR)/daimos-path.s
 
 $(NATIVE_DRIVER_DXR): $(NATIVE_RUNTIME_DIR)/daimos-driver.dobj $(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
-	$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(@:.dxr=.map) \
+	@echo "LINK $@"
+	@$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(@:.dxr=.map) \
 		$(NATIVE_LINK_RUNTIME) $(NATIVE_RUNTIME_DIR)/daimos-driver.dobj $(NATIVE_DAIMOS_LIBC)
 
 $(NATIVE_RUNTIME_DIR)/crt0.dobj: runtime/daimos-crt0.s
@@ -287,19 +273,23 @@ $(NATIVE_RUNTIME_DIR)/syscall-helpers.dobj: $(DAIMOS_REPO)/userland/libc/syscall
 	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ $(DAIMOS_REPO)/userland/libc/syscall_helpers.s
 
 $(NATIVE_KCPP_DXR): $(NATIVE_KCPP_OBJS) $(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
-	$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KCPP.map \
+	@echo "LINK $@"
+	@$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KCPP.map \
 		$(NATIVE_LINK_RUNTIME) $(NATIVE_KCPP_OBJS) $(NATIVE_DAIMOS_LIBC)
 
 $(NATIVE_KPARSE_DXR): $(NATIVE_KPARSE_OBJS) $(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
-	$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KPARSE.map \
+	@echo "LINK $@"
+	@$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KPARSE.map \
 		$(NATIVE_LINK_RUNTIME) $(NATIVE_KPARSE_OBJS) $(NATIVE_DAIMOS_LIBC)
 
 $(NATIVE_KGEN_DXR): $(NATIVE_KGEN_OBJS) $(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
-	$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KGEN.map \
+	@echo "LINK $@"
+	@$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KGEN.map \
 		$(NATIVE_LINK_RUNTIME) $(NATIVE_KGEN_OBJS) $(NATIVE_DAIMOS_LIBC)
 
 $(NATIVE_KOPT_DXR): $(NATIVE_KOPT_OBJS) $(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
-	$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KOPT.map \
+	@echo "LINK $@"
+	@$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KOPT.map \
 		$(NATIVE_LINK_RUNTIME) $(NATIVE_KOPT_OBJS) $(NATIVE_DAIMOS_LIBC)
 
 
@@ -371,11 +361,6 @@ $(NATIVE_OPT_ASMS): $(KCC)
 
 
 # Sources scanned by host makedepend (ordinary KCC and native-only files).
-HOST_SOURCE_FILES = \
-	cc.c ccasmb.c cccreg.c cccse.c cccode.c ccdata.c ccdbug.c \
-	ccdecl.c ccerr.c cceval.c ccgen.c ccgen1.c ccgen2.c ccgswi.c \
-	ccjskp.c cclex.c ccnode.c ccout.c ccoututil.c ccpp.c ccsrc.c \
-	ccreg.c ccstmt.c ccsym.c cctype.c ccopt.c ccvla.c
 NATIVE_SOURCE_FILES = $(HOST_SOURCE_FILES) cckirread.c cckirwrite.c \
     ccppout.c ccppin.c cckgen.c ccevalgen.c cckpout.c cckpwrite.c \
     ccbind.c cckopt.c cckpread.c
