@@ -388,30 +388,29 @@ NATIVE_VARIANTS = \
 	ccsym-cpp:ccsym.c:CPP ccsym-gen:ccsym.c:GEN cctype-gen:cctype.c:GEN ccppout:ccppout.c:CPP ccppin:ccppin.c:CORE ccppin-gen:ccppin.c:GEN cckgen-gen:cckgen.c:GEN \
 	ccevalgen:ccevalgen.c:GEN cckpout-gen:cckpout.c:GEN cckpwrite-gen:cckpwrite.c:GEN ccbind-parse:ccbind.c:PARSE cckopt-opt:cckopt.c:OPT cckpread-opt:cckpread.c:OPT
 
-# Generate exact source/header dependencies with the host-side X.Org scanner.
-# Both make implementations use an explicit first stage before parsing depend.mk.
-# makedepend is a standard host command, installed independently from KCC.
-# Supply MAKEDEPEND=/path/to/makedepend when it is not on PATH.
+# Generate dependencies with the host compiler's own preprocessor.  Unlike
+# makedepend, it understands Clang/GCC builtins and uses the actual system
+# header search paths.  -MM excludes system headers; -MT names the output.
+# Both make implementations use an explicit first stage before reading them.
 
 # The dependency file is regenerated before each user-requested build.
 # The second make invocation loads it; this avoids nonportable makefile remaking.
 depend:
 	@mkdir -p $(HOST_BUILD_DIR)
 	@set -e; output=$(HOST_BUILD_DIR)/depend.mk; temp=$$output.tmp; \
-	    host_inc=`$(CC) -print-file-name=include`; \
-	    $(MAKEDEPEND) -f- -p$(HOST_BUILD_DIR)/ -o.o \
-	        -I$$host_inc -I. $(HOST_SOURCE_FILES) > $$temp; \
-	    $(MAKEDEPEND) -f- -p$(HOST_BUILD_DIR)/ -o.s \
-	        -I$$host_inc -I. $(HOST_SOURCE_FILES) >> $$temp; \
-	    $(MAKEDEPEND) -f- -p$(NATIVE_BUILD_DIR)/ -o.s \
-	        -Yself/include -I. -Iself/include -D__COMPILER_KCC__=1 -DHOST_DAIMOS=1 -DHOST_UNIX=0 \
-	        $(NATIVE_SOURCE_FILES) >> $$temp; \
+	    for source in $(HOST_SOURCE_FILES); do \
+	      stem=$${source%.c}; \
+	      $(CC) $(CFLAGS) -MM -I. -MT "$(HOST_BUILD_DIR)/$$stem.o $(HOST_BUILD_DIR)/$$stem.s" $$source >> $$temp; \
+	    done; \
+	    for source in $(NATIVE_SOURCE_FILES); do \
+	      stem=$${source%.c}; \
+	      $(CC) -MM -nostdinc -I. -Iself/include -D__COMPILER_KCC__=1 -DHOST_DAIMOS=1 -DHOST_UNIX=0 \
+	          -MT "$(NATIVE_BUILD_DIR)/$$stem.s" $$source >> $$temp; \
+	    done; \
 	    for item in $(NATIVE_VARIANTS); do \
 	      target=$${item%%:*}; rest=$${item#*:}; source=$${rest%%:*}; phase=$${rest##*:}; \
-	      $(MAKEDEPEND) -f- -p$(NATIVE_BUILD_DIR)/ -o.s \
-	          -Yself/include -I. -Iself/include -D__COMPILER_KCC__=1 -DHOST_DAIMOS=1 -DHOST_UNIX=0 \
-	          -DKCC_PHASE_$$phase=1 $$source | \
-	          sed "s@^$(NATIVE_BUILD_DIR)/$${source%.c}\.s:@$(NATIVE_BUILD_DIR)/$$target.s:@" >> $$temp; \
+	      $(CC) -MM -nostdinc -I. -Iself/include -D__COMPILER_KCC__=1 -DHOST_DAIMOS=1 -DHOST_UNIX=0 \
+	          -DKCC_PHASE_$$phase=1 -MT "$(NATIVE_BUILD_DIR)/$$target.s" $$source >> $$temp; \
 	    done; \
 	    for source in $(HOST_SOURCE_FILES); do \
 	      stem=$${source%.c}; \

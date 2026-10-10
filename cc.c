@@ -2224,8 +2224,8 @@ getimestr (char* src_fname)
     estrcpy (creatime, tptr);
 #endif
 
-    strtok (comptime, "\n");
-    strtok (creatime, "\n");
+    comptime[strcspn(comptime, "\n")] = '\0';
+    creatime[strcspn(creatime, "\n")] = '\0';
     }
 #endif /* !KCC_PHASE_CORELIKE */
 
