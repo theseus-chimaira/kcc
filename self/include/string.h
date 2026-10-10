@@ -12,6 +12,7 @@ char *strchr(char *, int);
 char *strrchr(char *, int);
 int strcmp(char *, char *);
 char *strcpy(char *, char *);
+size_t strcspn(const char *, const char *);
 char *strerror(int);
 size_t strlen(char *);
 char *strncat(char *, char *, size_t);
