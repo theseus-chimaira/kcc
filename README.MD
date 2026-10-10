@@ -141,6 +141,14 @@ and local header dependencies so missing object/header rules are detected.
 
 ## Native MAKE graph preflight (2026-10-09)
 
+Native `daimos.mk` defines short variables for the executive directory,
+KCC, DAS, DARC, DLINK, INSTALL, and the native KCC installation directory.
+The commands remain byte-for-byte identical after variable expansion; the
+longest expanded recipe is 174 characters, below native MAKE's 256-character
+limit. Changing an executable location requires updating its variable rather
+than every compilation or installation recipe. The corresponding regression
+test is in `daimos-testkit`.
+
 Native KCC artifacts reside in `BUILD/`, rather than `B/`. Native MAKE's
 `.S.DOBJ` suffix rule assembles ordinary and phase-specific `.S` files,
 replacing 53 repeated assembler rules. `.C` to `.S` transformations remain
