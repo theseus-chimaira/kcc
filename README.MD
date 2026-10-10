@@ -141,10 +141,14 @@ and local header dependencies so missing object/header rules are detected.
 
 ## Native MAKE graph preflight (2026-10-09)
 
-Native KCC artifacts now reside in `BUILD/`, rather than `B/`. `MAKE CLEAN`
-removes the known generated outputs, then calls `RMDIR BUILD` to remove the
-empty directory. Wildcards are not yet supported by the native RM program;
-explicit cleanup operands prevent unintentional deletion of unrelated files.
+Native KCC artifacts reside in `BUILD/`, rather than `B/`. Native MAKE's
+`.S.DOBJ` suffix rule assembles ordinary and phase-specific `.S` files,
+replacing 53 repeated assembler rules. `.C` to `.S` transformations remain
+explicit because phase variants require different compiler options. Archive
+and link dependencies remain explicit to preserve membership and ordering.
+`MAKE CLEAN` uses the system C implementation of `RM -R -F BUILD` to delete
+the generated directory recursively, rather than a file-by-file inventory.
+The separate optional assembler RM is no longer built or installed.
 
 The on-target `daimos.mk` shares one `KCC_NATIVE_FLAGS` definition across
 53 compilation recipes. KCC, DARC, and DLINK use the supported `$@` target
