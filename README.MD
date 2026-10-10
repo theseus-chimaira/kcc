@@ -145,6 +145,14 @@ The on-target `daimos.mk` shares one `KCC_NATIVE_FLAGS` definition across
 53 compilation recipes. KCC, DARC, and DLINK use the supported `$@` target
 variable for output names. This reduces file size without changing phase
 membership, prerequisites, flags, object order, or expanded commands.
+
+The archive rules also use `$^` for the complete ordered object-prerequisite
+list. GNU Make and BSD Make both support this automatic variable, and DAIMOS
+native MAKE now implements it. DLINK retains explicit object/archive order
+because archive resolution needs startup objects first. Cleanup pairs combine
+the matching `.S` and `.DOBJ` paths into one `RM` invocation. The native MAKE
+implementation retains its 256-character recipe limit; no global limit was
+increased. The host archive-membership regression lives in `daimos-testkit`.
 All 77 changed recipes match the preceding version after expansion;
 the longest expanded KCC recipe is 188 characters, below native MAKE's
 256-character expansion limit. The corresponding host regression is in
