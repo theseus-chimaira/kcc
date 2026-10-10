@@ -141,6 +141,14 @@ and local header dependencies so missing object/header rules are detected.
 
 ## Native MAKE graph preflight (2026-10-09)
 
+Native `MAKE` direct-execution recipes now resolve bare tool names using the
+environment's `PATH` (just as `DSH` does). `daimos.mk` assumes `KCC`, `DAS`,
+`DARC`, `DLINK`, `INSTALL`, and `RM` can be found on `PATH`. A missing tool
+causes the recipe to fail; absolute executable paths still work. Destination
+paths for installed KCC programs remain absolute, independently of the
+command names. This retains the direct-run argument capacity needed by the
+native compiler's archive and linker recipes.
+
 Native `daimos.mk` defines short variables for the executive directory,
 KCC, DAS, DARC, DLINK, INSTALL, and the native KCC installation directory.
 The commands remain byte-for-byte identical after variable expansion; the
