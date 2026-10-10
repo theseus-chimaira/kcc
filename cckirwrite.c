@@ -34,8 +34,11 @@ static void packint(INT *, INT);
 static unsigned addtype(struct kir_wgraph *, TYPE *);
 static unsigned addsym(struct kir_wgraph *, SYMBOL *);
 static unsigned addnode(struct kir_wgraph *, NODE *);
-static unsigned findptr(void **, unsigned, void *);
-static int grow(void ***, unsigned *, unsigned);
+static unsigned findtype(TYPE **, unsigned, TYPE *);
+static unsigned findnode(NODE **, unsigned, NODE *);
+static unsigned findsymbol(SYMBOL **, unsigned, SYMBOL *);
+static int growtypes(TYPE ***, unsigned *, unsigned);
+static int grownodes(NODE ***, unsigned *, unsigned);
 static void freegraph(struct kir_wgraph *);
 static void freemodule(void);
 static unsigned globalsymid(SYMBOL *);
@@ -73,34 +76,40 @@ packint(INT *d, INT v)
     }
 }
 
-/* Exact pointer identity is essential here.  A previous numeric address-span
- * fast reject caused false negatives on PDP-6 pointer representations: the
- * same TYPE was registered thousands of times, exhausting user memory.
- * Scan from the newest entry to preserve IDs without extra index storage. */
-static unsigned
-findptr(void **v, unsigned n, void *p)
-{
-    unsigned i;
-    for (i = n; i != 0U;) {
-        --i;
-        if (v[i] == p) return i + 1U;
-    }
-    return 0;
+/* PDP-10 pointer representations are type-dependent.  Do not cast pointer
+ * vectors through void **: comparing a typed pointer after that conversion
+ * can lose its byte-pointer representation on the native compiler. */
+#define DEFINE_KIR_LOOKUP(name, type) \
+static unsigned name(type **v, unsigned n, type *p) \
+{ \
+    unsigned i; \
+    for (i = n; i != 0U;) { \
+        --i; \
+        if (v[i] == p) return i + 1U; \
+    } \
+    return 0; \
 }
+DEFINE_KIR_LOOKUP(findtype, TYPE)
+DEFINE_KIR_LOOKUP(findnode, NODE)
+DEFINE_KIR_LOOKUP(findsymbol, SYMBOL)
+#undef DEFINE_KIR_LOOKUP
 
-static int
-grow(void ***vp, unsigned *cap, unsigned need)
-{
-    void **nv;
-    unsigned nc;
-    if (need <= *cap) return 0;
-    nc = *cap ? *cap * 2 : 64;
-    while (nc < need) nc *= 2;
-    nv = (void **)realloc(*vp, nc * sizeof(void *));
-    if (nv == NULL) return -1;
-    *vp = nv; *cap = nc;
-    return 0;
+#define DEFINE_KIR_GROW(name, type) \
+static int name(type ***vp, unsigned *cap, unsigned need) \
+{ \
+    type **nv; \
+    unsigned nc; \
+    if (need <= *cap) return 0; \
+    nc = *cap ? *cap * 2U : 64U; \
+    while (nc < need) nc *= 2U; \
+    nv = (type **)realloc(*vp, nc * sizeof(*nv)); \
+    if (nv == NULL) return -1; \
+    *vp = nv; *cap = nc; \
+    return 0; \
 }
+DEFINE_KIR_GROW(growtypes, TYPE)
+DEFINE_KIR_GROW(grownodes, NODE)
+#undef DEFINE_KIR_GROW
 
 static int
 persistent_symbol(SYMBOL *s)
@@ -118,7 +127,7 @@ globalsymid(SYMBOL *s)
 
     if (s == NULL)
         return 0;
-    if ((id = findptr((void **)module_syms.syms, module_syms.ns, s)) != 0)
+    if ((id = findsymbol(module_syms.syms, module_syms.ns, s)) != 0)
         return id;
     if (module_syms.ns == module_syms.cs) {
         nc = module_syms.cs ? module_syms.cs * 2U : 64U;
@@ -145,9 +154,9 @@ addtype(struct kir_wgraph *g, TYPE *t)
 {
     unsigned id;
     if (t == NULL) return 0;
-    if ((id = findptr((void **)g->types, g->nt, t)) != 0)
+    if ((id = findtype(g->types, g->nt, t)) != 0)
         return id;
-    if (grow((void ***)&g->types, &g->ct, g->nt + 1)) {
+    if (growtypes(&g->types, &g->ct, g->nt + 1)) {
         g->failed = 1; return 0;
     }
     g->types[g->nt++] = t; id = g->nt;
@@ -244,9 +253,9 @@ addnode(struct kir_wgraph *g, NODE *n)
 {
     unsigned id;
     if (n == NULL) return 0;
-    if ((id = findptr((void **)g->nodes, g->nn, n)) != 0)
+    if ((id = findnode(g->nodes, g->nn, n)) != 0)
         return id;
-    if (grow((void ***)&g->nodes, &g->cn, g->nn + 1)) {
+    if (grownodes(&g->nodes, &g->cn, g->nn + 1)) {
         g->failed = 1; return 0;
     }
     g->nodes[g->nn++] = n; id = g->nn;
@@ -282,7 +291,7 @@ visit_node(struct kir_wgraph *g, NODE *n)
 
 static unsigned
 typeid(struct kir_wgraph *g, TYPE *p)
-{ return findptr((void **)g->types, g->nt, p); }
+{ return findtype(g->types, g->nt, p); }
 static unsigned
 symid(struct kir_wgraph *g, SYMBOL *p)
 {
@@ -297,7 +306,7 @@ symid(struct kir_wgraph *g, SYMBOL *p)
 }
 static unsigned
 nodeid(struct kir_wgraph *g, NODE *p)
-{ return findptr((void **)g->nodes, g->nn, p); }
+{ return findnode(g->nodes, g->nn, p); }
 
 static int
 writetype(FILE *fp, struct kir_wgraph *g, unsigned id, TYPE *t)
