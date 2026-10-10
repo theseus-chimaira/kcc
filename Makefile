@@ -1,4 +1,4 @@
 # Shared platform entrypoint for KCC.
-# Host default is unix; native staging changes it to daimos.
-PLATFORM ?= unix
+# Host default is cross; native staging selects daimos.
+PLATFORM ?= cross
 include $(PLATFORM).mk

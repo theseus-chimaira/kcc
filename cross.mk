@@ -1,4 +1,6 @@
 # Unix-hosted cross-compiler, host runtime, and host installation.
+include common.mk
+include native.mk
 # Default host build is the Unix-hosted PDP-6/PDP-10 cross-compiler.
 all: cross
 

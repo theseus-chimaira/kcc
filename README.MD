@@ -111,21 +111,21 @@ AVOID FEATURE CREEP AND TARGET-SPECIFIC COMPLEXITY WITHOUT A DEMONSTRATED NEED.
 
 ## Shared KCC Makefiles (2026-10-09)
 
-`Makefile` contains the authoritative native phase module inventories and the
-platform selector. `unix.mk` contains host KCC and cross-compiler bootstrap
-rules (the default `make` build); `daimos.mk` contains the on-target incremental
+`Makefile` selects the platform. `cross.mk` provides the host cross-compiler
+entry point and includes `common.mk` and `native.mk` for shared inventories,
+dependency scanning, and DAIMOS bootstrap rules. `daimos.mk` contains the on-target incremental
 build, with each source and its transitive local headers as prerequisites.
 Do not restore the old DAIMOS Python Makefile generator or separate generated
 phase Makefiles. Edit the KCC build description in this repository instead.
 
 On Unix:
 
-    make host-built
-    make native-built
+    make cross
+    make native
     make install-native
 
 For DAIMOS, stage the common `Makefile` and `daimos.mk` using DAIMOS's
-`scripts/stage-kcc-sources-v1.sh`. Staging changes `PLATFORM ?= unix` into
+`scripts/stage-kcc-sources-v1.sh`. Staging changes `PLATFORM ?= cross` into
 `PLATFORM ?= daimos`, uppercases file names and text, converts Unix recipe
 prefixes into DAIMOS `>`/direct-RUN prefixes and encodes the result as S6REC.
 The resulting `/OPTION/SOURCE/KCC/MAKEFILE` includes `DAIMOS.MK`. Native
@@ -143,7 +143,7 @@ and local header dependencies so missing object/header rules are detected.
 
 The initial on-target graph failed to parse because long cumulative `+=`
 assignments exceeded MAKE's bounded 256-character variable value buffer.
-Host/cross-only module inventories now reside in `unix.mk`; the shared root
+Host/cross-only module inventories now reside in `common.mk`; the shared root
 `Makefile` is a small platform selector. The full explicit incremental
 native graph is in `daimos.mk`, with local header prerequisites and phased
 archives. The host testkit verifies coverage against the Unix inventory.

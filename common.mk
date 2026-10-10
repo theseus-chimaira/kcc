@@ -205,7 +205,7 @@ depend:
 	    if test ! -f "$$output" || test ! -f "$$signature" || \
 	       ! cmp -s "$$sigtmp" "$$signature"; then stale=1; fi; \
 	    if test $$stale -eq 0; then \
-      for input in Makefile unix.mk common.mk cross.mk native.mk *.c *.h self/include/*.h self/include/*/*.h; do \
+      for input in Makefile common.mk cross.mk native.mk *.c *.h self/include/*.h self/include/*/*.h; do \
 	        if test -f "$$input" && test "$$input" -nt "$$output"; then \
 	          stale=1; break; \
 	        fi; \
