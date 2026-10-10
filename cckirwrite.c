@@ -5,9 +5,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+struct kir_symref {
+    SYMBOL *symbol;
+    unsigned id;
+};
+
 struct kir_wgraph {
     TYPE **types; unsigned nt, ct;
-    SYMBOL **syms; unsigned *symids; unsigned ns, cs, nlocal;
+    struct kir_symref *syms; unsigned ns, cs, nlocal;
     NODE **nodes; unsigned nn, cn;
     /* Two address bounds per identity array, not a per-object hash table.
      * Out-of-range pointers have never been inserted and need no scan. */
@@ -202,19 +207,19 @@ addsym(struct kir_wgraph *g, SYMBOL *s)
     if (g->ns != 0U && (unsigned INT)s >= g->smin &&
         (unsigned INT)s <= g->smax)
         for (i = 0; i < g->ns; ++i)
-            if (g->syms[i] == s)
-                return g->symids[i];
+            if (g->syms[i].symbol == s)
+                return g->syms[i].id;
     if (g->ns == g->cs) {
         unsigned nc = g->cs ? g->cs * 2U : 64U;
-        SYMBOL **sv = (SYMBOL **)realloc(g->syms, nc * sizeof(SYMBOL *));
-        unsigned *iv = (unsigned *)realloc(g->symids, nc * sizeof(unsigned));
-        if (sv == NULL || iv == NULL) {
-            if (sv != NULL) g->syms = sv;
-            if (iv != NULL) g->symids = iv;
-            g->failed = 1; return 0;
+        struct kir_symref *sv = (struct kir_symref *)realloc(
+            g->syms, nc * sizeof(*sv));
+        if (sv == NULL) {
+            fprintf(stderr, "KIR symbol growth failed: count=%u old=%u new=%u\n",
+                g->ns, g->cs, nc);
+            g->failed = 1;
+            return 0;
         }
         g->syms = sv;
-        g->symids = iv;
         g->cs = nc;
     }
     if (persistent_symbol(s))
@@ -223,8 +228,8 @@ addsym(struct kir_wgraph *g, SYMBOL *s)
         id = (unsigned)KIR_LOCAL_ID_FLAG | ++g->nlocal;
     if (id == 0U) { g->failed = 1; return 0; }
     widenrange(&g->smin, &g->smax, g->ns, s);
-    g->syms[g->ns] = s;
-    g->symids[g->ns] = id;
+    g->syms[g->ns].symbol = s;
+    g->syms[g->ns].id = id;
     ++g->ns;
     /* The registered pointers are consumed after seed discovery completes.
      * Unlike recursion this has constant call-stack usage. */
@@ -236,7 +241,10 @@ visit_symbol(struct kir_wgraph *g, SYMBOL *s)
 {
     SYMBOL *base, *mark;
     (void)addtype(g, s->Stype);
-    (void)addsym(g, s->Ssmnext);
+    if (s->Sclass == SC_TAG || s->Sclass == SC_UTAG ||
+        s->Sclass == SC_MEMBER || s->Sclass == SC_ENUM ||
+        s->Sclass == SC_ARG || s->Sclass == SC_RARG)
+        (void)addsym(g, s->Ssmnext);
     if (s->Sclass == SC_ISTATIC) (void)addsym(g, s->Ssym);
     if (s->Sclass == SC_MEMBER || s->Sclass == SC_ENUM)
         (void)addsym(g, s->Ssmtag);
@@ -309,8 +317,8 @@ symid(struct kir_wgraph *g, SYMBOL *p)
     if (g->ns != 0U && (unsigned INT)p >= g->smin &&
         (unsigned INT)p <= g->smax)
         for (i = 0; i < g->ns; ++i)
-            if (g->syms[i] == p)
-                return g->symids[i];
+            if (g->syms[i].symbol == p)
+                return g->syms[i].id;
     return 0;
 }
 static unsigned
@@ -353,7 +361,10 @@ writesym(FILE *fp, struct kir_wgraph *g, unsigned id, SYMBOL *s)
         w[n++] = 0; packint(&w[n], s->Svalue); n += KIR_INT_CHUNKS;
     }
     w[n++] = typeid(g, s->Stype);
-    w[n++] = symid(g, s->Ssmnext);
+    w[n++] = (s->Sclass == SC_TAG || s->Sclass == SC_UTAG ||
+              s->Sclass == SC_MEMBER || s->Sclass == SC_ENUM ||
+              s->Sclass == SC_ARG || s->Sclass == SC_RARG)
+             ? symid(g, s->Ssmnext) : 0;
     if (s->Sclass == SC_MEMBER || s->Sclass == SC_ENUM) {
         w[n++] = 1; w[n++] = symid(g, s->Ssmtag);
     } else if ((s->Sclass == SC_EXTDEF || s->Sclass == SC_INTDEF)
@@ -510,12 +521,16 @@ writegraph(FILE *fp, NODE *root)
         } else if (it < g.nt) {
             visit_type(&g, g.types[it++]);
         } else {
-            visit_symbol(&g, g.syms[is++]);
+            visit_symbol(&g, g.syms[is++].symbol);
         }
     }
     if (g.failed) {
         fprintf(stderr, "KIR graph allocation/identity failure: types=%u symbols=%u nodes=%u\n",
             g.nt, g.ns, g.nn);
+        fprintf(stderr, "KIR graph capacities: types=%u/%u symbols=%u/%u\n",
+            g.nt, g.ct, g.ns, g.cs);
+        fprintf(stderr, "KIR graph capacities: nodes=%u/%u persistent=%u/%u\n",
+            g.nn, g.cn, module_syms.ns, module_syms.cs);
         freegraph(&g); return -1;
     }
     memset(h, 0, sizeof(h));
@@ -543,7 +558,7 @@ writegraph(FILE *fp, NODE *root)
     for (i = 0; i < g.nt; ++i) if (writetype(fp, &g, i+1, g.types[i])) goto bad;
     stage = "symbols";
     for (i = 0; i < g.ns; ++i)
-        if (writesym(fp, &g, g.symids[i], g.syms[i])) goto bad;
+        if (writesym(fp, &g, g.syms[i].id, g.syms[i].symbol)) goto bad;
     stage = "nodes";
     for (i = 0; i < g.nn; ++i) if (writenode(fp, &g, i+1, g.nodes[i])) goto bad;
     stage = "strings";
@@ -551,7 +566,7 @@ writegraph(FILE *fp, NODE *root)
     stage = "VLA types";
     for (i = 0; i < g.nt; ++i) if (writevlatype(fp, &g, g.types[i])) goto bad;
     stage = "VLA objects";
-    for (i = 0; i < g.ns; ++i) if (writevlaobject(fp, &g, g.syms[i])) goto bad;
+    for (i = 0; i < g.ns; ++i) if (writevlaobject(fp, &g, g.syms[i].symbol)) goto bad;
     stage = "terminator";
     if (writerec(fp, KIR_REC_EXTEND, NULL, 0)) goto bad;
     freegraph(&g); return 0;
@@ -612,7 +627,7 @@ kir_write_module_end(FILE *fp, int mainf)
 static void
 freegraph(struct kir_wgraph *g)
 {
-    free(g->types); free(g->syms); free(g->symids); free(g->nodes);
+    free(g->types); free(g->syms); free(g->nodes);
     memset(g, 0, sizeof(*g));
 }
 

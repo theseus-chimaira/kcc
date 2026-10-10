@@ -1093,8 +1093,12 @@ getsym(struct symbol ** tailptr)
 {
     SYMBOL *newptr;
 
-    if ((newptr = symflist) != NULL)	/* If freelist has one, take it off */
-	symflist = newptr->Snext;
+    if ((newptr = symflist) != NULL) {
+        symflist = newptr->Snext;
+        /* Recycled entries must be initialized exactly like calloc entries.
+         * Otherwise stale Ssmnext/Spmnext links enter a new KIR graph. */
+        memset(newptr, 0, sizeof(*newptr));
+    }
     /* KAR-8/91, Changed to calloc() call to ensure memory is zeroed */
     else if ((newptr = (SYMBOL *) calloc(1, sizeof(SYMBOL))) == NULL)
 	efatal("Out of memory for symbols");
