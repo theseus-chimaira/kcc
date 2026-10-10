@@ -149,9 +149,6 @@ scan_s6rec(CCSRC *s)
             if (!raw_word_get(s, &h)) goto no;
         saw = 1;
     }
-    /* The validation pass has already counted every input word.
-     * Native KCPP need not read the whole file again just to count it. */
-    s->word_count = s->word_index;
     s->error = 0;
     (void)raw_rewind(s);
     return saw;
@@ -169,16 +166,6 @@ ccsrc_init(CCSRC *s, FILE *fp)
     memset(s, 0, sizeof(*s));
     s->fp = fp;
     words = 0;
-#ifdef __COMPILER_KCC__
-    /* DAIMOS opens native input as packed words.  A valid S6REC scan
-     * both validates the format and counts the words in one pass. */
-    if (scan_s6rec(s)) {
-        s->mode = CCSRC_CSIX_S6REC;
-        s->record_left = 0;
-        s->record_newline = 0;
-        return raw_rewind(s);
-    }
-#endif
     if (!host_is_word_container(s, &words)) {
         s->mode = CCSRC_ASCII_BYTES;
         s->error = 0;
