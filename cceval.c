@@ -612,8 +612,11 @@ evalbinop(NODE *e)
 
     case TS_UINT:
     case TS_ULONG:
-	ul = eleft->Niconst;
-	ul2 = e->Nright->Niconst;
+	/* INT may be wider than the PDP-10 target word on a Unix host.
+	 * Mask BEFORE unsigned shifts/comparisons, not merely when emitting
+	 * the folded constant, or (~0U >> 1) becomes all ones again. */
+	ul = (unsigned INT)eleft->Niconst & (unsigned INT)0777777777777ULL;
+	ul2 = (unsigned INT)e->Nright->Niconst & (unsigned INT)0777777777777ULL;
 	switch (e->Nop) {
 	case Q_PLUS:
 #if SYS_CSI			/* FEW 2A(40) 29-Jul-92 */	    
@@ -656,7 +659,7 @@ evalbinop(NODE *e)
 	    return e;
 	}
 	if (log >= 0) return setlog(e, log);
-	eleft->Niconst = ul;
+	eleft->Niconst = (INT)(ul & (unsigned INT)0777777777777ULL);
 	break;
 
     case TS_FLOAT:

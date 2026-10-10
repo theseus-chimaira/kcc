@@ -6031,7 +6031,10 @@ pizarray(TYPE *t, int lev)
         root = NULL;
         idx = 0;
         maxidx = -1;
-        limit = (t->Tsize == 0) ? ((unsigned)(~0) >> 1) : t->Tsize;
+        /* An unbounded array has no declared element limit.  Keep
+         * the arithmetic in KCC's 36-bit target INT representation:
+         * the hosted compiler's unsigned can be wider than the target. */
+        limit = (t->Tsize == 0) ? (INT)0377777777777L : t->Tsize;
 
         while (token != T_RBRACE && token != T_EOF) {
             designated = 0;
