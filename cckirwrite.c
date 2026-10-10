@@ -14,9 +14,6 @@ struct kir_wgraph {
     TYPE **types; unsigned nt, ct;
     struct kir_symref *syms; unsigned ns, cs, nlocal;
     NODE **nodes; unsigned nn, cn;
-    /* Two address bounds per identity array, not a per-object hash table.
-     * Out-of-range pointers have never been inserted and need no scan. */
-    unsigned INT tmin, tmax, smin, smax, nmin, nmax;
     int failed;                 /* sticky recursive allocation/identity failure */
 };
 
@@ -24,7 +21,6 @@ struct kir_wmodule {
     SYMBOL **syms;
     INT *lastrefs;
     unsigned ns, cs;
-    unsigned INT pmin, pmax;
 };
 
 static struct kir_wmodule module_syms;
@@ -38,8 +34,7 @@ static void packint(INT *, INT);
 static unsigned addtype(struct kir_wgraph *, TYPE *);
 static unsigned addsym(struct kir_wgraph *, SYMBOL *);
 static unsigned addnode(struct kir_wgraph *, NODE *);
-static unsigned findptr(void **, unsigned, void *, const unsigned INT *);
-static void widenrange(unsigned INT *, unsigned INT *, unsigned, void *);
+static unsigned findptr(void **, unsigned, void *);
 static int grow(void ***, unsigned *, unsigned);
 static void freegraph(struct kir_wgraph *);
 static void freemodule(void);
@@ -78,35 +73,19 @@ packint(INT *d, INT v)
     }
 }
 
-/* Heap objects are commonly discovered outside the current address span.
- * The numerical address test is only a NEGATIVE filter.  A possible match
- * still receives the original exact pointer comparison, so identity/IDs do
- * not change even on hosts where pointer representations contain tags. */
+/* Exact pointer identity is essential here.  A previous numeric address-span
+ * fast reject caused false negatives on PDP-6 pointer representations: the
+ * same TYPE was registered thousands of times, exhausting user memory.
+ * Scan from the newest entry to preserve IDs without extra index storage. */
 static unsigned
-findptr(void **v, unsigned n, void *p, const unsigned INT *bounds)
+findptr(void **v, unsigned n, void *p)
 {
     unsigned i;
-    unsigned INT addr = (unsigned INT)p;
-    if (n == 0U || addr < bounds[0] || addr > bounds[1]) return 0;
-    /* Graph traversal usually refers to objects discovered most recently.
-     * Reverse lookup leaves stable discovery IDs unchanged, needs no index
-     * storage, and shortens the common recent-object search. */
     for (i = n; i != 0U;) {
         --i;
         if (v[i] == p) return i + 1U;
     }
     return 0;
-}
-
-static void
-widenrange(unsigned INT *lo, unsigned INT *hi, unsigned n, void *p)
-{
-    unsigned INT addr = (unsigned INT)p;
-    if (n == 0U) *lo = *hi = addr;
-    else {
-        if (addr < *lo) *lo = addr;
-        if (addr > *hi) *hi = addr;
-    }
 }
 
 static int
@@ -139,8 +118,7 @@ globalsymid(SYMBOL *s)
 
     if (s == NULL)
         return 0;
-    if ((id = findptr((void **)module_syms.syms, module_syms.ns, s,
-                      &module_syms.pmin)) != 0)
+    if ((id = findptr((void **)module_syms.syms, module_syms.ns, s)) != 0)
         return id;
     if (module_syms.ns == module_syms.cs) {
         nc = module_syms.cs ? module_syms.cs * 2U : 64U;
@@ -156,7 +134,6 @@ globalsymid(SYMBOL *s)
         module_syms.lastrefs = nr;
         module_syms.cs = nc;
     }
-    widenrange(&module_syms.pmin, &module_syms.pmax, module_syms.ns, s);
     module_syms.syms[module_syms.ns] = s;
     module_syms.lastrefs[module_syms.ns] = 0;
     ++module_syms.ns;
@@ -168,12 +145,11 @@ addtype(struct kir_wgraph *g, TYPE *t)
 {
     unsigned id;
     if (t == NULL) return 0;
-    if ((id = findptr((void **)g->types, g->nt, t, &g->tmin)) != 0)
+    if ((id = findptr((void **)g->types, g->nt, t)) != 0)
         return id;
     if (grow((void ***)&g->types, &g->ct, g->nt + 1)) {
         g->failed = 1; return 0;
     }
-    widenrange(&g->tmin, &g->tmax, g->nt, t);
     g->types[g->nt++] = t; id = g->nt;
     /* Defer edge visits: the identity array is also our FIFO work queue. */
     return id;
@@ -204,11 +180,11 @@ addsym(struct kir_wgraph *g, SYMBOL *s)
 {
     unsigned id, i;
     if (s == NULL) return 0;
-    if (g->ns != 0U && (unsigned INT)s >= g->smin &&
-        (unsigned INT)s <= g->smax)
-        for (i = 0; i < g->ns; ++i)
-            if (g->syms[i].symbol == s)
-                return g->syms[i].id;
+    for (i = g->ns; i != 0U;) {
+        --i;
+        if (g->syms[i].symbol == s)
+            return g->syms[i].id;
+    }
     if (g->ns == g->cs) {
         unsigned nc = g->cs ? g->cs * 2U : 64U;
         struct kir_symref *sv = (struct kir_symref *)realloc(
@@ -227,7 +203,6 @@ addsym(struct kir_wgraph *g, SYMBOL *s)
     else
         id = (unsigned)KIR_LOCAL_ID_FLAG | ++g->nlocal;
     if (id == 0U) { g->failed = 1; return 0; }
-    widenrange(&g->smin, &g->smax, g->ns, s);
     g->syms[g->ns].symbol = s;
     g->syms[g->ns].id = id;
     ++g->ns;
@@ -269,12 +244,11 @@ addnode(struct kir_wgraph *g, NODE *n)
 {
     unsigned id;
     if (n == NULL) return 0;
-    if ((id = findptr((void **)g->nodes, g->nn, n, &g->nmin)) != 0)
+    if ((id = findptr((void **)g->nodes, g->nn, n)) != 0)
         return id;
     if (grow((void ***)&g->nodes, &g->cn, g->nn + 1)) {
         g->failed = 1; return 0;
     }
-    widenrange(&g->nmin, &g->nmax, g->nn, n);
     g->nodes[g->nn++] = n; id = g->nn;
     return id;
 }
@@ -308,22 +282,22 @@ visit_node(struct kir_wgraph *g, NODE *n)
 
 static unsigned
 typeid(struct kir_wgraph *g, TYPE *p)
-{ return findptr((void **)g->types, g->nt, p, &g->tmin); }
+{ return findptr((void **)g->types, g->nt, p); }
 static unsigned
 symid(struct kir_wgraph *g, SYMBOL *p)
 {
     unsigned i;
     if (p == NULL) return 0;
-    if (g->ns != 0U && (unsigned INT)p >= g->smin &&
-        (unsigned INT)p <= g->smax)
-        for (i = 0; i < g->ns; ++i)
-            if (g->syms[i].symbol == p)
-                return g->syms[i].id;
+    for (i = g->ns; i != 0U;) {
+        --i;
+        if (g->syms[i].symbol == p)
+            return g->syms[i].id;
+    }
     return 0;
 }
 static unsigned
 nodeid(struct kir_wgraph *g, NODE *p)
-{ return findptr((void **)g->nodes, g->nn, p, &g->nmin); }
+{ return findptr((void **)g->nodes, g->nn, p); }
 
 static int
 writetype(FILE *fp, struct kir_wgraph *g, unsigned id, TYPE *t)
