@@ -162,8 +162,6 @@ static unsigned
 addtype(struct kir_wgraph *g, TYPE *t)
 {
     unsigned id;
-    NODE *bound;
-    SYMBOL *bs;
     if (t == NULL) return 0;
     if ((id = findptr((void **)g->types, g->nt, t, &g->tmin)) != 0)
         return id;
@@ -172,6 +170,15 @@ addtype(struct kir_wgraph *g, TYPE *t)
     }
     widenrange(&g->tmin, &g->tmax, g->nt, t);
     g->types[g->nt++] = t; id = g->nt;
+    /* Defer edge visits: the identity array is also our FIFO work queue. */
+    return id;
+}
+
+static void
+visit_type(struct kir_wgraph *g, TYPE *t)
+{
+    NODE *bound;
+    SYMBOL *bs;
     if (t->Tspec == TS_FUNCT || t->Tspec == TS_PARAM
       || t->Tspec == TS_PARVOID || t->Tspec == TS_PARINF)
         (void)addtype(g, t->t_v0.t_subt);
@@ -185,14 +192,12 @@ addtype(struct kir_wgraph *g, TYPE *t)
         if (bound != NULL) (void)addnode(g, bound);
         if (bs != NULL) (void)addsym(g, bs);
     }
-    return id;
 }
 
 static unsigned
 addsym(struct kir_wgraph *g, SYMBOL *s)
 {
     unsigned id, i;
-    SYMBOL *base, *mark;
     if (s == NULL) return 0;
     if (g->ns != 0U && (unsigned INT)s >= g->smin &&
         (unsigned INT)s <= g->smax)
@@ -221,6 +226,15 @@ addsym(struct kir_wgraph *g, SYMBOL *s)
     g->syms[g->ns] = s;
     g->symids[g->ns] = id;
     ++g->ns;
+    /* The registered pointers are consumed after seed discovery completes.
+     * Unlike recursion this has constant call-stack usage. */
+    return id;
+}
+
+static void
+visit_symbol(struct kir_wgraph *g, SYMBOL *s)
+{
+    SYMBOL *base, *mark;
     (void)addtype(g, s->Stype);
     (void)addsym(g, s->Ssmnext);
     if (s->Sclass == SC_ISTATIC) (void)addsym(g, s->Ssym);
@@ -233,7 +247,6 @@ addsym(struct kir_wgraph *g, SYMBOL *s)
     mark = vlaobjmarkget_v12(s);
     if (base != NULL) (void)addsym(g, base);
     if (mark != NULL) (void)addsym(g, mark);
-    return id;
 }
 
 static void
@@ -255,6 +268,12 @@ addnode(struct kir_wgraph *g, NODE *n)
     }
     widenrange(&g->nmin, &g->nmax, g->nn, n);
     g->nodes[g->nn++] = n; id = g->nn;
+    return id;
+}
+
+static void
+visit_node(struct kir_wgraph *g, NODE *n)
+{
     (void)addtype(g, n->Ntype);
     switch (n->Nop) {
     case Q_IDENT: case N_VLA: case N_VLARST:
@@ -277,7 +296,6 @@ addnode(struct kir_wgraph *g, NODE *n)
     default:
         addnormal(g, n); break;
     }
-    return id;
 }
 
 static unsigned
@@ -471,6 +489,7 @@ static int
 writegraph(FILE *fp, NODE *root)
 {
     struct kir_wgraph g; INT h[KIR_EXT_WORDS]; unsigned i;
+    unsigned it = 0, is = 0, in = 0;
     const char *stage = "header";
     memset(&g, 0, sizeof(g));
     if (root != NULL && addnode(&g, root) == 0) return failedgraph(&g, "root");
@@ -479,6 +498,21 @@ writegraph(FILE *fp, NODE *root)
         if (Reg_Id[i] != NULL && addsym(&g, Reg_Id[i]) == 0) {
             return failedgraph(&g, "register symbol");
         }
+    /* Drain the already allocated identity vectors as FIFO work queues.
+     * No extra vector or per-object bookkeeping is needed.  Registration
+     * happens before visiting edges, so cycles are harmless and IDs remain
+     * fixed for the lifetime of the graph.  In contrast, recursive AST and
+     * symbol-list traversal can exhaust DAIMOS's fixed startup stack gap
+     * and overwrite live frames as the heap grows toward it. */
+    while (!g.failed && (it < g.nt || is < g.ns || in < g.nn)) {
+        if (in < g.nn) {
+            visit_node(&g, g.nodes[in++]);
+        } else if (it < g.nt) {
+            visit_type(&g, g.types[it++]);
+        } else {
+            visit_symbol(&g, g.syms[is++]);
+        }
+    }
     if (g.failed) {
         fprintf(stderr, "KIR graph allocation/identity failure: types=%u symbols=%u nodes=%u\n",
             g.nt, g.ns, g.nn);
