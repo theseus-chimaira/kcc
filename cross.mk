@@ -13,7 +13,7 @@ $(HOST_BUILD_DIR):
 .DELETE_ON_ERROR:
 
 $(KCC): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $(OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^
 
 $(HOST_BUILD_DIR)/ccgen.o $(HOST_BUILD_DIR)/ccgen1.o $(HOST_BUILD_DIR)/ccgen2.o: cc.h ccgen.h
 

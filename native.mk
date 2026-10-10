@@ -39,39 +39,39 @@ $(NATIVE_DAIMOS_LIBC): $(KCC) $(DAIMOS_LIBC_SRCS)
 		CC='$(KCC)'
 
 $(NATIVE_DAIMOS_SYSCALL_OBJ): $(DAIMOS_REPO)/userland/libc/syscall.s $(NATIVE_DAIMOS_LIBC)
-	$(PDP10_DAS) -F -C -O $@ $(DAIMOS_REPO)/userland/libc/syscall.s
+	$(PDP10_DAS) -F -C -O $@ $<
 
 $(NATIVE_RUNTIME_DIR)/daimos-bootstrap.s: runtime/daimos-bootstrap.c $(KCC)
 	mkdir -p $(NATIVE_RUNTIME_DIR) && \
 	$(COMPILE_NATIVE) \
-		$(DAIMOS_CPP_INCLUDES) -S runtime/daimos-bootstrap.c -o $@
+		$(DAIMOS_CPP_INCLUDES) -S $< -o $@
 
 $(NATIVE_RUNTIME_DIR)/daimos-bootstrap.dobj: $(NATIVE_RUNTIME_DIR)/daimos-bootstrap.s
-	$(PDP10_DAS) -F -C -O $@ $(NATIVE_RUNTIME_DIR)/daimos-bootstrap.s
+	$(PDP10_DAS) -F -C -O $@ $<
 
 $(NATIVE_RUNTIME_DIR)/daimos-driver.s: runtime/daimos-driver.c $(KCC)
 	mkdir -p $(NATIVE_RUNTIME_DIR) && \
 	$(COMPILE_NATIVE) \
-		$(DAIMOS_CPP_INCLUDES) -S runtime/daimos-driver.c -o $@
+		$(DAIMOS_CPP_INCLUDES) -S $< -o $@
 
 $(NATIVE_RUNTIME_DIR)/daimos-driver.dobj: $(NATIVE_RUNTIME_DIR)/daimos-driver.s
-	$(PDP10_DAS) -F -C -O $@ $(NATIVE_RUNTIME_DIR)/daimos-driver.s
+	$(PDP10_DAS) -F -C -O $@ $<
 
 $(NATIVE_RUNTIME_DIR)/daimos-chain.s: runtime/daimos-chain.c $(KCC)
 	mkdir -p $(NATIVE_RUNTIME_DIR) && \
 	$(COMPILE_NATIVE) \
-		$(DAIMOS_CPP_INCLUDES) -S runtime/daimos-chain.c -o $@
+		$(DAIMOS_CPP_INCLUDES) -S $< -o $@
 
 $(NATIVE_RUNTIME_DIR)/daimos-chain.dobj: $(NATIVE_RUNTIME_DIR)/daimos-chain.s
-	$(PDP10_DAS) -F -C -O $@ $(NATIVE_RUNTIME_DIR)/daimos-chain.s
+	$(PDP10_DAS) -F -C -O $@ $<
 
 $(NATIVE_RUNTIME_DIR)/daimos-path.s: runtime/daimos-path.c $(KCC)
 	mkdir -p $(NATIVE_RUNTIME_DIR) && \
 	$(COMPILE_NATIVE) \
-		$(DAIMOS_CPP_INCLUDES) -S runtime/daimos-path.c -o $@
+		$(DAIMOS_CPP_INCLUDES) -S $< -o $@
 
 $(NATIVE_RUNTIME_DIR)/daimos-path.dobj: $(NATIVE_RUNTIME_DIR)/daimos-path.s
-	$(PDP10_DAS) -F -C -O $@ $(NATIVE_RUNTIME_DIR)/daimos-path.s
+	$(PDP10_DAS) -F -C -O $@ $<
 
 $(NATIVE_DRIVER_DXR): $(NATIVE_RUNTIME_DIR)/daimos-driver.dobj $(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
 	@echo "LINK $@"
@@ -79,10 +79,10 @@ $(NATIVE_DRIVER_DXR): $(NATIVE_RUNTIME_DIR)/daimos-driver.dobj $(NATIVE_LINK_RUN
 		$(NATIVE_LINK_RUNTIME) $(NATIVE_RUNTIME_DIR)/daimos-driver.dobj $(NATIVE_DAIMOS_LIBC)
 
 $(NATIVE_RUNTIME_DIR)/crt0.dobj: runtime/daimos-crt0.s
-	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ runtime/daimos-crt0.s
+	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ $<
 
 $(NATIVE_RUNTIME_DIR)/syscall-helpers.dobj: $(DAIMOS_REPO)/userland/libc/syscall_helpers.s
-	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ $(DAIMOS_REPO)/userland/libc/syscall_helpers.s
+	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ $<
 
 $(NATIVE_KCPP_DXR): $(NATIVE_KCPP_OBJS) $(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
 	@echo "LINK $@"
