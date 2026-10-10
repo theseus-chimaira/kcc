@@ -141,6 +141,16 @@ and local header dependencies so missing object/header rules are detected.
 
 ## Native MAKE graph preflight (2026-10-09)
 
+The on-target `daimos.mk` shares one `KCC_NATIVE_FLAGS` definition across
+53 compilation recipes. KCC, DARC, and DLINK use the supported `$@` target
+variable for output names. This reduces file size without changing phase
+membership, prerequisites, flags, object order, or expanded commands.
+All 77 changed recipes match the preceding version after expansion;
+the longest expanded KCC recipe is 188 characters, below native MAKE's
+256-character expansion limit. The corresponding host regression is in
+`daimos-testkit`. An actual SIMH native build is still required to verify
+execution with the current native MAKE binary.
+
 The initial on-target graph failed to parse because long cumulative `+=`
 assignments exceeded MAKE's bounded 256-character variable value buffer.
 Host/cross-only module inventories now reside in `common.mk`; the shared root
