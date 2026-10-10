@@ -186,12 +186,11 @@ RUNTIME = \
 	$(RUNTIMEDIR)/ks10rt-kdfdv.s $(RUNTIMEDIR)/kccrt-zero.s \
 	$(RUNTIMEDIR)/kccrt-dimode-div.s
 
-all: depend
-	$(MAKE) host-built
+# Default host build is the Unix-hosted PDP-6/PDP-10 cross-compiler.
+all: cross
 
-host-built: $(KCC) runtime
-
-kcc: $(KCC)
+cross: depend
+	$(MAKE) $(KCC) runtime
 
 $(HOST_BUILD_DIR):
 	mkdir -p $@
@@ -203,28 +202,6 @@ $(KCC): $(OBJS)
 
 $(HOST_BUILD_DIR)/ccgen.o $(HOST_BUILD_DIR)/ccgen1.o $(HOST_BUILD_DIR)/ccgen2.o: cc.h ccgen.h
 
-asm self-asm: $(ASMS)
-
-native-asm: $(NATIVE_ASMS)
-
-native-objects: $(NATIVE_OBJS)
-
-native-kcpp-objects: $(NATIVE_KCPP_OBJS)
-
-native-kcc1-objects: $(NATIVE_KCC1_OBJS)
-
-native-kparse-objects: $(NATIVE_KPARSE_OBJS)
-
-native-kgen-objects: $(NATIVE_KGEN_OBJS)
-
-native-kopt-objects: $(NATIVE_KOPT_OBJS)
-
-native-phase-objects: native-kcpp-objects native-kcc1-objects native-kparse-objects native-kgen-objects native-kopt-objects
-
-native-phase-dxrs: $(NATIVE_PHASE_DXRS)
-
-native-driver: $(NATIVE_DRIVER_DXR)
-
 # Complete host-side bootstrap for DAIMOS: four native compiler phases,
 # driver, startup/runtime objects and native libc archive.  These files
 # are consumed by DAIMOS's boot-image staging at NATIVE_BUILD_DIR.  This
@@ -234,14 +211,12 @@ native-driver: $(NATIVE_DRIVER_DXR)
 # Keep the individual targets for iterative development; "make native"
 # must never leave an apparently prepared but incomplete bootstrap tree.
 native: depend
-	$(MAKE) native-built
-
-native-built: $(KCC) $(NATIVE_PHASE_DXRS) $(NATIVE_DRIVER_DXR) \
-	$(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
+	$(MAKE) $(KCC) $(NATIVE_PHASE_DXRS) $(NATIVE_DRIVER_DXR) \
+		$(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
 
 # Bootstrap DXRs are installed separately from the Unix-hosted compiler.
 # DAIMOS reads these stable paths instead of private build-tree artifacts.
-install-native: native-built
+install-native: native
 	$(INSTALL) -d $(NATIVE_BOOTSTRAP_DIR)
 	$(INSTALL) -m 555 $(NATIVE_DRIVER_DXR) $(NATIVE_BOOTSTRAP_DIR)/KCC.dxr
 	$(INSTALL) -m 555 $(NATIVE_KCPP_DXR) $(NATIVE_BOOTSTRAP_DIR)/KCPP.dxr
@@ -469,7 +444,7 @@ $(ASMS): $(KCC)
 runtime: $(RUNTIME)
 
 # Host installation is independent of the cross-toolchain search prefix.
-install: all
+install: cross
 	$(INSTALL) -d $(DESTDIR)$(BINDIR)
 	$(INSTALL) -m 755 $(KCC) $(DESTDIR)$(BINDIR)/kcc
 	$(MAKE) install-runtime
@@ -487,6 +462,5 @@ uninstall:
 clean:
 	$(RM) -r $(HOST_BUILD_DIR) $(NATIVE_BUILD_DIR)
 
-.PHONY: depend host-built native-built kcc all asm self-asm native-asm native-objects native-kcpp-objects \
-	native-kcc1-objects native-kparse-objects native-kgen-objects native-kopt-objects native-phase-objects native-phase-dxrs native-driver native runtime install install-runtime \
-	uninstall clean
+.PHONY: all cross native depend runtime install install-native \
+	install-runtime uninstall clean
