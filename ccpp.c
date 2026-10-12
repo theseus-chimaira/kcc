@@ -4229,7 +4229,10 @@ break;
 	    res = d_elifdef(0);
 	break;
     default:
-	int_error ("directive: invalid preprocessor length %d", len);
+	/* An unrecognized directive in an excluded conditional section is
+	 * still lexed, but must not generate an internal compiler error.
+	 * Leave res unknown for the ordinary diagnostic/line-skip path. */
+	break;
 	}
 
     /* Now do common cleanup code by examining result */
