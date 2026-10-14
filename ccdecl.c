@@ -3379,6 +3379,16 @@ qualarray (TYPE* type, int flags, int* oldflags)
             type->Tsize, subtype);
     }
 
+/* Track definitions in progress without allocating persistent tag metadata.
+** An incomplete tag may be referenced inside its own member list, but it
+** cannot be defined again there in the same scope.
+*/
+struct tagdef_context_v1 {
+    SYMBOL *tag;
+    struct tagdef_context_v1 *prev;
+};
+static struct tagdef_context_v1 *active_tagdefs_v1;
+
 /* TAGSPEC - Handles tag for struct/union/enum
 */
 static TYPE *
@@ -3427,13 +3437,21 @@ tagspec(int typ)                /* TS_STRUCT, TS_UNION, or TS_ENUM */
     */
     if (tagsym && token == T_LBRACE)    /* If this will be a definition */
         {
-        if (tagsym->Sclass == SC_TAG)   /* Tag already defined? */
+        struct tagdef_context_v1 *ctx;
+        for (ctx = active_tagdefs_v1; ctx != NULL; ctx = ctx->prev)
+            if (ctx->tag == tagsym)
+                {
+                error("Nested redefinition of tag: %S", tagsym);
+                tagsym = NULL;          /* Recover with a distinct tag */
+                break;
+                }
+        if (tagsym != NULL && tagsym->Sclass == SC_TAG)
             {
             if (isdupsym(tagsym))       /* Dup def? */
                 error("Duplicate tag definition: %S", tagsym);
             tagsym = NULL;              /* Force a new definition */
             }
-        else if (tagsym->Sclass == SC_UTAG)     /* A ref already exists? */
+        else if (tagsym != NULL && tagsym->Sclass == SC_UTAG)
             {
             if (!isdupsym(tagsym))      /* If not in same block, */
                 tagsym = NULL;          /* don't satisfy the ref! */
@@ -3715,11 +3733,15 @@ sdeclenum(SYMBOL *tag)
 static INT
 sdeclstruct(SYMBOL *tag, int typ)
 {
+    struct tagdef_context_v1 context;
     SYMBOL *lastmem = tag;
     INT maxsize = 0, offset = 0;
     int boffset = 0, inbitf = 0;
     int savpok = paramok;
 
+    context.tag = tag;
+    context.prev = active_tagdefs_v1;
+    active_tagdefs_v1 = &context;
     paramok = 0;                        /* Not OK to collect param syms */
     while (!eof && token != T_RBRACE)
         {
@@ -3735,6 +3757,7 @@ sdeclstruct(SYMBOL *tag, int typ)
         offset = boffset = inbitf = 0;  /* Start over with zero offset */
         }
     paramok = savpok;                   /* Restore saved paramok */
+    active_tagdefs_v1 = context.prev;
 
     /* A flexible array member requires at least one other named member.
     ** Unnamed bit-fields do not satisfy this C99 constraint.
@@ -4449,7 +4472,9 @@ declarator(SYMBOL *d)
                             pp = addpp(pp, pushsztype(TS_ARRAY, 0, 1,
                                                      (TYPE *)NULL));
                             }
-                        else if (bnd == NULL || !tisinteg(bnd->Ntype))
+                        else if (bnd == NULL || bnd->Nop == N_UNDEF
+                              || bnd->Nop == N_ERROR
+                              || !tisinteg(bnd->Ntype))
                             {
                             error("Variable length array bound must have integer type");
                             pp = addpp(pp, pushsztype(TS_ARRAY, 0, 1,
@@ -4678,7 +4703,8 @@ paramlist(struct protostate
     switch (t->Tspec)
         {
         case TS_VOID:                   /* Check for "(void)" */
-            if (!ps->nparams && !s && token == T_RPAREN)
+            if (!ps->nparams && !s && token == T_RPAREN
+              && !tisqualif(t) && !(ps->decl.Sflags & SF_REGSPEC))
                 return findptype(TS_PARVOID, (TYPE *)NULL, (TYPE *)NULL);
             error("Function parameter cannot be void");
             t = deftype;
@@ -4855,7 +4881,14 @@ pushsztype(int typ, INT flags, INT siz, TYPE *ptr)
                         if (ptr->Tsize == 0 && !tisvla(ptr))
                             {
                             error("Illegal type - array of unknown-sized array");
-                            ptr = inttype;      /* Use int instead */
+                            /* Preserve the derived-array chain while
+                            ** recovering: addpp() still has to attach
+                            ** the eventual element type at its base.
+                            ** Replacing a partial array with int here
+                            ** leaves a non-derived node in that chain.
+                            */
+                            ptr = findctype(TS_ARRAY, ptr->Tflag,
+                                            1, ptr->Tsubt);
                             }
                         break;
                     case TS_FUNCT:              /* Array cannot have functions */
