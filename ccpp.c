@@ -70,7 +70,7 @@ void directive(void);
 static
 int d_define(void), d_undef(void), d_asm(void), d_endasm(void),
 	d_ifdef(int), d_if(void), d_else(void), d_elif(void), d_elifdef(int), d_endif(void),
-	d_include(void), d_line(void), d_error(void), d_warning(void),
+	d_include(void), d_include_next(void), d_line(void), d_error(void), d_warning(void),
 	d_pragma(void);
 static
 int iftest(void);
@@ -244,6 +244,12 @@ ppappendc(int c)
  */
 static
 int inlevel;			/* 0 - top level */
+/* Origin of the current include in the ordered -H/-I search paths.
+ * Zero means local/absolute/primary source; 1 and 2 are explicit and
+ * implicit header paths, respectively.  #include_next must not restart
+ * from the beginning of the path which supplied its parent header. */
+static int inc_origin_kind, inc_origin_index;
+static int next_origin_kind, next_origin_index;
 static
 CCSRC srcin;
 static
@@ -258,6 +264,7 @@ struct
     int	    cpage;	/* page number   */
     int	    cline;	/* line number in page */
     int	    cfline;	/* line number in file */
+    int     corigin_kind, corigin_index;
     }
 inc[MAXINCLNEST];
 
@@ -645,6 +652,7 @@ ppinit(void)
     pptreset();
     pp_counter = 0;
     inlevel = iflevel = flushing = inasm = indirp = maclevel = 0;
+    inc_origin_kind = inc_origin_index = 0;
     iftype[0] = 0;		/* Just in case */
     tadset = 0;			/* Date/time strings not set */
     erptr = errlin;		/* Init pointer to error-context buffer */
@@ -1457,6 +1465,8 @@ nextch (void)
 		page = inc[inlevel].cpage;
 		line = inc[inlevel].cline;
 		fline = inc[inlevel].cfline;
+		inc_origin_kind = inc[inlevel].corigin_kind;
+		inc_origin_index = inc[inlevel].corigin_index;
 		ch_ungot = 1;
 		estrcpy(inpfname, inc[inlevel].cname);
 
@@ -4165,6 +4175,8 @@ directive (void)
     /* Use ident length as quick hash into switch table.
     ** Result value is a PPR_ type.
     */
+    next_origin_kind = inc_origin_kind;
+    next_origin_index = inc_origin_index;
     indirp++;			/* Set this for scanhwsp checking */
     ppcreset();			/* Reset tokenizer storage */
     pptreset();
@@ -4227,6 +4239,10 @@ break;
     case 8:
 	if (!strcmp(rawval.cp,"elifndef"))
 	    res = d_elifdef(0);
+	break;
+    case 12:
+	if (!strcmp(rawval.cp, "include_next"))
+	    res = flushing ? PPR_FLUSH : d_include_next();
 	break;
     default:
 	/* An unrecognized directive in an excluded conditional section is
@@ -5701,6 +5717,37 @@ static
 int cinctry();	/* Auxiliary just for cinclude() */
 #endif
 
+/* Search only the directories following the one which supplied the
+ * current include.  In particular, never search the current file's
+ * own directory again, even for a quoted include_next directive.
+ * As with normal system includes, implicit -H paths follow explicit ones.
+ */
+static
+int
+d_include_next(void)
+{
+    char f[FNAMESIZE], f2[FNAMESIZE];
+    FILE *fp = NULL;
+    int i, start;
+
+    if (getfile(f, FNAMESIZE) == 0)
+        return PPR_FLUSH;
+    if (*f == '/') {
+        error("Absolute pathname in #include_next: %s", f);
+        return PPR_ATEOL;
+    }
+    start = next_origin_kind == 1 ? next_origin_index + 1 : 0;
+    if (next_origin_kind != 2)
+        for (i = start; i < nhfpaths && !fp; ++i)
+            (void)cinctry(1, hfpaths + i, f2, f, &fp);
+    start = next_origin_kind == 2 ? next_origin_index + 1 : 0;
+    for (i = start; i < nihfpaths && !fp; ++i)
+        (void)cinctry(1, ihfpaths + i, f2, f, &fp);
+    if (fp) filepush(fp, f2, 1, 1, 1);
+    else error("Can't open include_next file: %s", f);
+    return PPR_ATEOL;
+}
+
 static
 int
 d_include (void)
@@ -5832,8 +5879,36 @@ filepush(FILE * fp, char * fname, int lin, int pag, int flin)
     inc[inlevel].cpage = page;
     inc[inlevel].cline = line;
     inc[inlevel].cfline = fline;
+    inc[inlevel].corigin_kind = inc_origin_kind;
+    inc[inlevel].corigin_index = inc_origin_index;
     ifpush(inlevel);			/* Fix up conditional info */
 
+    /* Determine the originating header search directory for this file.
+     * Prefer the longest matching prefix so nested -I entries are handled
+     * without confusing an outer directory with an inner directory.
+     */
+    {
+        int i, kind, bestlen = -1;
+        char **paths;
+        int count;
+        inc_origin_kind = inc_origin_index = 0;
+        for (kind = 1; kind <= 2; ++kind) {
+            paths = kind == 1 ? hfpaths : ihfpaths;
+            count = kind == 1 ? nhfpaths : nihfpaths;
+            for (i = 0; i < count; ++i) {
+                size_t n;
+                if (!paths[i] || !*paths[i]) continue;
+                n = strlen(paths[i]);
+                while (n && paths[i][n - 1] == '/') --n;
+                if ((int)n > bestlen && !strncmp(fname, paths[i], n)
+                    && fname[n] == '/') {
+                    bestlen = (int)n;
+                    inc_origin_kind = kind;
+                    inc_origin_index = i;
+                }
+            }
+        }
+    }
     inlevel++;				/* Create new context */
     estrcpy(inpfname, fname);		/* Set new current file name */
     in = fp;				/* Set new current input stream */
