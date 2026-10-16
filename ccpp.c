@@ -4508,8 +4508,9 @@ mdefinp(struct macframe
 	    {
 	    case T_EOF:
 	    case T_EOL:
-	    if (vaopt)
+	    if (vaopt) {
 	        error("Missing ')' in __VA_OPT__");
+	    }
 	    /* Done, ignore any trailing whitespace */
 		if (tl.tl_tail && tl.tl_tail->pt_typ == T_MACCAT)
 		    {

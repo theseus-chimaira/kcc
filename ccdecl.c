@@ -6072,8 +6072,8 @@ pizarray(TYPE *t, int lev)
         while (token != T_RBRACE && token != T_EOF) {
             designated = 0;
             if (token == T_LBRACK) {
-            if (!CSTD_HAS(CSTD_C99))
-                error("Designated initializers require C99");
+                if (!CSTD_HAS(CSTD_C99))
+                    error("Designated initializers require C99");
                 nextoken();
                 idx = pconst();
                 if (idx < 0) {
