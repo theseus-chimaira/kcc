@@ -7,12 +7,11 @@
 	.globl	strspn
 strspn:
 	move	3,1
-	move	4,2
 	setz	1,
 strspn_v1_scan:
 	ldb	5,3
 	jumpe	5,strspn_v1_done
-	move	6,4
+	move	6,2
 strspn_v1_set:
 	ldb	7,6
 	jumpe	7,strspn_v1_done
