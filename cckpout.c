@@ -1,4 +1,4 @@
-/* CCKPOUT.C - KGEN output shim writing the KPCODE1 stream. */
+/* CCKPOUT.C - KGEN output shim writing the KPCODE2 stream. */
 
 #include "cckpcode.h"
 #include <stdlib.h>
@@ -22,7 +22,7 @@ static int
 write_words(unsigned int kind, const INT *words, unsigned int nwords)
 {
     if (kpcode_write_record(out, kind, words, nwords) != 0) {
-        jerr("Cannot write KPCODE1 record %u", kind);
+        jerr("Cannot write KPCODE2 record %u", kind);
         return -1;
     }
     return 0;
@@ -73,7 +73,7 @@ symid_raw(SYMBOL *s)
         p = (struct kp_symmap *)realloc((char *)symmap,
             cap * sizeof(struct kp_symmap));
         if (p == NULL)
-            efatal("Out of memory for KPCODE1 symbol map");
+            efatal("Out of memory for KPCODE2 symbol map");
         symmap = p;
         capsymmap = cap;
     }
@@ -98,9 +98,9 @@ emit_symbol(SYMBOL *s)
         link[1] = (INT)sid;
         if (kpcode_write_symbol(out, id, s) != 0 ||
             write_words(KPCODE_REC_SYMBOL_LINK, link, 2) != 0)
-            jerr("Cannot write KPCODE1 symbol");
+            jerr("Cannot write KPCODE2 symbol");
     } else if (kpcode_write_symbol(out, id, s) != 0)
-        jerr("Cannot write KPCODE1 symbol");
+        jerr("Cannot write KPCODE2 symbol");
     return id;
 }
 
@@ -136,11 +136,11 @@ outinit(void)
     if (longidents) cf |= KPCODE_CF_LONGIDENTS;
     h.compile_flags = cf;
     if (kpcode_write_header(out, &h) != 0)
-        jerr("Cannot write KPCODE1 header");
+        jerr("Cannot write KPCODE2 header");
     prefix[0] = (INT)debcsi;
     if (write_string(KPCODE_REC_MODULE_BEGIN, prefix, 1, inpfname,
             (unsigned int)strlen(inpfname)) != 0)
-        jerr("Cannot write KPCODE1 module header");
+        jerr("Cannot write KPCODE2 module header");
     kpseg = 1;
     _word_cnt = 0;
 }
@@ -155,7 +155,7 @@ outdone(int mainf)
     for (s = symbol != NULL ? symbol->Snext : NULL; s != NULL; s = s->Snext) {
         id = emit_symbol(s);
         if (kpcode_write_symbol(out, id, s) != 0)
-            jerr("Cannot update KPCODE1 global symbol");
+            jerr("Cannot update KPCODE2 global symbol");
         rec[0] = (INT)id;
         if (write_words(KPCODE_REC_GLOBAL_SYMBOL, rec, 1) != 0)
             break;
@@ -176,7 +176,7 @@ realcode(PCODE *p)
         return;
     sid = emit_symbol(p->Pptr);
     if (kpcode_write_pcode(out, p, sid) != 0)
-        jerr("Cannot write KPCODE1 pseudo instruction");
+        jerr("Cannot write KPCODE2 pseudo instruction");
     ++_word_cnt;
 }
 
@@ -219,7 +219,7 @@ outid(char *s)
 {
     if (write_string(KPCODE_REC_OUTID, NULL, 0, s,
             (unsigned int)strlen(s)) != 0)
-        jerr("Cannot write KPCODE1 identifier");
+        jerr("Cannot write KPCODE2 identifier");
 }
 
 void
@@ -230,7 +230,7 @@ outscon(char *s, int len, int bsiz)
     prefix[1] = (INT)bsiz;
     if (write_string(KPCODE_REC_OUTSCON, prefix, 2, s,
             (unsigned int)len) != 0)
-        jerr("Cannot write KPCODE1 string constant");
+        jerr("Cannot write KPCODE2 string constant");
 }
 
 void
@@ -246,14 +246,14 @@ outstr(char *s)
 {
     if (write_string(KPCODE_REC_TEXT, NULL, 0, s,
             (unsigned int)strlen(s)) != 0)
-        jerr("Cannot write KPCODE1 text");
+        jerr("Cannot write KPCODE2 text");
 }
 
 void
 outnstr(char *s, int len)
 {
     if (write_string(KPCODE_REC_TEXT, NULL, 0, s, (unsigned int)len) != 0)
-        jerr("Cannot write KPCODE1 text");
+        jerr("Cannot write KPCODE2 text");
 }
 
 void

@@ -14,6 +14,15 @@
 #define NEW 3	/* temporary to allow shutting advanced optimiz off if buggy */
 
 #include "cc.h"
+#ifndef __COMPILER_KCC__
+#include <float.h>
+/* Host binary32 loses three fraction bits from a PDP-10 36-bit float. */
+/* EVAL has only the front-end cc.h dependency, not ccgen.h.  The
+** definitions live in shared ccoututil.c, linked by every compiler phase.
+*/
+extern double pdp10_host_round_single_v1 (long double);
+extern double pdp10_host_round_single_arith_pdp6_v1 (long double);
+#endif
 
 /* Exported functions */
 NODE *evalexpr(NODE *e);
@@ -558,6 +567,9 @@ evalbinop(NODE *e)
     unsigned INT ul, ul2;
     float	f, f2;
     double	d, d2;
+#ifndef __COMPILER_KCC__
+    long double fwide;
+#endif
     int log = -1;
     NODE *eleft = e->Nleft;
 #if SYS_CSI			/* FEW 2A(40) 29-Jul-92 */
@@ -663,6 +675,50 @@ evalbinop(NODE *e)
 	break;
 
     case TS_FLOAT:
+#ifndef __COMPILER_KCC__
+	/* Round each operand to target precision first.  Compute with a
+	** wide host intermediate (113 bits on the supported host) and
+	** round the resulting expression once to the target's 27 bits.
+	** Binary32 arithmetic here silently erased valid low bits.
+	*/
+	d = pdp10_host_round_single_v1 ((long double)eleft->Nfconst);
+	d2 = pdp10_host_round_single_v1 ((long double)e->Nright->Nfconst);
+#if LDBL_MANT_DIG < 55
+	/* Multiplying two 27-bit fractions can require 54 exact bits;
+	** on hosts without wider intermediates, preserve runtime order
+	** instead of risking a double-rounding error in constant folding.
+	*/
+	if (e->Nop == Q_PLUS || e->Nop == Q_MINUS ||
+	    e->Nop == Q_MPLY || e->Nop == Q_DIV)
+	    return e;
+#endif
+	switch (e->Nop) {
+	case Q_PLUS:  fwide = (long double)d + (long double)d2; break;
+	case Q_MINUS: fwide = (long double)d - (long double)d2; break;
+	case Q_MPLY:  fwide = (long double)d * (long double)d2; break;
+	case Q_DIV:
+	    if (d2 == 0.0)
+		error("divide by zero");
+	    else
+		fwide = (long double)d / (long double)d2;
+	    if (d2 == 0.0)
+		return e;
+	    break;
+	case Q_EQUAL: log = d == d2; break;
+	case Q_NEQ:   log = d != d2; break;
+	case Q_LESS:  log = d < d2;  break;
+	case Q_GREAT: log = d > d2;  break;
+	case Q_LEQ:   log = d <= d2; break;
+	case Q_GEQ:   log = d >= d2; break;
+	default: return e;
+	}
+	if (log >= 0) return setlog(e, log);
+	if (tgcpu == TGCPU_PDP6)
+	    eleft->Nfconst = pdp10_host_round_single_arith_pdp6_v1 (
+		fwide);
+	else
+	    eleft->Nfconst = pdp10_host_round_single_v1 (fwide);
+#else
 	f = (float) eleft->Nfconst;			// FW KCC-NT
 	f2 = (float) e->Nright->Nfconst;	// FW KCC-NT
 	switch (e->Nop) {
@@ -686,6 +742,7 @@ evalbinop(NODE *e)
 	}
 	if (log >= 0) return setlog(e, log);
 	eleft->Nfconst = f;
+#endif
 	break;
 
     case TS_DOUBLE:
@@ -1113,8 +1170,11 @@ evalb1op(NODE *e)
     ** constant values, which CCGEN2 tends to generate because it does the
     ** left-hand node first.
     */
-    if (e->Nop == Q_PLUS || e->Nop == Q_MPLY
-	  || e->Nop == Q_OR || e->Nop == Q_ANDT || e->Nop == Q_XORT) {
+    if ((e->Ntype->Tspec != TS_FLOAT
+	  && e->Ntype->Tspec != TS_DOUBLE
+	  && e->Ntype->Tspec != TS_LNGDBL)
+	 && (e->Nop == Q_PLUS || e->Nop == Q_MPLY
+	  || e->Nop == Q_OR || e->Nop == Q_ANDT || e->Nop == Q_XORT)) {
 	assocf = 1;
 	if (!eisconst(e->Nright)) {	/* Commute to get constant on right */
 	    NODE *t;
@@ -1343,20 +1403,14 @@ evalb1op(NODE *e)
 	}
 	break;
     case TS_FLOAT:
-	switch (e->Nop) {
-	case Q_PLUS:	er->Nfconst += (float) elr->Nfconst;	break;
-	case Q_MPLY:	er->Nfconst *= (float) elr->Nfconst;	break;
-	default:	return e;
-	}
-	break;
     case TS_DOUBLE:
     case TS_LNGDBL:
-	switch (e->Nop) {
-	case Q_PLUS:	er->Nfconst += (double) elr->Nfconst;	break;
-	case Q_MPLY:	er->Nfconst *= (double) elr->Nfconst;	break;
-	default:	return e;
-	}
-	break;
+	/* Floating-point addition/multiplication is not associative at
+	** target precision.  Never combine constants across a variable:
+	** (x+a)+b must not become x+(a+b).  Keep the source evaluation
+	** order, even when all intermediate constants are representable.
+	*/
+	return e;
 
     default:
 	return e;		/* Can't do operation?? Barf and return. */
@@ -1708,6 +1762,13 @@ evalcast(NODE *e)
 		cn->Niconst = tolong(tto, cn->Niconst);
 	    break;
 	case CAST_FP_IT:	/* Floating-point type to integer type */
+	    if (tisdimode(tto))
+		return e; /* Full-width conversion needs both integer words. */
+#ifndef __COMPILER_KCC__
+	    if (tfrom->Tspec == TS_FLOAT)
+		cn->Nfconst = pdp10_host_round_single_v1 (
+			(long double)cn->Nfconst);
+#endif
 	    cn->Niconst = tolong(tto, (INT) cn->Nfconst);
 	    cn->Nop = N_ICONST;
 	    break;
@@ -1721,11 +1782,21 @@ evalcast(NODE *e)
 	    switch (castidx(tfrom->Tspec, tto->Tspec)) {
 		case castidx(TS_DOUBLE,TS_FLOAT):
 		case castidx(TS_LNGDBL,TS_FLOAT):
+#ifndef __COMPILER_KCC__
+		    cn->Nfconst = pdp10_host_round_single_v1 (
+			(long double)cn->Nfconst);
+#else
 		    cn->Nfconst = (float) cn->Nfconst;
+#endif
 		    break;
 		case castidx(TS_FLOAT,TS_DOUBLE):
 		case castidx(TS_FLOAT,TS_LNGDBL):
+#ifndef __COMPILER_KCC__
+		    cn->Nfconst = pdp10_host_round_single_v1 (
+			(long double)cn->Nfconst);
+#else
 		    cn->Nfconst = (double)(float) cn->Nfconst;
+#endif
 		    break;
 		case castidx(TS_LNGDBL,TS_DOUBLE):
 		case castidx(TS_DOUBLE,TS_LNGDBL):
@@ -1737,12 +1808,23 @@ evalcast(NODE *e)
 	    break;
 
 	case CAST_IT_FP:	/* Integer type to floating-point type */
+	    if (tisdimode(tfrom))
+		return e; /* Both words needed: let target cast code handle it. */
 	    switch (tto->Tspec) {
 		case TS_FLOAT:
+#ifndef __COMPILER_KCC__
+		    if (tissigned(tfrom))
+			cn->Nfconst = pdp10_host_round_single_v1 (
+				(long double)cn->Niconst);
+		    else
+			cn->Nfconst = pdp10_host_round_single_v1 (
+				(long double)(unsigned INT)cn->Niconst);
+#else
 		    if (tissigned(tfrom))
 			cn->Nfconst = (float) cn->Niconst;
 		    else
 			cn->Nfconst = (float) (unsigned INT) cn->Niconst;
+#endif
 		    break;
 		case TS_DOUBLE:
 		case TS_LNGDBL:

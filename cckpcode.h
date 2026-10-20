@@ -5,15 +5,18 @@
 #include "ccgen.h"
 
 /*
- * KPCODE1 - versioned machine-oriented stream between KGEN and KOPT.
+ * KPCODE2 - versioned machine-oriented stream between KGEN and KOPT.
  *
  * The logical unit is one 36-bit PDP-10 word.  The hosted transport stores
  * each word in five octets (high four bits first); native word-stream I/O can
  * later replace only these transport helpers without changing record layout.
  */
-#define KPCODE_MAGIC "KPCODE1"
+#define KPCODE_MAGIC "KPCODE2"
 #define KPCODE_MAGIC_BYTES 7
-#define KPCODE_VERSION 1
+/* v2 encodes PTA_FCONST as the actual 36-bit target single word, not the
+** host IEEE binary32 bit pattern.  Reject cached v1 objects explicitly.
+*/
+#define KPCODE_VERSION 2
 #define KPCODE_INT_CHUNKS 4
 #define KPCODE_WORD_MASK ((unsigned INT)0777777777777)
 

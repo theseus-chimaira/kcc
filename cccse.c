@@ -858,7 +858,11 @@ sameaddr(struct pcode * p, struct pcode * q, INT stkoffset)
 	else return (p->Poffset == q->Poffset);
 
     case PTA_FCONST:
+#ifdef __COMPILER_KCC__
 	return (p->Pfloat == q->Pfloat);
+#else
+	return (p->Pfloatword == q->Pfloatword);
+#endif
 
     case PTA_DCONST:
 	return (p->Pdouble == q->Pdouble);

@@ -112,14 +112,12 @@ static void outmpdbl (INT *, int), outpreamble (void),
 #if !HOST_DAIMOS
 static void outasmh (void);
 #endif
-static int fltpow2 (double), outdecl (void),
+static int fltpow2 (PCODE *), outdecl (void),
 	   obplh (INT, INT *, int), bumpaddr (PCODE *), gasbplhval (int);
 static int directop (int);
 static int bigfloat (PCODE *);
 #ifndef __COMPILER_KCC__
-static unsigned long host_u32_from_bytes (unsigned char *);
 static unsigned long host_float_bits (float *);
-static void host_double_bits (double, unsigned long *, unsigned long *);
 static void host_pdp10_double_words (double, unsigned INT *, unsigned INT *);
 #endif
 static void outfile (void); /* KAR-1/92, output of input filename (for NPD) */
@@ -1313,7 +1311,7 @@ realcode (PCODE *p)
 	case P_FDVR:
 	    if (optobj
 	      && typ == PTA_FCONST		/* If operand is a float constant */
-	      && (i = fltpow2 (p->Pfloat)) != 0)	/* and is a power of 2 */
+	      && (i = fltpow2 (p)) != 0)	/* and is a power of 2 */
 		{
 		p->Pvalue = (p->Pop == P_FDVR) ? -i : i;
 		p->Pop = P_FSC;
@@ -1642,7 +1640,7 @@ outinstr (PCODE *p)
 #ifdef  __COMPILER_KCC__		/* native mode */
 		outnum (* (INT *) (&p->Pfloat));
 #else					/* host may not be PDP-10! */
-		outmpdbl ((INT *) &p->Pfloat, 1);
+		outnum (p->Pfloatword);
 #endif
 		outc (']');
 		break;
@@ -1662,13 +1660,8 @@ outinstr (PCODE *p)
 #ifdef  __COMPILER_KCC__		/* native mode */
 	    outnum (* (INT *) (&p->Pfloat));	/* Pass float as INT val */
 #else					/* host may not be PDP-10! */
-	    /* PTA_FCONST always holds a single-precision value in Pfloat.
-	    ** Even when the operand must be emitted as a full literal, emit
-	    ** one PDP-10 single-float word.  Using Pdouble here reads the
-	    ** same union storage as a host double and creates a bogus two-word
-	    ** literal, which breaks FIX/FADR/FMPR/etc. on host-built KCC.
-	    */
-	    outmpdbl ((INT *) &p->Pfloat, 1);
+	    /* The hosted PCODE field is already an exact 36-bit target word. */
+	    outnum (p->Pfloatword);
 #endif
 	    outc (big ? ']' : ')');
 
@@ -1676,8 +1669,13 @@ outinstr (PCODE *p)
 	 * constant is.  However, because this is slow, only do it when
 	 * we know the assembler output is going to stay around.
 	 */
-	    if (!delete)			/* If keeping asm file around, */
-		fprintf (out,"\t; %.20g",p->Pfloat);	/* add comment for humans */
+	    if (!delete) {		/* If keeping asm file around */
+#ifdef __COMPILER_KCC__
+		fprintf (out,"\t; %.20g",p->Pfloat);
+#else
+		outstr ("\t; exact PDP-10 single word");
+#endif
+	    }
 	    break;
 
 	case PTA_DCONST1:		/* Double-word floating constant */
@@ -3348,7 +3346,6 @@ obplh (INT boff, INT *awoff, int bsize)
 #define OF_WD2 02	/* Emit word 2 only */
 
 #ifndef __COMPILER_KCC__
-static unsigned INT host_pdp10_float_word_v1(double);
 #endif
 
 int
@@ -3422,23 +3419,6 @@ outlpnum (unsigned INT n, int dig)
 
 #ifndef __COMPILER_KCC__
 static unsigned long
-host_u32_from_bytes (unsigned char * b)
-{
-    union { unsigned int i; unsigned char c[sizeof(unsigned int)]; } u;
-
-    u.i = 1;
-    if (u.c[0] == 1)
-	return (((unsigned long)b[3] << 24)
-	      | ((unsigned long)b[2] << 16)
-	      | ((unsigned long)b[1] << 8)
-	      |  (unsigned long)b[0]);
-    return (((unsigned long)b[0] << 24)
-	  | ((unsigned long)b[1] << 16)
-	  | ((unsigned long)b[2] << 8)
-	  |  (unsigned long)b[3]);
-}
-
-static unsigned long
 host_float_bits (float * fp)
 {
     unsigned char b[4];
@@ -3447,80 +3427,6 @@ host_float_bits (float * fp)
 	int_error ("host_float_bits: unsupported host float size");
     memcpy ((char *)b, (char *)fp, 4);
     return host_u32_from_bytes (b);
-}
-
-static void
-host_double_bits (double d, unsigned long * lo, unsigned long * hi)
-{
-    unsigned char b[8];
-    union { unsigned int i; unsigned char c[sizeof(unsigned int)]; } u;
-
-    if (sizeof (double) != 8)
-	int_error ("host_double_bits: unsupported host double size");
-    memcpy ((char *)b, (char *)&d, 8);
-    u.i = 1;
-    if (u.c[0] == 1)
-	{
-	*lo = host_u32_from_bytes (b);
-	*hi = host_u32_from_bytes (b + 4);
-	}
-    else
-	{
-	*hi = host_u32_from_bytes (b);
-	*lo = host_u32_from_bytes (b + 4);
-	}
-}
-
-/* Encode a PDP-10 single word from an IEEE host DOUBLE, not a host FLOAT.
-** A PDP-10 36-bit floating word has 27 fraction bits; IEEE single has
-** only 24 significant bits.  Discarding those three target-only bits in
-** the host lexer or output stage corrupts otherwise representable
-** literals such as 134217732.0F.  Round the full host binary64 mantissa
-** to the 27-bit target fraction using ties-to-even.  This routine is for
-** host toolchain builds; native KCC uses its own target representation.
-*/
-static unsigned INT
-host_pdp10_float_word_v1 (double d)
-{
-    unsigned long lo32, hi32;
-    unsigned long long fraction, low, word;
-    int exponent, negative;
-
-    host_double_bits (d, &lo32, &hi32);
-    negative = (hi32 & 0x80000000UL) != 0;
-    exponent = (int) ((hi32 >> 20) & 0x7ffUL);
-    if (exponent == 0)
-	return 0; /* Host subnormals underflow the PDP-10 exponent range. */
-    if (exponent == 0x7ff)
-	{
-	  int_error ("host_pdp10_float_word_v1: nonfinite constant");
-	  return 0;
-	}
-
-    fraction = (1ULL << 52) |
-	((unsigned long long) (hi32 & 0xfffffUL) << 32) | lo32;
-    low = fraction & ((1ULL << 26) - 1);
-    fraction >>= 26;
-    if (low > (1ULL << 25) ||
-	(low == (1ULL << 25) && (fraction & 1)))
-	++fraction;
-    exponent = exponent - 894; /* IEEE bias 1023 to PDP bias 128. */
-    if (fraction == (1ULL << 27))
-	{
-	  fraction >>= 1;
-	  ++exponent;
-	}
-    if (exponent <= 0)
-	return 0;
-    if (exponent > 255)
-	{
-	  int_error ("host_pdp10_float_word_v1: exponent overflow");
-	  return 0;
-	}
-    word = ((unsigned long long) exponent << 27) | fraction;
-    if (negative)
-	word = (-word) & ((1ULL << 36) - 1);
-    return (unsigned INT) word;
 }
 
 static void
@@ -3712,24 +3618,24 @@ outmpdbl (INT *ip, int which)  /* 1 = 1st wd, 2 = 2nd wd, 3 = both wds (dbl) */
  * should have been caught earlier in optimization.
  */
 static int
-fltpow2 (double d)
+fltpow2 (PCODE *p)
 {
 #ifdef __COMPILER_KCC__
+    double d = p->Pfloat;
     unsigned INT u = (unsigned INT) (* (INT *) (&d));
 
     if ((d > 0.0 && u & 03777777777L) == 0)
 	return (int) (u >> 27) - 129;
 #else  /* Not KCC */
-    unsigned long lo32, hi32;
-    int exp;
+    unsigned INT w = (unsigned INT)p->Pfloatword;
 
-    if (d > 0.0)
-	{
-	host_double_bits (d, &lo32, &hi32);
-	exp = (int)((hi32 >> 20) & 03777);
-	if (exp != 0 && (hi32 & 03777777L) == 0 && lo32 == 0)
-	    return exp - 1023;
-	}
+    /* The hosted peephole buffer stores the FINAL 36-bit target word.
+    ** The 27-bit normalized fraction of a positive power of two has
+    ** exactly bit 26 set, with all remaining fraction bits zero.
+    */
+    if (w && !(w & 0400000000000ULL) &&
+	(w & 0777777777ULL) == 0400000000ULL)
+	return (int)((w >> 27) & 0377) - 129;
 #endif
     return 0;
 }
@@ -3741,8 +3647,12 @@ fltpow2 (double d)
 static int
 bigfloat (PCODE *p)
 {
+#ifdef __COMPILER_KCC__
     return (( (* (unsigned INT *) (&p->Pfloat))
 		 & 0777777L) != 0);	/* If 1st wd RH has bits, big. */
+#else
+    return (((unsigned INT)p->Pfloatword & 0777777L) != 0);
+#endif
 }
 
 /* OUTSCON - Output string constant.

@@ -1,4 +1,4 @@
-/* CCKPREAD.C - bounded KPCODE1 stream reader */
+/* CCKPREAD.C - bounded KPCODE2 stream reader */
 
 #include "cckpcode.h"
 #include <string.h>
@@ -140,13 +140,8 @@ kpcode_decode_pcode(const INT *words, unsigned int nwords, PCODE *p,
 #else
     mode = p->Ptype & PTF_ADRMODE;
     if (mode == PTA_FCONST) {
-        unsigned char b[4];
-        unsigned INT v = (unsigned INT)kpcode_unpack_int(&words[KPCODE_PCODE_AUX00]);
-        b[0] = (unsigned char)(v >> 24);
-        b[1] = (unsigned char)(v >> 16);
-        b[2] = (unsigned char)(v >> 8);
-        b[3] = (unsigned char)v;
-        memcpy((char *)&p->Pfloat, (char *)b, 4);
+        /* KPCODE v2: exact 36-bit single, same meaning on every host. */
+        p->Pfloatword = kpcode_unpack_int(&words[KPCODE_PCODE_AUX00]);
     } else if (mode == PTA_DCONST || mode == PTA_DCONST1 ||
                mode == PTA_DCONST2) {
         unsigned char b[8];

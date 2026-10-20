@@ -184,10 +184,10 @@ compile_one(char *source, char *output, int optimize,
 {
     char kpt[40];
     char kir[40];
-    char kp1[40];
+    char kp2[40];
     char kptarg[44];
     char kirarg[44];
-    char kp1chain[SYS_RUN_ARG_MAX_CHARS + 1U];
+    char kp2chain[SYS_RUN_ARG_MAX_CHARS + 1U];
     char outchain[SYS_RUN_ARG_MAX_CHARS + 1U];
     char *av[KDRV_ARG_MAX];
     unsigned int i;
@@ -195,13 +195,13 @@ compile_one(char *source, char *output, int optimize,
 
     temp_name(kpt, ".KPT");
     temp_name(kir, ".KIR");
-    temp_name(kp1, ".KP1");
+    temp_name(kp2, ".KP2");
     remove_file(kpt);
     remove_file(kir);
-    remove_file(kp1);
+    remove_file(kp2);
     if (phase_arg(kptarg, sizeof(kptarg), 'R', kpt) != 0 ||
         phase_arg(kirarg, sizeof(kirarg), 'R', kir) != 0 ||
-        phase_arg(kp1chain, sizeof(kp1chain), 'X', kp1) != 0 ||
+        phase_arg(kp2chain, sizeof(kp2chain), 'X', kp2) != 0 ||
         phase_arg(outchain, sizeof(outchain), 'Y', output) != 0)
         return 126;
 
@@ -226,7 +226,7 @@ compile_one(char *source, char *output, int optimize,
 
     av[0] = "KPARSE";
     av[1] = kirarg;
-    av[2] = kp1chain;
+    av[2] = kp2chain;
     av[3] = outchain;
 #ifdef KCC_NATIVE_PHASE_TRACE
     fprintf(stderr, "kcc-phase: enter KPARSE\n");
@@ -244,7 +244,7 @@ compile_one(char *source, char *output, int optimize,
 done:
     remove_file(kpt);
     remove_file(kir);
-    remove_file(kp1);
+    remove_file(kp2);
     return rc;
 }
 

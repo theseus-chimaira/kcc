@@ -1,4 +1,4 @@
-/* CCKOPT.C - minimal KPCODE1 replay driver for the KOPT phase. */
+/* CCKOPT.C - minimal KPCODE2 replay driver for the KOPT phase. */
 
 #include "ccsite.h"
 #include "cckpcode.h"
@@ -298,12 +298,12 @@ main(int argc, char **argv)
         else if (inname == NULL)
             inname = argv[i];
         else {
-            fprintf(stderr, "usage: kopt input.kp1 -R=output.s\n");
+            fprintf(stderr, "usage: kopt input.kp2 -R=output.s\n");
             return 2;
         }
     }
     if (inname == NULL || outname == NULL) {
-        fprintf(stderr, "usage: kopt input.kp1 -R=output.s\n");
+        fprintf(stderr, "usage: kopt input.kp2 -R=output.s\n");
         return 2;
     }
     infile = fopen(inname, "rb");

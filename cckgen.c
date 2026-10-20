@@ -1,4 +1,4 @@
-/* CCKGEN.C - compact native KIR1 -> KPCODE1 driver. */
+/* CCKGEN.C - compact native KIR1 -> KPCODE2 driver. */
 #include "cckir.h"
 #include <stdlib.h>
 #include <string.h>
@@ -66,12 +66,12 @@ main(int argc, char **argv)
         } else if (inname == NULL) {
             inname = argv[i];
         } else {
-            fprintf(stderr, "usage: kgen [-N] input.kir -R=output.kp1\n");
+            fprintf(stderr, "usage: kgen [-N] input.kir -R=output.kp2\n");
             return 2;
         }
     }
     if (inname == NULL || outname == NULL) {
-        fprintf(stderr, "usage: kgen [-N] input.kir -R=output.kp1\n");
+        fprintf(stderr, "usage: kgen [-N] input.kir -R=output.kp2\n");
         return 2;
     }
     init_pdp6_target(optimize);

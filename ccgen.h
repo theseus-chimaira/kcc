@@ -18,6 +18,17 @@
 #define NULL 0
 #endif
 
+/* Host toolchain's exact 36-bit target float representation.  All four
+** compiler phases use one implementation; native KCC retains native data.
+*/
+#ifndef __COMPILER_KCC__
+extern unsigned long host_u32_from_bytes(unsigned char *);
+extern void host_double_bits(double, unsigned long *, unsigned long *);
+extern unsigned INT host_pdp10_float_word_v1(double);
+extern double pdp10_host_round_single_v1(long double);
+extern double pdp10_host_round_single_arith_pdp6_v1(long double);
+#endif
+
 extern char fnargregs;	/* GCC-ABI arg words shimmed for current fn */
 
 extern SYMBOL *newlabel(void);	/* get new internal label */
@@ -127,6 +138,12 @@ GEXT int maxcode, mincode;	/* top and bottom indices into codes */
 **	Used only by PTA_FCONST.
 */
 #define Pfloat p_u.p_fval	/* single-prec value */
+/* Hosted KCC cannot represent a 27-significand-bit PDP-10 single in its
+** 24-bit IEEE float.  Carry the final 36-bit TARGET word for FCONST
+** through PCODE and KPCODE; the native compiler uses Pfloat directly.
+** An integer occupies no more space than the existing PCODE union.
+*/
+#define Pfloatword p_u.p_int
 
 /* Pdouble - double-precision floating-point constant
 ** Pdouble1 - 1st wd of double constant
@@ -240,7 +257,8 @@ may turn out to be of any of these forms:
 	OP Preg,[Pvalue]	Immediate but won't fit (e.g. MOVE 1,[1,,1])
 
 PTA_FCONST	OP Preg,[Pfloat]	"Float constant"
-	The Pfloat field contains the value for a single-precision
+	Native KCC uses Pfloat.  Hosted KCC uses Pfloatword, the
+	36-bit target-encoded word, so it preserves all 27 fraction bits;
 floating-point constant.  This is normally assembled as shown but
 may sometimes turn into an immediate-mode instruction if the value
 has no bits set in its right half.

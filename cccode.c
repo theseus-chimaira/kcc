@@ -208,7 +208,12 @@ INT idx;
 	    fprintf(f, "RCONST R=%o, Constant=%o", p->Preg, p->Pvalue);
 	    break;
 	case PTA_FCONST:		/* [single-prec float] */
+#ifdef __COMPILER_KCC__
 	    fprintf(f, "FCONST R=%o, Fltcon=%g", p->Preg, p->Pfloat);
+#else
+	    fprintf(f, "FCONST R=%o, TargetWord=%012llo", p->Preg,
+		(unsigned long long)p->Pfloatword);
+#endif
 	    break;
 	case PTA_DCONST:		/* [double-prec float] */
 	    fprintf(f, "DCONST R=%o, Dblcon=%g", p->Preg, p->Pdouble);
@@ -2566,7 +2571,11 @@ code9(int op, VREG *vr, double value, int twowds)
     if (twowds)
 	p->Pdouble = value;
     else
+#ifdef __COMPILER_KCC__
 	p->Pfloat = (float) value;
+#else
+	p->Pfloatword = (INT)host_pdp10_float_word_v1 (value);
+#endif
 
     if (optobj)
 	foldmove(p);	/* see if already have this one */
@@ -3686,7 +3695,12 @@ rrpopt(struct pcode * p)
 	    p->Pop = P_MOVE;		/* fold: FLTRI R,x */
 	    p->Ptype = PTA_FCONST;	/* into: MOVSI R,(xE0) */
 	    /* This only works if target machine is same as source machine! */
+#ifdef __COMPILER_KCC__
 	    p->Pfloat = (float) p->Pvalue;
+#else
+	    p->Pfloatword = (INT)host_pdp10_float_word_v1 (
+		(double)p->Pvalue);
+#endif
 	    break;			/* return */
 
 	case P_IMUL:
