@@ -141,8 +141,14 @@ enum systype {
  #define MAXCASE 513	/*	All possible values of char, plus 1 */
 #endif
 #ifndef MAXCODE		/* CCCODE: Size of peephole buffer */
-#if HOST_DAIMOS && KCC_PHASE_GEN
- #define MAXCODE (1<<6)	/* Split KGEN: 64-entry streaming peephole ring. */
+#if HOST_DAIMOS
+ /* Every DAIMOS compiler backend must use the same 64-entry peephole
+ ** ring.  The register allocator consults the unflushed pseudo-code
+ ** history before choosing an AC; mixing 256 entries in integrated
+ ** KCC/KCC1 with 64 in KGEN changes code generation at ring overflow.
+ ** Keeping all DAIMOS backends at 64 also minimizes resident RAM.
+ */
+ #define MAXCODE (1<<6)
 #else
  #define MAXCODE (1<<8)	/*	(256) Must be a power of 2! */
 #endif
