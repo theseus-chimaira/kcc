@@ -55,7 +55,9 @@ FREESTANDING_LIBC_SOURCES = runtime/libc/kcc-libc-memcpy-v1.s \
 	runtime/libc/kcc-libc-strncmp-v1.s \
 	runtime/libc/kcc-libc-strstr-v1.s \
 	runtime/libc/kcc-libc-strpbrk-v1.s \
-	runtime/libc/kcc-libc-strspn-v1.s runtime/libc/p10bytes-v2.s
+	runtime/libc/kcc-libc-strspn-v1.s \
+	runtime/libc/kcc-libc-dimode-float-pdp6-v1.s \
+	runtime/libc/p10bytes-v2.s
 FREESTANDING_LIBC_ARCHIVE = $(HOST_BUILD_DIR)/libp10c-v2.a
 
 $(FREESTANDING_LIBC_STRING): runtime/libc/kcc-libc-string-v1.c $(KCC)
@@ -104,6 +106,7 @@ uninstall:
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-strstr-v1.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-strpbrk-v1.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-strspn-v1.s
+	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-dimode-float-pdp6-v1.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-memcmp-v1.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-memcmp-v2.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/p10bytes-v2.s

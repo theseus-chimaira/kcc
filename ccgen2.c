@@ -278,6 +278,7 @@ static void gdimemstore(VREG *, VREG *);
 static int gdimodirectstore(VREG *, NODE *);
 static void gdimove(VREG *, VREG *);
 static VREG *gdimode_from_int(VREG *, TYPE *, TYPE *, NODE *);
+static VREG *gdimode_pdp6_floatcast(VREG *, TYPE *, int);
 static void gretmove(TYPE *, VREG *, VREG *);
 static VREG *gdimodeadd(VREG *, VREG *);
 static VREG *gdimodesub(VREG *, VREG *);
@@ -1709,6 +1710,60 @@ gdimodehelper(VREG *r1, VREG *r2, int ts, int wantmod)
 
     res = vrretdget();
     res->Vrtype = rtype;
+    return res;
+}
+
+/* PDP-6 software D-format conversion for signed 71-bit integers.
+** The PDP-6 native floating-point format is not the later PDP-10
+** D-format.  The freestanding helpers below explicitly construct the
+** established portable KCC/GCC two-word D-format using integer
+** instructions only; native PDP-6 FP must use a separate backend.
+**
+** The helpers receive and return a two-word value in AC1:AC2.
+** Keep the operand pair together until both words have been saved:
+** the allocator's ordinary one-word widening is not applicable.
+*/
+static VREG *
+gdimode_pdp6_floatcast(VREG *r, TYPE *tto, int to_float)
+{
+    VREG *res;
+    SYMBOL *s;
+    int hi, lo;
+    const char *name = to_float ? "__kcc_floatdidf" : "__kcc_fixdfdi";
+
+    if (!r || !vrispair(r)) {
+        int_error("PDP-6 software D-format conversion needs a register pair");
+        return (VREG *)-1;
+    }
+    vrspillothers(r, (VREG *)NULL);
+    (void) vrstoreal(r, VR2(r));
+    hi = vrreal(r);
+    lo = vrreal(VR2(r));
+    if (to_float)
+        gccabi_dimode_encode_regs(hi, lo);
+
+    code00(P_PUSH, R_SP, hi);
+    code00(P_PUSH, R_SP, lo);
+    stackoffset += 2;
+    vrfree(r);
+    codemdx(P_MOVE, 1, (SYMBOL *)NULL, -1, R_SP);
+    codemdx(P_MOVE, 2, (SYMBOL *)NULL, 0, R_SP);
+
+    s = symfidstr((char *)name);
+    if (s == NULL) {
+        s = symgcreat((char *)name);
+        s->Sclass = SC_EXTREF;
+    }
+    ++s->Srefs;
+    code6(P_PUSHJ, VR_SP, s);
+    code8(P_ADJSP, VR_SP, -2);
+    stackoffset -= 2;
+
+    res = vrretdget();
+    res->Vrtype = tto;
+    VR2(res)->Vrtype = tto;
+    if (!to_float)
+        code8(P_TLZ, VR2(res), 0400000L);
     return res;
 }
 
@@ -5711,6 +5766,10 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	case CAST_FP_IT:
 	    if (!r)
 		return (VREG *)-1;	/* Stop if just checking. */
+	    if (tgcpu == TGCPU_PDP6 && tisdimode(tto) &&
+	        !tisunsign(tto) &&
+	        (tfrom->Tspec == TS_DOUBLE || tfrom->Tspec == TS_LNGDBL))
+		return gdimode_pdp6_floatcast(r, tto, 0);
 	    switch (tfrom->Tspec)
 		{
 		case TS_FLOAT:
@@ -5753,6 +5812,10 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	case CAST_IT_FP:
 	    if (!r)
 		return (VREG *)-1;	/* Stop if just checking. */
+	    if (tgcpu == TGCPU_PDP6 && tisdimode(tfrom) &&
+	        !tisunsign(tfrom) &&
+	        (tto->Tspec == TS_DOUBLE || tto->Tspec == TS_LNGDBL))
+		return gdimode_pdp6_floatcast(r, tto, 1);
 	    r = gintwiden(r, tfrom,		/* Ensure widened to int or unsigned */
 		    tissigned(tfrom) ? inttype : uinttype,
 		    ln);
@@ -7839,6 +7902,14 @@ gprimary(NODE *n)
                 r->Vrtype = n->Ntype;
                 VR2(r)->Vrtype = n->Ntype;
                 code12(P_DMOVE, r, autooff_v11(n->Nid));
+                /* Signed DImode memory duplicates the high sign bit in
+                ** bit 35 of the low word.  Internal VREG pairs instead
+                ** carry an unsigned low35.  Normalize after the direct
+                ** automatic load, just as the general memory load does.
+                ** Without this, equal negative values compare different
+                ** after one has been stored in an automatic. */
+                if (tisdimode(n->Ntype) && !tisunsign(n->Ntype))
+                    code8(P_TLZ, VR2(r), 0400000L);
             }
 	    else
 		r = getmem(gaddress(n), n->Ntype, tisbyte(n->Ntype), 0);

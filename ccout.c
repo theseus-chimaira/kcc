@@ -2175,8 +2175,20 @@ outdmovn (int r)
     if (tgmachuse.dmovx)
 	fprintf(out, "\tDMOVN\t%o,%o\n", r, r);
     else if (tgcpu == TGCPU_PDP6) {
+	/* PDP-6 has no hardware doubleword negate.  D-format uses a
+	** 35-bit continuation fraction whose high bit duplicates the
+	** overall sign.  Two independent MOVNS instructions would drop
+	** that sign bit and miss the borrow when low35 is nonzero.
+	** Negate the complete 71-bit value and restore the low sign.
+	** This clobbers no temporary AC and has no memory overhead.
+	*/
 	fprintf(out, "\tMOVNS\t%o\n", r);
 	fprintf(out, "\tMOVNS\t%o\n", r + 1);
+	fprintf(out, "\tAND\t%o,[0377777777777]\n", r + 1);
+	fprintf(out, "\tSKIPE\t%o\n", r + 1);
+	fprintf(out, "\t SUBI\t%o,1\n", r);
+	fprintf(out, "\tTLNE\t%o,0400000\n", r);
+	fprintf(out, "\t TLO\t%o,0400000\n", r + 1);
     } else
 	fprintf(out, "\tDFN\t%o,%o\n", r, r + 1);
 }
