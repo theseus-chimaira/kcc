@@ -2404,10 +2404,31 @@ simdsngl (PCODE *p)
 	outinstr (p);
 	}
     if (tgcpu == TGCPU_PDP6) {
+	/* The low word contains 35 fraction bits, not an independent
+	** signed integer.  Use the correct 71-bit negation expansion
+	** (seven instructions), then round magnitude to 27 bits.
+	** Discarded low bit 34 is the guard; bits 33..0 are sticky.
+	** A halfway case rounds upward only when high's last bit is odd.
+	** Simple TRON would round all ties upward; that incorrectly
+	** converts (1<<27)+1 to (1<<27)+2.
+	*/
 	fprintf (out, "\tSKIPL\t16,0%o\n", r);
-	fprintf (out, "\t JRST\t.+3\n");
-	fprintf (out, "\tMOVNS\t%o\n", r);
-	fprintf (out, "\tMOVNS\t%o\n", r + 1);
+	outstr ("\t JRST\t.+010\n");
+	outdmovn(r);
+	fprintf (out, "\tTLNN\t%o,0200000\n", r + 1);
+	outstr ("\t JRST\t.+013\n");
+	fprintf (out, "\tTRNE\t%o,01\n", r);
+	outstr ("\t JRST\t.+06\n");
+	fprintf (out, "\tTLNE\t%o,0177777\n", r + 1);
+	outstr ("\t JRST\t.+04\n");
+	fprintf (out, "\tTRNE\t%o,0777777\n", r + 1);
+	outstr ("\t JRST\t.+02\n\t JRST\t.+04\n");
+	fprintf (out, "\tADDI\t%o,01\n", r);
+	fprintf (out, "\tTLNN\t%o,0400\n", r);
+	fprintf (out, "\t TLO\t%o,0400\n", r);
+	outstr ("\tCAIGE\t16,\n");
+	fprintf (out, "\t MOVNS\t%o\n", r);
+	return;
     } else {
 	fprintf (out, "\tSKIPGE\t16,0%o\n", r);
 	outc (' ');
@@ -3326,6 +3347,10 @@ obplh (INT boff, INT *awoff, int bsize)
 #define OF_WD1 01	/* Emit word 1 only */
 #define OF_WD2 02	/* Emit word 2 only */
 
+#ifndef __COMPILER_KCC__
+static unsigned INT host_pdp10_float_word_v1(double);
+#endif
+
 int
 outflt (int typ, INT *ptr, int flags)
 /* Tspec of value, Generic pointer to object, and flags */
@@ -3346,8 +3371,10 @@ outflt (int typ, INT *ptr, int flags)
 	outpnum (*ptr);
 #else
 	{
-	float f = (float) * (double *)ptr;
-	outmpdbl ((INT *)&f, 1);
+	/* Do not narrow to host IEEE float: the target has 27, not
+	** 24, significant bits.  The host-double encoder below rounds
+	** directly to the PDP-10 single-precision fraction. */
+	outpnum (host_pdp10_float_word_v1 (*(double *)ptr));
 	}
 #endif
 	typ = 1;
@@ -3442,6 +3469,58 @@ host_double_bits (double d, unsigned long * lo, unsigned long * hi)
 	*hi = host_u32_from_bytes (b);
 	*lo = host_u32_from_bytes (b + 4);
 	}
+}
+
+/* Encode a PDP-10 single word from an IEEE host DOUBLE, not a host FLOAT.
+** A PDP-10 36-bit floating word has 27 fraction bits; IEEE single has
+** only 24 significant bits.  Discarding those three target-only bits in
+** the host lexer or output stage corrupts otherwise representable
+** literals such as 134217732.0F.  Round the full host binary64 mantissa
+** to the 27-bit target fraction using ties-to-even.  This routine is for
+** host toolchain builds; native KCC uses its own target representation.
+*/
+static unsigned INT
+host_pdp10_float_word_v1 (double d)
+{
+    unsigned long lo32, hi32;
+    unsigned long long fraction, low, word;
+    int exponent, negative;
+
+    host_double_bits (d, &lo32, &hi32);
+    negative = (hi32 & 0x80000000UL) != 0;
+    exponent = (int) ((hi32 >> 20) & 0x7ffUL);
+    if (exponent == 0)
+	return 0; /* Host subnormals underflow the PDP-10 exponent range. */
+    if (exponent == 0x7ff)
+	{
+	  int_error ("host_pdp10_float_word_v1: nonfinite constant");
+	  return 0;
+	}
+
+    fraction = (1ULL << 52) |
+	((unsigned long long) (hi32 & 0xfffffUL) << 32) | lo32;
+    low = fraction & ((1ULL << 26) - 1);
+    fraction >>= 26;
+    if (low > (1ULL << 25) ||
+	(low == (1ULL << 25) && (fraction & 1)))
+	++fraction;
+    exponent = exponent - 894; /* IEEE bias 1023 to PDP bias 128. */
+    if (fraction == (1ULL << 27))
+	{
+	  fraction >>= 1;
+	  ++exponent;
+	}
+    if (exponent <= 0)
+	return 0;
+    if (exponent > 255)
+	{
+	  int_error ("host_pdp10_float_word_v1: exponent overflow");
+	  return 0;
+	}
+    word = ((unsigned long long) exponent << 27) | fraction;
+    if (negative)
+	word = (-word) & ((1ULL << 36) - 1);
+    return (unsigned INT) word;
 }
 
 static void

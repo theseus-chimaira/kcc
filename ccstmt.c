@@ -3053,7 +3053,7 @@ primary(void)
 	    switch (constant.ctype->Tspec)
 		{
 		case TS_FLOAT:
-		    n->Nfconst = constant.Cfloat;
+		    n->Nfconst = constant.Cdouble;
 		    break;
 		case TS_DOUBLE:
 		    n->Nfconst = constant.Cdouble;

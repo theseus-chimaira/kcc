@@ -1189,7 +1189,12 @@ fltdone:
     if (c && toupper((char) c) == 'F')	// FW KCC-NT
 	{
 	constant.ctype = flttype;
-	constant.Cfloat = (float) value;	// FW KCC-NT
+	/* A PDP-10 single float has 27 significant mantissa bits, whereas
+	** the usual host IEEE float has only 24.  Retain the parsed host
+	** double until the 36-bit target word is encoded; a host float
+	** cast here would silently round legal PDP-10 literals too early.
+	*/
+	constant.Cdouble = value;
 	c = *++cp;
 	}
     else if (c && toupper((char) c) == 'L') // FW KCC-NT

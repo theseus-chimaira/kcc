@@ -1031,7 +1031,11 @@ evalunop(NODE *e)
 		dimode_neg_iconst(e->Nleft);
 		break;
 	case TS_FLOAT:
-		e->Nleft->Nfconst = - (float) e->Nleft->Nfconst;
+		/* The target PDP-10 float retains three fraction bits that
+		** host IEEE binary32 lacks.  Unary negation must not round
+		** the value through host float; outflt performs the target
+		** 27-bit rounding when emitting its final representation. */
+		e->Nleft->Nfconst = - e->Nleft->Nfconst;
 		break;
 	case TS_DOUBLE:
 	case TS_LNGDBL:

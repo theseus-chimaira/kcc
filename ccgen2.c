@@ -5770,6 +5770,15 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	        !tisunsign(tto) &&
 	        (tfrom->Tspec == TS_DOUBLE || tfrom->Tspec == TS_LNGDBL))
 		return gdimode_pdp6_floatcast(r, tto, 0);
+	    if (tgcpu == TGCPU_PDP6 && tisdimode(tto) &&
+	        !tisunsign(tto) && tfrom->Tspec == TS_FLOAT) {
+		/* A single PDP-6 float is the high word of the portable
+		** software D-format.  Widen it to a complete register pair
+		** before running the full-width integer conversion. */
+		vrlowiden(r);
+		code5(P_SETZ, VR2(r));
+		return gdimode_pdp6_floatcast(r, tto, 0);
+	    }
 	    switch (tfrom->Tspec)
 		{
 		case TS_FLOAT:
@@ -5816,6 +5825,18 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	        !tisunsign(tfrom) &&
 	        (tto->Tspec == TS_DOUBLE || tto->Tspec == TS_LNGDBL))
 		return gdimode_pdp6_floatcast(r, tto, 1);
+	    if (tgcpu == TGCPU_PDP6 && tisdimode(tfrom) &&
+	        !tisunsign(tfrom) && tto->Tspec == TS_FLOAT) {
+		/* FLTR takes one 36-bit integer, not a signed 71-bit
+		** register pair.  Convert both words to the software D-format
+		** first, then narrow and round to the PDP-6 single format. */
+		r = gdimode_pdp6_floatcast(r, dbltype, 1);
+		code0(P_DSNGL, r, r);
+		if (vrispair(r))
+		    vrnarrow(r);
+		r->Vrtype = tto;
+		return r;
+	    }
 	    r = gintwiden(r, tfrom,		/* Ensure widened to int or unsigned */
 		    tissigned(tfrom) ? inttype : uinttype,
 		    ln);
