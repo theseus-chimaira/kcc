@@ -1061,6 +1061,12 @@ flushcode(void)
 		*/
 		if (p->Pop == P_MOVE && p->Ptype == PTA_REGIS
 		  && q->Pop == P_MOVEM && q->Preg == p->Preg
+		  /* AC10..AC14 may hold live register variables or incoming
+		  ** ABI parameters after this buffer flush.  The scan below
+		  ** cannot see a future use across the next call/label, so
+		  ** never discard a copy into a preserved register here.
+		  */
+		  && !Register_Preserve(p->Preg)
 		  && !prevskips(p) && !prevskips(q))
 		    {
             /* Keep a copy whose value is still read before replacement. */
