@@ -8294,6 +8294,7 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem,
     int pending[GCCABI_ARG_REGS];
     SYMBOL *memsym[GCCABI_ARG_REGS];
     int nargs, namedargs, nreg, i, j, k, progress, pick;
+    int may_clobber_incoming;
 
     nargs = 0;
     gccabi_collect_args(list, args, &nargs);
@@ -8334,6 +8335,29 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem,
     if (!defermem)
         flushcode();
 
+    /* An incoming register parameter is a VALUE, not a physical AC that
+    ** can be reread after another argument's function call.  The direct
+    ** argument path normally passes such parameters straight through,
+    ** avoiding a copy.  But a nested call in any argument can overwrite
+    ** AC1..AC4 before a later parameter is evaluated (arguments are
+    ** traversed right-to-left below).  Snapshot all register parameters
+    ** first in tracked VREGs when argument evaluation has side effects.
+    ** The ordinary call spill then saves them and vrtoreal() reloads
+    ** their current location before the final ABI parallel copy.
+    ** Simple call sites retain the zero-copy register fast path.
+    */
+    may_clobber_incoming = 0;
+    for (i = 0; i < nargs; ++i)
+        if (sideffp(args[i])) {
+            may_clobber_incoming = 1;
+            break;
+        }
+    for (i = 0; i < nreg; ++i) {
+        vals[i] = NULL;
+        if (may_clobber_incoming && Register_Id(args[i]))
+            vals[i] = genexpr(args[i]);
+    }
+
     for (i = 0; i < GCCABI_ARG_REGS; ++i) {
 	isconst[i] = 0;
 	ismem[i] = 0;
@@ -8344,8 +8368,8 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem,
         if (i < nreg) {
             --k;
             if (Register_Id(args[i])) {
-                vals[k] = NULL;
-                src[k] = args[i]->Nid->Sreg;
+                if (vals[k] == NULL)
+                    src[k] = args[i]->Nid->Sreg;
             } else if (args[i]->Nop == N_ICONST || args[i]->Nop == N_PCONST) {
                 vals[k] = NULL;
                 isconst[k] = 1;
