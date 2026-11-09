@@ -1,3 +1,37 @@
+## GCC ABI OUTGOING STACK-ARGUMENT LIFETIME (2026-11-09, V1410)
+
+The host compiler could corrupt a fifth (or sixth) outgoing argument
+when another argument contained a nested call.  The direct GCC ABI
+call path pushed stack-only words before evaluating register arguments;
+subsequent register spills and temporary-stack cleanup could consume
+or overwrite those outgoing words.  A fallback through the old general
+ABI argument-block path did not solve the underlying parameter lifetime
+problem.  This is a compiler code-generation bug, not a DAS symbol or
+DASIR2 decoding defect.
+
+`gccabi_direct_reg_args()` now reserves the entire outgoing stack-only
+area before any argument evaluation.  Incoming register values are
+tracked across nested calls, and each one-word stack argument is
+written to its reserved slot using its *current* stack displacement,
+accounting for live VREG spills.  The caller releases the same reserved
+argument count after PUSHJ.  No permanent storage or new runtime ABI
+is introduced.  Direct register-only and tail-call paths remain intact.
+
+The daimos-testkit nested ABI regression (original v1407 fixture,
+extended in v1410) runs independently host-compiled/assembled/linked
+C89 executables under the real PDP-6 guest: the accepted old KCC
+returns 5 (corrupted outgoing argument); patched optimized KCC returns
+7; patched `-n` (actual KCC no-optimization option) also returns 7.
+All 3/3 strict guest cases pass.  The patched host KCC also rebuilt all
+five native compiler phases and passed v1401's 16/16 native KIR1/KGEN
+and host-equality tests.  Native DAS built with this host compiler
+passed 5/5 v1405 symbol-transport tests and 17/17 v1402 ASCII7/S6REC
+tests, including a runnable DXR.  No production binaries were installed.
+
+The separate native DAS relocatable DOBJ1 writer and full native
+KCC -> DAS -A -C -> DLINK -> RUN gate remain OPEN.  Final KCORE code-
+size optimization remains the last KCORE development stage.
+
 ## NATIVE KGEN KIR1 RECORD STACK CORRECTION (2026-11-09, V1401)
 
 Standalone native KGEN's previous UUO/exit 126 is corrected.  The

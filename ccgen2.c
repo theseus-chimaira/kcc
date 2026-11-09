@@ -8293,8 +8293,10 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem,
     int dst[GCCABI_ARG_REGS];
     int pending[GCCABI_ARG_REGS];
     SYMBOL *memsym[GCCABI_ARG_REGS];
-    int nargs, namedargs, nreg, i, j, k, progress, pick;
+    int nargs, namedargs, nreg, nstack, outgoing_top;
+    int stackreg, i, j, k, progress, pick;
     int may_clobber_incoming;
+    VREG *stackval;
 
     nargs = 0;
     gccabi_collect_args(list, args, &nargs);
@@ -8324,8 +8326,10 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem,
         nreg = GCCABI_ARG_REGS - slotbase;
     if (nreg < 0)
         nreg = 0;
+
+    nstack = nargs - nreg;
     if (stackwords)
-        *stackwords = nargs - nreg;
+        *stackwords = nstack;
 
     /* ABI argument ACs are fixed physical registers.  Do not let CSE or
     ** register-retargeting reach backward across an earlier call/branch and
@@ -8334,6 +8338,20 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem,
     */
     if (!defermem)
         flushcode();
+
+    /* Reserve the complete outgoing stack-only argument area before
+    ** evaluating any argument.  A nested call may push and discard its
+    ** own spills; an outgoing argument pushed first would be mistaken
+    ** for part of that transient stack and could be overwritten or popped.
+    ** Reserving the slots keeps them below all evaluation temporaries.
+    ** The caller already removes NSTACK words after the final PUSHJ.
+    */
+    if (nstack > 0) {
+        code8(P_ADJSP, VR_SP, nstack);
+        stackoffset += nstack;
+        flushcode();
+    }
+    outgoing_top = stackoffset;
 
     /* An incoming register parameter is a VALUE, not a physical AC that
     ** can be reread after another argument's function call.  The direct
@@ -8363,40 +8381,62 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem,
 	ismem[i] = 0;
     }
 
+    /* Save stack-only incoming register parameters before any nested
+    ** evaluation could destroy their ACs.  All other stack arguments
+    ** can be evaluated afterward, with their results placed directly
+    ** in the already reserved ABI slots.  C permits this evaluation
+    ** order; each individual expression is still evaluated once.
+    */
+    for (i = nargs - 1; i >= nreg; --i) {
+        if (!Register_Id(args[i]))
+            continue;
+        stackval = genexpr(args[i]);
+        stackreg = vrtoreal(stackval);
+        codemdx(P_MOVEM, stackreg, (SYMBOL *)NULL,
+                outgoing_top - stackoffset - (i - nreg), R_SP);
+        vrfree(stackval);
+    }
+    for (i = nargs - 1; i >= nreg; --i) {
+        if (Register_Id(args[i]))
+            continue;
+        stackval = genexpr(args[i]);
+        stackreg = vrtoreal(stackval);
+        codemdx(P_MOVEM, stackreg, (SYMBOL *)NULL,
+                outgoing_top - stackoffset - (i - nreg), R_SP);
+        vrfree(stackval);
+    }
+
     k = nreg;
-    for (i = nargs - 1; i >= 0; --i) {
-        if (i < nreg) {
-            --k;
-            if (Register_Id(args[i])) {
-                if (vals[k] == NULL)
-                    src[k] = args[i]->Nid->Sreg;
-            } else if (args[i]->Nop == N_ICONST || args[i]->Nop == N_PCONST) {
-                vals[k] = NULL;
-                isconst[k] = 1;
-                cval[k] = args[i]->Niconst;
-                src[k] = 0;
-            } else if (defermem && args[i]->Nop == Q_IDENT
-                       && !tisanyvolat(args[i]->Ntype)
-                       && args[i]->Nid->Stype->Tspec != TS_ARRAY
-                       && args[i]->Nid->Stype->Tspec != TS_FUNCT
-                       && (args[i]->Nid->Sclass == SC_ISTATIC
-                           || args[i]->Nid->Sclass == SC_XEXTREF
-                           || args[i]->Nid->Sclass == SC_EXLINK
-                           || args[i]->Nid->Sclass == SC_EXTDEF
-                           || args[i]->Nid->Sclass == SC_EXTREF
-                           || args[i]->Nid->Sclass == SC_INTDEF
-                           || args[i]->Nid->Sclass == SC_INTREF
-                           || args[i]->Nid->Sclass == SC_INLINK)) {
-                vals[k] = NULL;
-                ismem[k] = 1;
-                memsym[k] = args[i]->Nid;
-                if (memsym[k]->Sclass == SC_ISTATIC)
-                    memsym[k] = memsym[k]->Ssym;
-                src[k] = 0;
-            } else
-                vals[k] = genexpr(args[i]);
+    for (i = nreg - 1; i >= 0; --i) {
+        --k;
+        if (Register_Id(args[i])) {
+            if (vals[k] == NULL)
+                src[k] = args[i]->Nid->Sreg;
+        } else if (args[i]->Nop == N_ICONST || args[i]->Nop == N_PCONST) {
+            vals[k] = NULL;
+            isconst[k] = 1;
+            cval[k] = args[i]->Niconst;
+            src[k] = 0;
+        } else if (defermem && args[i]->Nop == Q_IDENT
+                   && !tisanyvolat(args[i]->Ntype)
+                   && args[i]->Nid->Stype->Tspec != TS_ARRAY
+                   && args[i]->Nid->Stype->Tspec != TS_FUNCT
+                   && (args[i]->Nid->Sclass == SC_ISTATIC
+                       || args[i]->Nid->Sclass == SC_XEXTREF
+                       || args[i]->Nid->Sclass == SC_EXLINK
+                       || args[i]->Nid->Sclass == SC_EXTDEF
+                       || args[i]->Nid->Sclass == SC_EXTREF
+                       || args[i]->Nid->Sclass == SC_INTDEF
+                       || args[i]->Nid->Sclass == SC_INTREF
+                       || args[i]->Nid->Sclass == SC_INLINK)) {
+            vals[k] = NULL;
+            ismem[k] = 1;
+            memsym[k] = args[i]->Nid;
+            if (memsym[k]->Sclass == SC_ISTATIC)
+                memsym[k] = memsym[k]->Ssym;
+            src[k] = 0;
         } else
-            gfnarg(args[i]);
+            vals[k] = genexpr(args[i]);
     }
 
     /* A nested call while evaluating a later register argument may spill an
