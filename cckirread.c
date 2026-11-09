@@ -142,14 +142,21 @@ kir_read_header(FILE *fp)
 }
 
 static int
-readgraph(FILE *fp, INT *head, unsigned hn, NODE **root)
+readgraph(FILE *fp, INT *head, unsigned hn, NODE **root, INT *record)
 {
     unsigned rootid,nt,ns,nn,curfnid,i,kind,n;
     int parse_start, parse_end, backend_start;
-    INT w[KIR_MAX_RECORD_WORDS];
+    INT header[KIR_EXT_WORDS];
+    INT *w = record;
     struct tref *tr=NULL; struct sref *sr=NULL; struct nref *nr=NULL;
     struct vtref *vr=NULL; struct voref *vo=NULL; unsigned nvo=0;
     if(hn!=KIR_EXT_WORDS) return -1;
+    /* Reuse the caller's record buffer.  Separate 512-word arrays in
+     * kir_read_next() and readgraph() exceeded the native PDP-6 startup
+     * stack during a nested KIR read.  Preserve only the graph header
+     * before the next record overwrites that buffer. */
+    memcpy(header, head, sizeof(header));
+    head = header;
     rootid=(unsigned)head[KIR_EXT_ROOT]; nt=(unsigned)head[KIR_EXT_NTYPE];
     ns=(unsigned)head[KIR_EXT_NSYM]; nn=(unsigned)head[KIR_EXT_NNODE];
     curfnid=(unsigned)head[KIR_EXT_CURFN];
@@ -272,7 +279,12 @@ kir_read_next(FILE *fp, int *kindp, NODE **root)
     unsigned kind,n,i,j,id; INT w[KIR_MAX_RECORD_WORDS]; SYMBOL *s;
     for (;;) {
         if(readrec(fp,&kind,w,KIR_MAX_RECORD_WORDS,&n)) return -1;
-        if(kind==KIR_REC_EXTDEF){ if(readgraph(fp,w,n,root))return -1; *kindp=KIR_REC_EXTDEF; return 0; }
+        if (kind == KIR_REC_EXTDEF) {
+            if (readgraph(fp, w, n, root, w))
+                return -1;
+            *kindp = KIR_REC_EXTDEF;
+            return 0;
+        }
         if(kind==KIR_REC_GLOBAL){
             if(n != 12U + IDENTSIZE) return -1;
             j=0; id=(unsigned)w[j++];

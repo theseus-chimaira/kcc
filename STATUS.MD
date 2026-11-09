@@ -1,3 +1,29 @@
+## NATIVE KGEN KIR1 RECORD STACK CORRECTION (2026-11-09, V1401)
+
+Standalone native KGEN's previous UUO/exit 126 is corrected.  The
+KIR1 reader had a 512-word automatic record array in both
+`kir_read_next()` and its nested `readgraph()` call.  Their combined
+startup-stack demand exceeded the supported native PDP-6 process
+margin and caused an invalid instruction while reading a symbol
+record.  The reader now passes the existing caller-owned buffer to
+`readgraph()` and copies only the 24-word graph header before it is
+overwritten.  There is no new heap allocation or KIR1 format change.
+
+The v1395 host-KCC loop-induction call-safety fix is independently
+required for correct multi-function KIR symbol classes.  Rebuilding
+native KGEN with **both** fixes passes the strict v1401 native PDP-6
+suite: 16/16 zero-status probes covering minimal and multi-function
+KCPP, KPARSE, optimized and `-N` KGEN, KOPT replay, integrated KCC,
+and exact host/native optimized-assembly equality.  Previous native
+`gaddress: bad Sclass 0` and KGEN UUO/126 regressions are absent.
+The grouped 237-file test root passes native D6FS consistency checks.
+
+The correction is staged and validated in isolated worktrees only.
+Native KCC-to-SIXBIT-to-DAS/DLINK/RUN acceptance, independent -N
+golden equality and broad self-hosting remain OPEN.  Nothing has been
+installed in the production OS or boot images.  The permanent KCORE
+size sweep remains deferred to the last KCORE development stage.
+
 ## NATIVE KGEN LOOP-INDUCTION CALL SAFETY (2026-11-09, V1395)
 
 The multi-function native KIR1 `gaddress: bad Sclass 0` error is fixed
