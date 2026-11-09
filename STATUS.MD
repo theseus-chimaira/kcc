@@ -1,3 +1,34 @@
+## NATIVE KGEN LOOP-INDUCTION CALL SAFETY (2026-11-09, V1395)
+
+The multi-function native KIR1 `gaddress: bad Sclass 0` error is fixed
+for the demonstrated v1373 regression. The KIR1 writer persisted the
+parameter `first` with class 17, and KGEN initially decoded class 17.
+The next memory change happened inside generated code for KIR1 graph
+reconstruction: host KCC had carried the `Reg_Id[i]` array destination
+pointer around the `getsymid()` call inside a loop and updated a stale
+physical register at the loop back-edge. This overwrote symbol storage.
+
+In `ccgen1.c`, `indbodyhazards()` now excludes function-call bodies from
+the loop-carried induction-pointer optimization. Call-free loops retain
+the fast address update. The minimal host C89 call-loop regression rejects
+the v1373 compiler and accepts the patched v1395 compiler in both full
+and code-generation-only optimization modes. The call-free fixture keeps
+byte-identical optimized assembly.
+
+All five native compiler phases rebuilt from patched host KCC and passed
+DXR validation. A fresh grouped D6FS test image booted on native PDP-6;
+the strict v1390 gate improved from 2/6 to 4/6. Multi-function integrated
+KCC compilation now exits zero and matches host assembly exactly; KCPP
+and KPARSE pass. This is *not* native self-hosting acceptance.
+
+Standalone native KGEN still UUOs at 044572 and exits 126 in both
+optimized and `-N` modes. A further v1396 test reproduced the same
+failure with the minimal one-function KIR and with `-X` chaining. The
+original v1373 native binaries fail identically, proving this is an
+independent pre-existing defect, not a regression from v1395. Neither
+the native bootstrap nor production DAIMOS media is installed or changed.
+The next priority is a proper standalone KGEN fix and complete replay.
+
 ## NATIVE PDP-6 GCC-ABI NESTED ARGUMENT LIFETIME (2026-11-08, V1373)
 
 THE NATIVE KGEN BOOTSTRAP GENERATED INVALID KPCODE2 RETURN INSTRUCTIONS
