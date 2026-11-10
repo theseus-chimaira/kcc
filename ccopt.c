@@ -1125,6 +1125,53 @@ foldplus(struct pcode * p)
 	    */
 		p->Pop = P_MOVE;		/* make P_MOVEI */
 		p->Pindex = p->Preg;	/* with index same as reg */
+		/*
+		** If an earlier unskipped MOVEI gives R a constant value, fold
+		** that constant directly into the symbolic address. Otherwise a
+		** later independent peephole fold can remove the MOVEI while the
+		** self-indexed address still depends on R's old value.
+		**
+		** MOVEI R,n / ADDI R,sym -> MOVEI R,sym+n, when no skipped
+		** instruction, jump, call, or register modification intervenes.
+		** The source MOVEI is left intact for any other users.
+		**
+		** v1392: prevents a stale AC index in constant array element
+		** stores after symbolic-address and constant folds interact.
+		*/
+		{
+		    PCODE *def;
+		    INT sum;
+		    /*
+		    ** findrset() stops at a *read* of R, even though that read
+		    ** does not invalidate its known constant. Scan only within
+		    ** this straight-line peephole region, stopping at the first
+		    ** actual change of R or any control-flow boundary.
+		    */
+		    for (def = prevskips(p) ? NULL : before(p);
+		      def != NULL; def = before(def)) {
+			int opcode = def->Pop & POF_OPCODE;
+			if (prevskips(def) || isskip(def->Pop)
+			  || opcode == P_JRST || opcode == P_JUMP
+			  || opcode == P_PUSHJ || opcode == P_POPJ
+			  || opcode == P_MUUO
+			  || opcode == P_AOJ || opcode == P_SOJ) {
+			    def = NULL;
+			    break;
+			}
+			if (rrchg(def, p->Preg))
+			    break;
+		    }
+		    if (def != NULL && def->Pop == P_MOVE
+		      && def->Ptype == PTV_IMMED && def->Preg == p->Preg
+		      && !prevskips(def) && def->Pvalue >= 0
+		      && p->Poffset >= 0) {
+			sum = p->Poffset + def->Pvalue;
+			if (sum >= p->Poffset && sum <= 0777777L) {
+			    p->Poffset = sum;
+			    p->Pindex = 0;
+			}
+		    }
+		}
 		if ((q = before(p)) != NULL && q->Ptype == PTA_REGIS
 		  && q->Pop == P_MOVE
 		/* !prevskips (p or q) */ && q->Preg == p->Pindex)
