@@ -3413,6 +3413,18 @@ rrpre3(struct pcode * p, struct pcode * np, int op)
     PCODE *q;
     INT stkoff;
 
+    /* IDIVI takes an unsigned 18-bit effective address as its divisor.
+    ** Folding MOVE S,[-1] / IDIV R,S to IDIVI R,-1 instead divides by
+    ** 0777777 rather than -1. Keep negative or wide full-word divisors
+    ** in the register form, preserving both value and divide semantics.
+    */
+    if (((op & POF_OPCODE) == P_IDIV || (op & POF_OPCODE) == P_UIDIV)
+      && p->Ptype == PTV_IMMED
+      && (p->Pvalue < 0 || p->Pvalue > 0777777L)) {
+        rrpop2(np);
+        return;
+    }
+
 
     /* don't make an XPUSHI - foldstack works better without it */
     if (p->Ptype == PTV_IINDEXED && op == P_PUSH)

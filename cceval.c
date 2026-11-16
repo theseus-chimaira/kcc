@@ -1473,7 +1473,11 @@ evalasop(NODE *e)
 		    e->Nop = Q_ASGN;	/* i*=0 => i=0 */
 		else if (icon == 1)
 		    return e->Nleft;	/* i*=1 => i */
-		else e->Nop = N_NEG;	/* i*=(-1) => -i */
+		/* i*=(-1) must still STORE the result in its lvalue.
+		** N_NEG is only an rvalue operation, not an assignment.
+		** Keep the compound operator so a side-effecting lvalue is
+		** evaluated exactly once and its result is written back.
+		*/
 		break;
 
 	case Q_ASDIV:			/* Check integral /= */
@@ -1482,8 +1486,7 @@ evalasop(NODE *e)
 		    return e->Nleft;
 		} else if (icon == 1)
 		    return e->Nleft;	/* i/=1 => i */
-		else if (tissigned(e->Ntype))
-		    e->Nop = N_NEG;	/* si/=(-1) => -si */
+		/* si/=(-1) also updates its lvalue, unlike N_NEG. */
 		break;			/*	(cannot do ui/(-1)) */
 
 	case Q_ASMOD:			/* Check integral %= */
@@ -1531,8 +1534,7 @@ evalasop(NODE *e)
 	case Q_ASXOR:
 		if (icon == 0)		/* Check integral ^= */
 		    return e->Nleft;	/* i^=0 => i */
-		if (icon < 0)
-		    e->Nop = Q_COMPL;	/* i^=(-1) => ~i */
+		/* A bare Q_COMPL would silently discard the assignment. */
 		break;
 
 	} else if ((icon&(icon-1))==0
@@ -1585,7 +1587,9 @@ evalasop(NODE *e)
 		    return e->Nleft;
 		} else if (fcon > 0.0)
 		    return e->Nleft;		/* f*=1 or f/=1 => f */
-		else e->Nop = N_NEG;		/* f*=(-1) or f/=(-1) => -f */
+		/* Negating an rvalue cannot replace the mandatory lvalue
+		** store. Keep the original compound float assignment.
+		*/
 		break;
 	    case Q_ASPLUS:
 		if (fcon == 0.0)
