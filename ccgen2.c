@@ -1773,6 +1773,7 @@ gdimodedivmod(VREG *r1, VREG *r2, int ts, int wantmod)
     int nhi, nlo, dhi, dlo;
     int qhi, qlo, rhi, rlo;
     int cnt, tmp1, tmp2, sgn;
+    int scratch[8], saved[8], nsaved, i;
     int avoid[16], navoid;
     int is_signed;
     static int divlab;
@@ -1844,6 +1845,34 @@ retry_alloc:
         int_error("gdimodedivmod: no scratch AC");
         }
 #undef DIVAC
+
+    /* The raw divider emits instructions directly, outside the ordinary
+    ** register-use tracking performed by the code optimizer.  A free AC
+    ** is not necessarily call-volatile: AC10..AC14 may be unallocated in
+    ** this function while still holding live values in its GCC/KCC caller.
+    ** Save only the preserved scratch ACs actually selected.  The input
+    ** and result pairs are excluded by DIVAC and must not be restored.
+    ** Restoring in reverse order makes this safe for nested expressions
+    ** and keeps both stackoffset and peak stack use bounded.
+    */
+    scratch[0] = qhi;
+    scratch[1] = qlo;
+    scratch[2] = rhi;
+    scratch[3] = rlo;
+    scratch[4] = cnt;
+    scratch[5] = tmp1;
+    scratch[6] = tmp2;
+    scratch[7] = sgn;
+    nsaved = 0;
+    for (i = 0; i < 8; ++i)
+	if (Register_Preserve(scratch[i]))
+	    {
+	    saved[nsaved++] = scratch[i];
+	    code00(P_PUSH, R_SP, scratch[i]);
+	    ++stackoffset;
+	    }
+    if (nsaved)
+	flushcode();
 
     /* A signed operation returns either quotient or remainder, never both.
     ** Keep only the sign needed by that result: numerator XOR divisor for a
@@ -2201,6 +2230,14 @@ retry_alloc:
         vrreal(r1), (wantmod ? rhi : qhi),
         vrreal(VR2(r1)), (wantmod ? rlo : qlo));
     codestr(buf, n);
+
+    for (i = nsaved; i > 0; )
+	{
+	code00(P_POP, R_SP, saved[--i]);
+	--stackoffset;
+	}
+    if (nsaved)
+	flushcode();
 
     vrfree(r2);
     return r1;
