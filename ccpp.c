@@ -665,6 +665,10 @@ ppinit(void)
     /* Enter special macro pre-definitions into symbol table. */
     mdefstr("__COMPILER_KCC__", MACF_KCC, NULL);
     mdefstr("__PDP10__", MACF_ATOM, "1");
+    /* sizeof and object allocation sizes use the 36-bit unsigned int
+     * type in the native PDP-10 ABI (nine-bit C characters).  Expose
+     * the type spelling expected by imported GCC-compatible sources. */
+    mdefstr("__SIZE_TYPE__", MACF_ATOM, "unsigned int");
     mdefstr("__LONG_LONG_71BIT__", MACF_ATOM, "1");
     mdefstr("__LINE__",		MACF_LINE, NULL);
     mdefstr("__FILE__",		MACF_FILE, NULL);

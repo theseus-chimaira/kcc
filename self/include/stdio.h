@@ -2,6 +2,7 @@
 #define KCC_SELF_STDIO_H
 
 #include <stddef.h>
+#include <stdarg.h>
 
 #define FILE int
 
@@ -28,6 +29,8 @@ size_t fread(void *, size_t, size_t, FILE *);
 int fseek(FILE *, long, int);
 int getc(FILE *);
 int printf(char *, ...);
+int vprintf(char *, va_list);
+int vsprintf(char *, char *, va_list);
 int putc(int, FILE *);
 int puts(char *);
 void rewind(FILE *);

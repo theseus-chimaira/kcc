@@ -7,6 +7,7 @@
 #define EXIT_FAILURE 1
 
 int abs(int);
+void abort(void);
 int atoi(char *);
 void exit(int);
 void free(void *);
