@@ -1128,14 +1128,17 @@ indbodywrites(NODE *n, SYMBOL *iv)
     return indbodywrites(n->Nleft, iv) || indbodywrites(n->Nright, iv);
 }
 
-/* INDBODYBRANCHES - Does a loop body contain control flow that can merge
-** different register-spill states?
+/* INDBODYHAZARDS - Detect invalid loop-carried register lifetimes.
 **
 ** The induction-pointer optimization deliberately keeps one VREG live across
 ** the complete loop body.  The ordinary statement generator predates that
 ** optimization and assumes no VREG is live across statement-level branches.
 ** A call in only one arm of an IF can therefore spill the induction VREG on
 ** that arm and leave the common continuation with an unmatched stack restore.
+** An unconditional call is unsafe too: it can move the pointer to a new
+** physical register after the loop head was emitted, so the back-edge
+** updates a different register.  Only keep this strength reduction when
+** the body cannot call out or merge incompatible register states.
 **
 ** Keep the optimization away from statement-level merge points.  Preserve
 ** the existing terminal IF optimization ("if (...) continue/break/goto"),
@@ -1143,13 +1146,15 @@ indbodywrites(NODE *n, SYMBOL *iv)
 ** branch join.  This is a correctness precondition, not a profitability test.
 */
 static int
-indbodybranches(NODE *n)
+indbodyhazards(NODE *n)
 {
     NODE *thenpart, *elsepart;
 
     if (n == NULL)
         return 0;
     switch (n->Nop) {
+    case N_FNCALL:
+        return 1;
     case Q_IF:
         if (n->Nright == NULL)
             return 1;
@@ -1158,7 +1163,7 @@ indbodybranches(NODE *n)
         if (elsepart == NULL && thenpart != NULL
           && (thenpart->Nop == Q_CONTINUE || thenpart->Nop == Q_BREAK
               || thenpart->Nop == Q_GOTO))
-            return indbodybranches(n->Nleft);
+            return indbodyhazards(n->Nleft);
         return 1;
     case Q_FOR:
     case Q_WHILE:
@@ -1171,7 +1176,7 @@ indbodybranches(NODE *n)
     if (n->Nop == Q_IDENT || n->Nop == N_ICONST || n->Nop == N_FCONST
       || n->Nop == N_PCONST || n->Nop == N_SCONST || n->Nop == N_VCONST)
         return 0;
-    return indbodybranches(n->Nleft) || indbodybranches(n->Nright);
+    return indbodyhazards(n->Nleft) || indbodyhazards(n->Nright);
 }
 
 /* INDLOOPMATCH - Match the deliberately narrow strength-reduction case:
@@ -1220,7 +1225,7 @@ indloopmatch(NODE *n, NODE **basep, SYMBOL **basesp)
            && lhs->Nid == iv && incr->Nright
            && incr->Nright->Nop == N_ICONST && incr->Nright->Niconst == 1))
         return 0;
-    if (indbodywrites(n->Nright, iv) || indbodybranches(n->Nright))
+    if (indbodywrites(n->Nright, iv) || indbodyhazards(n->Nright))
         return 0;
     budget = 1024;
     if (!indfindref(n->Nright, iv, basep, basesp, &budget))
