@@ -17,7 +17,13 @@
  * first unnamed argument is immediately below the last named parameter.
  */
 #define va_arg(ap, type) (*(type *)((ap) -= sizeof(type)))
-#define va_end(ap) ((void)0)
+/*
+ * This ABI has no va_list teardown operation.  The macro still must
+ * evaluate its argument exactly once: callers may supply an lvalue
+ * expression with side effects (for example va_end(**slot++)).
+ * Discarding the argument incorrectly omits those side effects.
+ */
+#define va_end(ap) ((void)(ap))
 #define va_copy(dst, src) ((dst) = (src))
 
 #endif
