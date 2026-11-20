@@ -279,6 +279,8 @@ static int gdimodirectstore(VREG *, NODE *);
 static void gdimove(VREG *, VREG *);
 static VREG *gdimode_from_int(VREG *, TYPE *, TYPE *, NODE *);
 static VREG *gdimode_pdp6_floatcast(VREG *, TYPE *, int);
+static VREG *gint_pdp6_floatcast(VREG *, TYPE *, int, int);
+static VREG *gint_pdp6_fixcast(VREG *, TYPE *, int, int);
 static void gretmove(TYPE *, VREG *, VREG *);
 static VREG *gdimodeadd(VREG *, VREG *);
 static VREG *gdimodesub(VREG *, VREG *);
@@ -1764,6 +1766,103 @@ gdimode_pdp6_floatcast(VREG *r, TYPE *tto, int to_float)
     VR2(res)->Vrtype = tto;
     if (!to_float)
         code8(P_TLZ, VR2(res), 0400000L);
+    return res;
+}
+
+/* Real compiler-owned PDP-6 conversion of unsigned SImode into SF or
+** full D-format.  The former FSC-only lowering lost significant low
+** bits and rounded halfway values incorrectly.  Spill live registers
+** before the ABI call and transfer the source through one stack word.
+** This also amortizes the cost of normalization across all callsites.
+*/
+static VREG *
+gint_pdp6_floatcast(VREG *r, TYPE *tto, int to_double, int is_unsigned)
+{
+    VREG *res;
+    SYMBOL *s;
+    char *name;
+    int src;
+
+    if (!r || vrispair(r)) {
+        int_error("PDP-6 unsigned float conversion needs one register");
+        return (VREG *)-1;
+    }
+    vrspillothers(r, (VREG *)NULL);
+    src = vrreal(r);
+    code00(P_PUSH, R_SP, src);
+    ++stackoffset;
+    vrfree(r);
+    codemdx(P_MOVE, 1, (SYMBOL *)NULL, 0, R_SP);
+
+    name = to_double ? "__kcc_floatunsidf" :
+        (is_unsigned ? "__kcc_floatunssisf" : "__kcc_floatsisf");
+    s = symfidstr(name);
+    if (s == NULL) {
+        s = symgcreat(name);
+        s->Sclass = SC_EXTREF;
+    }
+    ++s->Srefs;
+    code6(P_PUSHJ, VR_SP, s);
+    code8(P_ADJSP, VR_SP, -1);
+    --stackoffset;
+
+    if (to_double) {
+        res = vrretdget();
+        res->Vrtype = tto;
+        VR2(res)->Vrtype = tto;
+    } else {
+        res = vrretget();
+        res->Vrtype = tto;
+    }
+    return res;
+}
+
+/* Convert a positive PDP-6 SF or D-format operand to an unsigned
+** 36-bit integer.  Signed FIX/DFIX cannot represent values with the
+** sign bit set in the unsigned result.  Use the exact compiler-owned
+** conversion routines instead, preserving both D-format words.
+*/
+static VREG *
+gint_pdp6_fixcast(VREG *r, TYPE *tto, int from_double,
+                  int is_unsigned)
+{
+    VREG *res;
+    SYMBOL *s;
+    char *name;
+    int hi, lo;
+
+    if (!r || (from_double && !vrispair(r))) {
+        int_error("PDP-6 unsigned fix conversion register layout invalid");
+        return (VREG *)-1;
+    }
+    vrspillothers(r, (VREG *)NULL);
+    if (from_double)
+        (void) vrstoreal(r, VR2(r));
+    hi = vrreal(r);
+    lo = from_double ? vrreal(VR2(r)) : 0;
+    code00(P_PUSH, R_SP, hi);
+    if (from_double)
+        code00(P_PUSH, R_SP, lo);
+    stackoffset += from_double ? 2 : 1;
+    vrfree(r);
+    codemdx(P_MOVE, 1, (SYMBOL *)NULL, from_double ? -1 : 0, R_SP);
+    if (from_double)
+        codemdx(P_MOVE, 2, (SYMBOL *)NULL, 0, R_SP);
+
+    name = from_double ? "__kcc_fixunsdfsi" :
+        (is_unsigned ? "__kcc_fixunssfsi" : "__kcc_fixsfsi");
+    s = symfidstr(name);
+    if (s == NULL) {
+        s = symgcreat(name);
+        s->Sclass = SC_EXTREF;
+    }
+    ++s->Srefs;
+    code6(P_PUSHJ, VR_SP, s);
+    code8(P_ADJSP, VR_SP, from_double ? -2 : -1);
+    stackoffset -= from_double ? 2 : 1;
+
+    res = vrretget();
+    res->Vrtype = tto;
     return res;
 }
 
@@ -5803,6 +5902,10 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	case CAST_FP_IT:
 	    if (!r)
 		return (VREG *)-1;	/* Stop if just checking. */
+	    if (tgcpu == TGCPU_PDP6 && !tisdimode(tto)
+	      && (tisunsign(tto) || tfrom->Tspec == TS_FLOAT))
+		return gint_pdp6_fixcast(r, tto,
+		    tfrom->Tspec != TS_FLOAT, tisunsign(tto));
 	    if (tgcpu == TGCPU_PDP6 && tisdimode(tto) &&
 	        !tisunsign(tto) &&
 	        (tfrom->Tspec == TS_DOUBLE || tfrom->Tspec == TS_LNGDBL))
@@ -5880,6 +5983,9 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	    switch (tto->Tspec)
 		{
 		case TS_FLOAT:
+		    if (tgcpu == TGCPU_PDP6 && !tisdimode(tfrom))
+			return gint_pdp6_floatcast(r, tto, 0,
+			    tisunsign(tfrom));
 		/* Although FLTR and UFLTR are always supported by CCOUT,
 		** on KA-10s they are inefficient enough that it is worth
 		** checking for the opportunity to use a simple FSC, which
@@ -5897,6 +6003,8 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 
 		case TS_DOUBLE:
 		case TS_LNGDBL:
+		    if (tgcpu == TGCPU_PDP6 && tisunsign(tfrom))
+			return gint_pdp6_floatcast(r, tto, 1, 1);
 		    vrlowiden(r);	/* Make into register pair */
 		    code5(P_SETZ, VR2(r)); /* zero the next reg */
 		    if ((tgcpu == TGCPU_PDP6 || tgcpu == TGCPU_KA)

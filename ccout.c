@@ -1802,10 +1802,10 @@ simufltr (PCODE *p)
 
     if (tgcpu == TGCPU_PDP6 || tgcpu == TGCPU_KA)
 	{
-	fprintf (out,"\tTLNN\t%o,0777000\n", r);
-	fprintf (out,"\t JRST\t%%UFL%o\n", lab);
-	fprintf (out,"\tLSH\t%o,-011\n", r);
-	fprintf (out,"\tFSC\t%o,0233\n", r);
+	    fprintf (out,"\tTLNN\t%o,0777000\n", r);
+	    fprintf (out,"\t JRST\t%%UFL%o\n", lab);
+	    fprintf (out,"\tLSH\t%o,-011\n", r);
+	    fprintf (out,"\tFSC\t%o,0233\n", r);
 	fprintf (out,"\tFSC\t%o,011\n", r);
 	fprintf (out,"\tJRST\t%%UFX%o\n", lab);
 	fprintf (out,"%%UFL%o:\tFSC\t%o,0233\n", lab, r);
@@ -1822,9 +1822,11 @@ simufltr (PCODE *p)
 }
 
 /* SIMFLTR - Output expansion of P_FLTR for PDP-6/KA10.
-**	FLTR is not a PDP-6/KA10 hardware instruction.  For signed C
-**	integers, use FSC with the standard 233 scale factor after making
-**	the magnitude positive, then restore the sign in floating format.
+**	FLTR is not a PDP-6/KA10 hardware instruction.  FSC alone
+**	creates an unnormalized floating word from an integer: e.g.
+**	1024 becomes 233000002000 instead of canonical 213400000000.
+**	Adding floating zero with rounding normalizes the fraction
+**	and exponent; only then restore the floating sign.
 */
 static void
 simfltr (PCODE *p)
@@ -1840,6 +1842,7 @@ simfltr (PCODE *p)
     outstr ("\tJUMPGE\t16,.+2\n");
     fprintf (out, "\tMOVNS\t%o\n", r);
     fprintf (out, "\tFSC\t%o,0233\n", r);
+    fprintf (out, "\tFADR\t%o,[0]\n", r);
     outstr ("\tCAIGE\t16,\n");
     fprintf (out, "\t MOVNS\t%o\n", r);
 }

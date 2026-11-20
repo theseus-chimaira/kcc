@@ -2,6 +2,17 @@
 
 KCC IS THE PDP-10 C COMPILER USED BY THE DAIMOS TOOLCHAIN.
 
+PDP-6 native 36-bit integer/SF and unsigned DF conversions use the
+real independently linked `libp10fp36-pdp6-v1.a`, assembled from
+`runtime/libc/kcc-libc-fp36-pdp6-v1.s`. It implements canonical
+rounding, signed minimum and unsigned full-range conversion with
+bounded stack and no writable global data. Use
+`make install-freestanding-libc` and
+`make install-gcc-freestanding-fp36` to install the matching compiler
+copies. The original `libp10c-v2.a` is unchanged. This does not
+provide GNU 71-bit conversions or claim the entire historical
+`conversion.c` source passes.
+
 The freestanding C runtime also offers a separate versioned
 `libp10ctype-c-locale-v1.a` built from one PDP-6-compatible assembly
 source. It implements real `isprint` and `isspace` for the full 9-bit

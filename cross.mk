@@ -61,6 +61,8 @@ FREESTANDING_LIBC_SOURCES = runtime/libc/kcc-libc-memcpy-v1.s \
 FREESTANDING_LIBC_ARCHIVE = $(HOST_BUILD_DIR)/libp10c-v2.a
 FREESTANDING_CTYPE_SOURCE = runtime/libc/kcc-libc-ctype-c-locale-v1.s
 FREESTANDING_CTYPE_ARCHIVE = $(HOST_BUILD_DIR)/libp10ctype-c-locale-v1.a
+FREESTANDING_FP36_SOURCE = runtime/libc/kcc-libc-fp36-pdp6-v1.s
+FREESTANDING_FP36_ARCHIVE = $(HOST_BUILD_DIR)/libp10fp36-pdp6-v1.a
 GCC_FREESTANDING_CTYPE_DIR = $(PDP10_PREFIX)/lib/gcc-lib/pdp10-dec-none/3.2/freestanding
 
 $(FREESTANDING_LIBC_STRING): runtime/libc/kcc-libc-string-v1.c $(KCC)
@@ -90,12 +92,22 @@ $(FREESTANDING_CTYPE_ARCHIVE): $(FREESTANDING_CTYPE_SOURCE)
 
 freestanding-ctype: $(FREESTANDING_CTYPE_ARCHIVE)
 
-install-freestanding-libc: freestanding-libc freestanding-ctype
+# Separate compiler-owned conversion archive.  Do not change the
+# already SHA-frozen core libp10c-v2.a or add compiler test stubs.
+$(FREESTANDING_FP36_ARCHIVE): $(FREESTANDING_FP36_SOURCE)
+	@mkdir -p $(HOST_BUILD_DIR)/libp10fp36-pdp6-v1
+	$(PDP10_DAS) -F -C -O $(HOST_BUILD_DIR)/libp10fp36-pdp6-v1/kcc-libc-fp36-pdp6-v1.dobj $(FREESTANDING_FP36_SOURCE)
+	$(PDP10_DARC) -o $@ $(HOST_BUILD_DIR)/libp10fp36-pdp6-v1/kcc-libc-fp36-pdp6-v1.dobj
+
+freestanding-fp36: $(FREESTANDING_FP36_ARCHIVE)
+
+install-freestanding-libc: freestanding-libc freestanding-ctype freestanding-fp36
 	$(INSTALL) -d $(DESTDIR)$(FREESTANDING_LIBC_DIR)
 	$(INSTALL) -m 644 runtime/libc/kcc-libc-*.s runtime/libc/p10bytes-v2.s \
 		$(FREESTANDING_LIBC_STRING) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 	$(INSTALL) -m 644 $(FREESTANDING_LIBC_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 	$(INSTALL) -m 644 $(FREESTANDING_CTYPE_SOURCE) $(FREESTANDING_CTYPE_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
+	$(INSTALL) -m 644 $(FREESTANDING_FP36_SOURCE) $(FREESTANDING_FP36_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 
 # GCC and KCC use the same PDP-10 C ABI for these two freestanding
 # entry points.  Install the exact same assembly/objects for GCC, not
@@ -103,6 +115,10 @@ install-freestanding-libc: freestanding-libc freestanding-ctype
 install-gcc-freestanding-ctype: freestanding-ctype
 	$(INSTALL) -d $(DESTDIR)$(GCC_FREESTANDING_CTYPE_DIR)
 	$(INSTALL) -m 644 $(FREESTANDING_CTYPE_SOURCE) $(FREESTANDING_CTYPE_ARCHIVE) $(DESTDIR)$(GCC_FREESTANDING_CTYPE_DIR)/
+
+install-gcc-freestanding-fp36: freestanding-fp36
+	$(INSTALL) -d $(DESTDIR)$(GCC_FREESTANDING_CTYPE_DIR)
+	$(INSTALL) -m 644 $(FREESTANDING_FP36_SOURCE) $(FREESTANDING_FP36_ARCHIVE) $(DESTDIR)$(GCC_FREESTANDING_CTYPE_DIR)/
 
 install-runtime: runtime
 	$(INSTALL) -d $(DESTDIR)$(KCCLIBDIR)
@@ -134,6 +150,8 @@ uninstall:
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10c-v2.a
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-ctype-c-locale-v1.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10ctype-c-locale-v1.a
+	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-fp36-pdp6-v1.s
+	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10fp36-pdp6-v1.a
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-string-v1.s
 	@for f in $(RUNTIME); do \
 	    $(RM) "$(DESTDIR)$(KCCLIBDIR)/$${f##*/}"; \
@@ -149,5 +167,5 @@ clean:
 	$(RM) -r $(HOST_BUILD_DIR) $(NATIVE_BUILD_DIR)
 
 .PHONY: all cross native depend runtime install install-native \
-	install-runtime install-headers freestanding-libc freestanding-ctype install-gcc-freestanding-ctype \
+	install-runtime install-headers freestanding-libc freestanding-ctype freestanding-fp36 install-gcc-freestanding-ctype install-gcc-freestanding-fp36 \
 	install-freestanding-libc uninstall clean
