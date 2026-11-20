@@ -59,6 +59,9 @@ FREESTANDING_LIBC_SOURCES = runtime/libc/kcc-libc-memcpy-v1.s \
 	runtime/libc/kcc-libc-dimode-float-pdp6-v1.s \
 	runtime/libc/p10bytes-v2.s
 FREESTANDING_LIBC_ARCHIVE = $(HOST_BUILD_DIR)/libp10c-v2.a
+FREESTANDING_CTYPE_SOURCE = runtime/libc/kcc-libc-ctype-c-locale-v1.s
+FREESTANDING_CTYPE_ARCHIVE = $(HOST_BUILD_DIR)/libp10ctype-c-locale-v1.a
+GCC_FREESTANDING_CTYPE_DIR = $(PDP10_PREFIX)/lib/gcc-lib/pdp10-dec-none/3.2/freestanding
 
 $(FREESTANDING_LIBC_STRING): runtime/libc/kcc-libc-string-v1.c $(KCC)
 	$(INSTALL) -d $(HOST_BUILD_DIR)
@@ -77,11 +80,29 @@ $(FREESTANDING_LIBC_ARCHIVE): $(FREESTANDING_LIBC_SOURCES) $(FREESTANDING_LIBC_S
 
 freestanding-libc: $(FREESTANDING_LIBC_ARCHIVE)
 
-install-freestanding-libc: freestanding-libc
+# C-locale ctype is an independently selectable compiler library.  Keep
+# libp10c-v2.a unchanged so its established source/ABI fingerprint and
+# historical regression evidence are not invalidated by new services.
+$(FREESTANDING_CTYPE_ARCHIVE): $(FREESTANDING_CTYPE_SOURCE)
+	@mkdir -p $(HOST_BUILD_DIR)/libp10ctype-c-locale-v1
+	$(PDP10_DAS) -F -C -O $(HOST_BUILD_DIR)/libp10ctype-c-locale-v1/kcc-libc-ctype-c-locale-v1.dobj $(FREESTANDING_CTYPE_SOURCE)
+	$(PDP10_DARC) -o $@ $(HOST_BUILD_DIR)/libp10ctype-c-locale-v1/kcc-libc-ctype-c-locale-v1.dobj
+
+freestanding-ctype: $(FREESTANDING_CTYPE_ARCHIVE)
+
+install-freestanding-libc: freestanding-libc freestanding-ctype
 	$(INSTALL) -d $(DESTDIR)$(FREESTANDING_LIBC_DIR)
 	$(INSTALL) -m 644 runtime/libc/kcc-libc-*.s runtime/libc/p10bytes-v2.s \
 		$(FREESTANDING_LIBC_STRING) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 	$(INSTALL) -m 644 $(FREESTANDING_LIBC_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
+	$(INSTALL) -m 644 $(FREESTANDING_CTYPE_SOURCE) $(FREESTANDING_CTYPE_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
+
+# GCC and KCC use the same PDP-10 C ABI for these two freestanding
+# entry points.  Install the exact same assembly/objects for GCC, not
+# a separate reimplementation or a test-local implementation.
+install-gcc-freestanding-ctype: freestanding-ctype
+	$(INSTALL) -d $(DESTDIR)$(GCC_FREESTANDING_CTYPE_DIR)
+	$(INSTALL) -m 644 $(FREESTANDING_CTYPE_SOURCE) $(FREESTANDING_CTYPE_ARCHIVE) $(DESTDIR)$(GCC_FREESTANDING_CTYPE_DIR)/
 
 install-runtime: runtime
 	$(INSTALL) -d $(DESTDIR)$(KCCLIBDIR)
@@ -111,6 +132,8 @@ uninstall:
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-memcmp-v2.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/p10bytes-v2.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10c-v2.a
+	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-ctype-c-locale-v1.s
+	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10ctype-c-locale-v1.a
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-string-v1.s
 	@for f in $(RUNTIME); do \
 	    $(RM) "$(DESTDIR)$(KCCLIBDIR)/$${f##*/}"; \
@@ -126,5 +149,5 @@ clean:
 	$(RM) -r $(HOST_BUILD_DIR) $(NATIVE_BUILD_DIR)
 
 .PHONY: all cross native depend runtime install install-native \
-	install-runtime install-headers freestanding-libc \
+	install-runtime install-headers freestanding-libc freestanding-ctype install-gcc-freestanding-ctype \
 	install-freestanding-libc uninstall clean

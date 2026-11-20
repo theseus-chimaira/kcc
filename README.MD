@@ -2,6 +2,15 @@
 
 KCC IS THE PDP-10 C COMPILER USED BY THE DAIMOS TOOLCHAIN.
 
+The freestanding C runtime also offers a separate versioned
+`libp10ctype-c-locale-v1.a` built from one PDP-6-compatible assembly
+source. It implements real `isprint` and `isspace` for the full 9-bit
+`unsigned char` domain in the **C locale** and for EOF. Install the
+same archive and source into GCC's freestanding directory with
+`make install-gcc-freestanding-ctype`, and the KCC copy with
+`make install-freestanding-libc`. The original core `libp10c-v2.a`
+remains unchanged. Unicode and UTF-9 classification is not provided.
+
 THE SEPARATELY INSTALLED FREESTANDING `libp10c-v2.a` PROVIDES 9-BIT
 STRING SEARCHES `strstr`, `strpbrk`, AND `strspn` AS INDEPENDENT
 PDP-6-COMPATIBLE ASSEMBLER MEMBERS. THESE ROUTINES REQUIRE NO OS
