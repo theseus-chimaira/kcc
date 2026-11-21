@@ -2889,7 +2889,24 @@ gboolop(NODE *n, int reverse)
       && (tismaybitptr(n->Nleft->Ntype)
         || tismaybitptr(n->Nright->Ntype))) {
         r1 = gptrcanoncmp(genexpr(n->Nleft), n->Nleft->Ntype);
+        /* gptrcanoncmp uses labels and scratch registers to select
+        ** between native S=9/S=18 and logical S=1 pointers.  Its
+        ** second invocation can reuse the physical accumulator
+        ** holding the first canonical pointer after a label flush.
+        ** Keep the first completed pointer in one transient stack
+        ** word until the second conversion has finished.  Restore
+        ** it before emitting the conditional skip, so the stack
+        ** cleanup cannot itself be skipped by the comparison.
+        */
+        code0(P_PUSH, VR_SP, r1);
+        ++stackoffset;
+        vrfree(r1);
         r2 = gptrcanoncmp(genexpr(n->Nright), n->Nright->Ntype);
+        r1 = vrget();
+        codemdx(P_MOVE, vrtoreal(r1), (SYMBOL *)NULL, 0, R_SP);
+        code8(P_ADJSP, VR_SP, -1);
+        --stackoffset;
+        (void) vrstoreal(r1, r2);
         if (reverse)
             op = revop(op);
         code0(op, r1, r2);
