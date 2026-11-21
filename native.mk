@@ -9,7 +9,7 @@
 # must never leave an apparently prepared but incomplete bootstrap tree.
 native: depend
 	$(MAKE) $(KCC) $(NATIVE_PHASE_DXRS) $(NATIVE_DRIVER_DXR) \
-		$(NATIVE_LINK_RUNTIME) $(NATIVE_DAIMOS_LIBC)
+		$(NATIVE_LINK_RUNTIME) $(NATIVE_FP36_ARCHIVE) $(NATIVE_DAIMOS_LIBC)
 
 # Bootstrap DXRs are installed separately from the Unix-hosted compiler.
 # DAIMOS reads these stable paths instead of private build-tree artifacts.
@@ -24,6 +24,7 @@ install-native: native
 	$(INSTALL) -m 444 $(NATIVE_RUNTIME_DIR)/crt0.dobj $(NATIVE_BOOTSTRAP_DIR)/runtime/crt0-v1.dobj
 	$(INSTALL) -m 444 $(NATIVE_RUNTIME_DIR)/daimos-bootstrap.dobj $(NATIVE_BOOTSTRAP_DIR)/runtime/daimos-bootstrap-v1.dobj
 	$(INSTALL) -m 444 $(NATIVE_RUNTIME_DIR)/syscall-helpers.dobj $(NATIVE_BOOTSTRAP_DIR)/runtime/syscall-helpers-v1.dobj
+	$(INSTALL) -m 444 $(NATIVE_FP36_ARCHIVE) $(NATIVE_BOOTSTRAP_DIR)/runtime/fp36-conversions-v1750.a
 	$(INSTALL) -m 444 $(NATIVE_DAIMOS_SYSCALL_OBJ) $(NATIVE_BOOTSTRAP_DIR)/daimos-libc/libc/syscall.dobj
 	$(INSTALL) -m 444 $(NATIVE_DAIMOS_LIBC) $(NATIVE_BOOTSTRAP_DIR)/daimos-libc/libc/libc.a
 
