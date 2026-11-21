@@ -2,6 +2,14 @@
 
 KCC IS THE PDP-10 C COMPILER USED BY THE DAIMOS TOOLCHAIN.
 
+Object pointers carried through `void *` must retain their original
+self-describing S field across a function boundary and local storage.
+`ccgen2.c` now treats `void *` to `void *` as a representation-preserving
+no-op, without converting native 18-bit pointers into S=9 pointers.
+The focused six-profile PDP-6 pointer identity/data oracle passes.
+The larger multi-argument pointer-torture regression remains open
+at KCC fail ID 12; its native ABI must not be weakened.
+
 PDP-6 native 36-bit integer/SF and D-format conversions use the real
 independently linked `libp10fp36-pdp6-v1.a` and the versioned signed
 D-format `libp10fp36-signed-df-pdp6-v1.a`. The compiler implements

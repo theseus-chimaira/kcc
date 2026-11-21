@@ -5479,6 +5479,24 @@ gcastptr(VREG *r, TYPE *tfrom, TYPE *tto)
 {
     int fsiz, tsiz;
 
+    /* A void * is a representation-preserving carrier for an object
+    ** pointer, including native 9/18-bit and packed S=1 pointers.
+    ** Copying or re-qualifying void * must never re-encode the source
+    ** pointer as an S=9 char pointer: its original target width is
+    ** intentionally unknown after type erasure.  In particular,
+    ** `void * volatile saved = p; return saved;` must preserve its
+    ** incoming S field across the function boundary.
+    */
+    if (tfrom != NULL && tto != NULL &&
+        tfrom->Tspec == TS_PTR && tto->Tspec == TS_PTR &&
+        tfrom->Tsubt != NULL && tto->Tsubt != NULL &&
+        tfrom->Tsubt->Tspec == TS_VOID &&
+        tto->Tsubt->Tspec == TS_VOID) {
+        if (r)
+            r->Vrtype = tto;
+        return r ? r : (VREG *)-1;
+    }
+
     /* Erasing the pointed-to type must preserve the pointer representation.
     ** A TF_MAYBITPTR value is self-describing: ordinary exact-width arrays
     ** use their native byte size, while packed members use S=1.  Converting
