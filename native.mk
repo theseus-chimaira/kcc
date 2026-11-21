@@ -84,22 +84,35 @@ $(NATIVE_RUNTIME_DIR)/crt0.dobj: runtime/daimos-crt0.s
 $(NATIVE_RUNTIME_DIR)/syscall-helpers.dobj: $(DAIMOS_REPO)/userland/libc/syscall_helpers.s
 	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ $<
 
+# Native compiler phases may require exact D-format conversion helpers.
+# Keep these in a separate archive so only referenced compiler ABI
+# routines are linked; signed conversion calls the unsigned helper.
+NATIVE_FP36_ARCHIVE = $(NATIVE_RUNTIME_DIR)/fp36-conversions-v1750.a
+$(NATIVE_RUNTIME_DIR)/fp36-signed-df-v1750.dobj: runtime/libc/kcc-libc-fp36-signed-df-pdp6-v1.s
+	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ $<
+
+$(NATIVE_RUNTIME_DIR)/fp36-unsigned-v1750.dobj: runtime/libc/kcc-libc-fp36-pdp6-v1.s
+	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ $<
+
+$(NATIVE_FP36_ARCHIVE): $(NATIVE_RUNTIME_DIR)/fp36-signed-df-v1750.dobj $(NATIVE_RUNTIME_DIR)/fp36-unsigned-v1750.dobj
+	$(PDP10_DARC) -o $@ $^
+
 $(NATIVE_KCPP_DXR): $(NATIVE_LINK_RUNTIME) $(NATIVE_KCPP_OBJS) $(NATIVE_DAIMOS_LIBC)
 	@echo "LINK $@"
 	@$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KCPP.map \
 		$^
 
-$(NATIVE_KPARSE_DXR): $(NATIVE_LINK_RUNTIME) $(NATIVE_KPARSE_OBJS) $(NATIVE_DAIMOS_LIBC)
+$(NATIVE_KPARSE_DXR): $(NATIVE_LINK_RUNTIME) $(NATIVE_KPARSE_OBJS) $(NATIVE_FP36_ARCHIVE) $(NATIVE_DAIMOS_LIBC)
 	@echo "LINK $@"
 	@$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KPARSE.map \
 		$^
 
-$(NATIVE_KGEN_DXR): $(NATIVE_LINK_RUNTIME) $(NATIVE_KGEN_OBJS) $(NATIVE_DAIMOS_LIBC)
+$(NATIVE_KGEN_DXR): $(NATIVE_LINK_RUNTIME) $(NATIVE_KGEN_OBJS) $(NATIVE_FP36_ARCHIVE) $(NATIVE_DAIMOS_LIBC)
 	@echo "LINK $@"
 	@$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KGEN.map \
 		$^
 
-$(NATIVE_KOPT_DXR): $(NATIVE_LINK_RUNTIME) $(NATIVE_KOPT_OBJS) $(NATIVE_DAIMOS_LIBC)
+$(NATIVE_KOPT_DXR): $(NATIVE_LINK_RUNTIME) $(NATIVE_KOPT_OBJS) $(NATIVE_FP36_ARCHIVE) $(NATIVE_DAIMOS_LIBC)
 	@echo "LINK $@"
 	@$(PDP10_DLINK) --daimos-uuo-relax -b 020 -o $@ -M $(NATIVE_BUILD_DIR)/KOPT.map \
 		$^
