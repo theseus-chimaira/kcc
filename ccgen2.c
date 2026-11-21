@@ -8442,7 +8442,7 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem,
     SYMBOL *memsym[GCCABI_ARG_REGS];
     int nargs, namedargs, nreg, nstack, outgoing_top;
     int stackreg, i, j, k, progress, pick;
-    int may_clobber_incoming;
+    int may_clobber_incoming, pushstack;
     VREG *stackval;
 
     nargs = 0;
@@ -8493,7 +8493,18 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem,
     ** Reserving the slots keeps them below all evaluation temporaries.
     ** The caller already removes NSTACK words after the final PUSHJ.
     */
-    if (nstack > 0) {
+    /* A pure stack suffix can be pushed in reverse argument order.
+    ** Do not use this shortcut when evaluation can call out or when
+    ** an incoming register parameter needs the separate snapshot pass.
+    */
+    pushstack = nstack > 0;
+    for (i = 0; i < nargs; ++i)
+        if (sideffp(args[i]))
+            pushstack = 0;
+    for (i = nreg; i < nargs; ++i)
+        if (Register_Id(args[i]))
+            pushstack = 0;
+    if (nstack > 0 && !pushstack) {
         code8(P_ADJSP, VR_SP, nstack);
         stackoffset += nstack;
         flushcode();
@@ -8548,8 +8559,12 @@ gccabi_direct_reg_args(NODE *list, int slotbase, TYPE *proto, int defermem,
             continue;
         stackval = genexpr(args[i]);
         stackreg = vrtoreal(stackval);
-        codemdx(P_MOVEM, stackreg, (SYMBOL *)NULL,
-                outgoing_top - stackoffset - (i - nreg), R_SP);
+        if (pushstack) {
+            code0(P_PUSH, VR_SP, stackval);
+            ++stackoffset;
+        } else
+            codemdx(P_MOVEM, stackreg, (SYMBOL *)NULL,
+                    outgoing_top - stackoffset - (i - nreg), R_SP);
         vrfree(stackval);
     }
 
