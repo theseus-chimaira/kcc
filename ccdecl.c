@@ -1921,7 +1921,18 @@ preserve_params:
             fnargpredropmask |= (1 << s->Sreg);
             continue;
         }
-        if (fn_abi_drop_first_call(body, s)) {
+        /* A direct ABI parameter cannot die at its first bare call
+        ** if its completed function body still contains another
+        ** reference.  The straight-line first-call scanner may not
+        ** see a later use folded into a nested expression/statement
+        ** node; retaining the incoming volatile AC in that case
+        ** lets the call overwrite the parameter before its later
+        ** pointer equality or dereference.  A genuine one-read
+        ** parameter retains the no-copy fast path.  Multi-read
+        ** parameters go through the normal preserved-AC binding.
+        */
+        if (fn_abi_param_refs(body, s) == 1
+          && fn_abi_drop_first_call(body, s)) {
             if (s->Sclass == SC_ARG)
                 s->Sclass = SC_RARG;
             s->Sreg = s->Svalue;

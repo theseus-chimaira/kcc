@@ -7,8 +7,11 @@ self-describing S field across a function boundary and local storage.
 `ccgen2.c` now treats `void *` to `void *` as a representation-preserving
 no-op, without converting native 18-bit pointers into S=9 pointers.
 The focused six-profile PDP-6 pointer identity/data oracle passes.
-The larger multi-argument pointer-torture regression remains open
-at KCC fail ID 12; its native ABI must not be weakened.
+The original three-argument pointer lowering now also preserves
+incoming register parameters referenced after an indirect call.
+The active large C89 pointer torture passes both native PDP-6 KCC
+noopt and opt; GCC O0 and optimized pointer codegen remain separate
+open work in GCC. No overall historical P1 closure is claimed.
 
 PDP-6 native 36-bit integer/SF and D-format conversions use the real
 independently linked `libp10fp36-pdp6-v1.a` and the versioned signed
