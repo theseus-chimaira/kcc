@@ -1814,29 +1814,41 @@ evalcast(NODE *e)
 	case CAST_IT_FP:	/* Integer type to floating-point type */
 	    if (tisdimode(tfrom))
 		return e; /* Both words needed: let target cast code handle it. */
+	    /* The constant node may contain a host-width representation
+	    ** after complement and shift folding.  In particular ~0U is
+	    ** the *36-bit* value 0777777777777, not the host 64-bit
+	    ** unsigned maximum.  Normalize to the source TARGET type
+	    ** before conversion; otherwise optimized (float)~0U becomes
+	    ** 2^64 instead of correctly rounded 2^36 on hosted builds.
+	    ** Keep the normalized value local so other source types and
+	    ** the exact target rounding path are unchanged.
+	    */
+	    {
+	    INT val = tolong(tfrom, cn->Niconst);
 	    switch (tto->Tspec) {
 		case TS_FLOAT:
 #ifndef __COMPILER_KCC__
 		    if (tissigned(tfrom))
 			cn->Nfconst = pdp10_host_round_single_v1 (
-				(long double)cn->Niconst);
+				(long double)val);
 		    else
 			cn->Nfconst = pdp10_host_round_single_v1 (
-				(long double)(unsigned INT)cn->Niconst);
+				(long double)(unsigned INT)val);
 #else
 		    if (tissigned(tfrom))
-			cn->Nfconst = (float) cn->Niconst;
+			cn->Nfconst = (float) val;
 		    else
-			cn->Nfconst = (float) (unsigned INT) cn->Niconst;
+			cn->Nfconst = (float) (unsigned INT)val;
 #endif
 		    break;
 		case TS_DOUBLE:
 		case TS_LNGDBL:
 		    if (tissigned(tfrom))
-			cn->Nfconst = (double) cn->Niconst;
+			cn->Nfconst = (double)val;
 		    else
-			cn->Nfconst = (double) (unsigned INT) cn->Niconst;
+			cn->Nfconst = (double) (unsigned INT)val;
 		    break;
+	    }
 	    }
 	    cn->Nop = N_FCONST;
 	    break;

@@ -2,16 +2,18 @@
 
 KCC IS THE PDP-10 C COMPILER USED BY THE DAIMOS TOOLCHAIN.
 
-PDP-6 native 36-bit integer/SF and unsigned DF conversions use the
-real independently linked `libp10fp36-pdp6-v1.a`, assembled from
-`runtime/libc/kcc-libc-fp36-pdp6-v1.s`. It implements canonical
-rounding, signed minimum and unsigned full-range conversion with
-bounded stack and no writable global data. Use
-`make install-freestanding-libc` and
-`make install-gcc-freestanding-fp36` to install the matching compiler
-copies. The original `libp10c-v2.a` is unchanged. This does not
-provide GNU 71-bit conversions or claim the entire historical
-`conversion.c` source passes.
+PDP-6 native 36-bit integer/SF and D-format conversions use the real
+independently linked `libp10fp36-pdp6-v1.a` and the versioned signed
+D-format `libp10fp36-signed-df-pdp6-v1.a`. The compiler implements
+canonical normalization, nearest/ties-to-even rounding, signed
+minimum and full-width unsigned conversions. The latter archive
+exports real `__kcc_floatsidf` / `__kcc_fixdfsi` helpers with bounded
+stack and no writable global data. Install matching compiler-owned
+archives with `make install-freestanding-libc` and
+`make install-gcc-freestanding-signed-df`. The original `libp10c-v2.a`
+and the original FP36 archive remain byte-for-byte unchanged.
+The unchanged historical `conversion.c` now passes KCC noopt/opt
+on PDP-6; GCC's separate GNU 71-bit helper remains unresolved.
 
 The freestanding C runtime also offers a separate versioned
 `libp10ctype-c-locale-v1.a` built from one PDP-6-compatible assembly

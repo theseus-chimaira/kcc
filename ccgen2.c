@@ -1794,7 +1794,8 @@ gint_pdp6_floatcast(VREG *r, TYPE *tto, int to_double, int is_unsigned)
     vrfree(r);
     codemdx(P_MOVE, 1, (SYMBOL *)NULL, 0, R_SP);
 
-    name = to_double ? "__kcc_floatunsidf" :
+    name = to_double ? (is_unsigned ? "__kcc_floatunsidf" :
+                        "__kcc_floatsidf") :
         (is_unsigned ? "__kcc_floatunssisf" : "__kcc_floatsisf");
     s = symfidstr(name);
     if (s == NULL) {
@@ -1849,7 +1850,8 @@ gint_pdp6_fixcast(VREG *r, TYPE *tto, int from_double,
     if (from_double)
         codemdx(P_MOVE, 2, (SYMBOL *)NULL, 0, R_SP);
 
-    name = from_double ? "__kcc_fixunsdfsi" :
+    name = from_double ? (is_unsigned ? "__kcc_fixunsdfsi" :
+                          "__kcc_fixdfsi") :
         (is_unsigned ? "__kcc_fixunssfsi" : "__kcc_fixsfsi");
     s = symfidstr(name);
     if (s == NULL) {
@@ -5902,8 +5904,7 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	case CAST_FP_IT:
 	    if (!r)
 		return (VREG *)-1;	/* Stop if just checking. */
-	    if (tgcpu == TGCPU_PDP6 && !tisdimode(tto)
-	      && (tisunsign(tto) || tfrom->Tspec == TS_FLOAT))
+	    if (tgcpu == TGCPU_PDP6 && !tisdimode(tto))
 		return gint_pdp6_fixcast(r, tto,
 		    tfrom->Tspec != TS_FLOAT, tisunsign(tto));
 	    if (tgcpu == TGCPU_PDP6 && tisdimode(tto) &&
@@ -6003,8 +6004,9 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 
 		case TS_DOUBLE:
 		case TS_LNGDBL:
-		    if (tgcpu == TGCPU_PDP6 && tisunsign(tfrom))
-			return gint_pdp6_floatcast(r, tto, 1, 1);
+		    if (tgcpu == TGCPU_PDP6 && !tisdimode(tfrom))
+			return gint_pdp6_floatcast(r, tto, 1,
+			    tisunsign(tfrom));
 		    vrlowiden(r);	/* Make into register pair */
 		    code5(P_SETZ, VR2(r)); /* zero the next reg */
 		    if ((tgcpu == TGCPU_PDP6 || tgcpu == TGCPU_KA)

@@ -3435,45 +3435,61 @@ host_float_bits (float * fp)
 static void
 host_pdp10_double_words (double d, unsigned INT * w1, unsigned INT * w2)
 {
-    unsigned INT word1, word2;
-    unsigned INT hi18, lo18;
-    unsigned INT value, second, exp, sign;
+    unsigned INT fraction, high, low, mask35, mask36;
     unsigned long lo32, hi32;
+    int exponent, negative;
 
     host_double_bits (d, &lo32, &hi32);
-    if (lo32 == 0 && hi32 == 0)
+    exponent = (int)((hi32 >> 20) & 03777UL);
+    negative = (hi32 & (1UL << 31)) != 0;
+    /* Host subnormal doubles are below the minimum PDP-10 exponent. */
+    if (exponent == 0)
 	{
 	*w1 = 0;
 	*w2 = 0;
 	return;
 	}
+    if (exponent == 03777) {
+	int_error ("host_pdp10_double_words: nonfinite constant");
+	*w1 = *w2 = 0;
+	return;
+    }
+    exponent -= 894; /* IEEE excess-1023 to PDP-10 excess-128. */
+    if (exponent <= 0) {
+	*w1 = *w2 = 0;
+	return;
+    }
+    if (exponent > 0377) {
+	int_error ("host_pdp10_double_words: exponent overflow");
+	*w1 = *w2 = 0;
+	return;
+    }
 
-    second = (unsigned INT)lo32;
-    sign   = (unsigned INT)(hi32 & (1UL << 31));
-    exp    = (unsigned INT)((hi32 >> 20) & 03777UL);
-    exp    = exp + 2;
-    exp    = exp + (128 - 1024);
-    value  = (unsigned INT)(hi32 & 03777777UL);
-    value  = value + 04000000UL;
-
-    if (sign)
-	{
-	second = ~second + 1;
-	value  = ~value + (second == 0);
-	value &= 07777777UL;
-	exp    = ~exp & 0377UL;
-	}
-
-    hi18 = ((sign | (exp << 23) | (value << 2)) >> 14) & 0777777UL;
-    lo18 = ((value << 6) | (second >> 26)) & 0777777UL;
-    word1 = (hi18 << 18) | lo18;
-
-    hi18 = (second >> 9) & 0777777UL;
-    lo18 = (second << 9) & 0777777UL;
-    word2 = (hi18 << 18) | lo18;
-
-    *w1 = word1;
-    *w2 = word2;
+    /* The IEEE double's 53-bit significand fits exactly in the
+    ** PDP-10 two-word 62-bit fraction.  Preserve the entire
+    ** significand rather than reconstructing it in 18-bit pieces:
+    ** the old emitter spilled bits into the sign-copy slot and
+    ** encoded -2^35+1 with a false high-word fraction.
+    */
+    fraction = ((unsigned INT)1 << 52)
+	| ((unsigned INT)(hi32 & 0xfffffUL) << 32)
+	| (unsigned INT)lo32;
+    fraction <<= 9;
+    mask35 = ((unsigned INT)1 << 35) - 1;
+    mask36 = ((unsigned INT)1 << 36) - 1;
+    high = ((unsigned INT)exponent << 27) | (fraction >> 35);
+    low = fraction & mask35;
+    if (negative) {
+	/* The D-format negative is a 71-bit two's complement:
+	** carry from the low 35 bits propagates into the high word.
+	** Bit 35 in the low storage word is the copied sign.
+	*/
+	low = (~low + 1) & mask35;
+	high = (~high + (low == 0)) & mask36;
+	low |= (unsigned INT)1 << 35;
+    }
+    *w1 = high;
+    *w2 = low;
 }
 #endif
 
@@ -3523,47 +3539,12 @@ outmpdbl (INT *ip, int which)  /* 1 = 1st wd, 2 = 2nd wd, 3 = both wds (dbl) */
 
     if (which == 3)			/* double precision input */
 	{
-	host_double_bits (*((double *)ip), &lo32, &hi32);
-	if (lo32 == 0 && hi32 == 0)
-	    {
-	    outstr ("0\n\t\t0");			/* special case: input zero */
-	    return;
-	    }
-	/*
-	 *	input is in two longs; ip[1] is most significant.
-	 *	First bit is sign.  Next 11 bits are exponent, XS 1024.
-	 *	Remaining 20 bits, plus ip[0], are a 52 bit fraction
-	 *	with a leading 1 implied.
-	 */
-	second = lo32;
-	sign   = (hi32 & (1UL << 31));
-	exp    = (hi32 >> 20) & 03777;	    /* normalized exponent */
-	exp    = exp + 2;		    /* adjust for pdp-10 usage */
-	exp    = exp + (128 - 1024);	    /* adjust to 8 bits XS 128 */
-	value  = (hi32 & 03777777L);	    /* fractional part */
-	value  = value  + 04000000L;	    /* add implied leading 1 */
-
-	if (sign)				/* if negative */
-	    {
-	    second = ~second + 1;		/*   2's complement of */
-	    value  = ~value + (second == 0);	/*   a 53 bit number!  */
-	    value &=  07777777L;
-	    exp    = ~exp & 0377;               /*   1's comp of exp */
-	    }
-	/*
-	 *	Have now transformed components of input;
-	 *	Must output them 18 bits at a time,
-	 *	with trailing zeros for where we lack precision in 32 bits.
-	 */
-	outword = (sign | (exp << 23) | (value << 2)) >> 14;
-	outpnum (outword);			/* first 18 bits of result */
-	outword = ((value << 6) | (second >> 26));
-	outlpnum (outword, 6);			/* next 18 bits */
+	unsigned INT word1, word2;
+	host_pdp10_double_words (*((double *)ip), &word1, &word2);
+	outpnum (word1);
 	outstr ("\n\t\t");
-	outword = (second >> 9) & 0377777L;
-	outpnum (outword);			/* 3rd 18 bits */
-	outword = (second << 9);
-	outlpnum (outword, 6);			/* last 8 bits plus 0's */
+	outpnum (word2);
+	return;
 	}
     else				/* floating point */
 	{

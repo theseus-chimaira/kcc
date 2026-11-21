@@ -63,6 +63,8 @@ FREESTANDING_CTYPE_SOURCE = runtime/libc/kcc-libc-ctype-c-locale-v1.s
 FREESTANDING_CTYPE_ARCHIVE = $(HOST_BUILD_DIR)/libp10ctype-c-locale-v1.a
 FREESTANDING_FP36_SOURCE = runtime/libc/kcc-libc-fp36-pdp6-v1.s
 FREESTANDING_FP36_ARCHIVE = $(HOST_BUILD_DIR)/libp10fp36-pdp6-v1.a
+FREESTANDING_SIGNED_DF_SOURCE = runtime/libc/kcc-libc-fp36-signed-df-pdp6-v1.s
+FREESTANDING_SIGNED_DF_ARCHIVE = $(HOST_BUILD_DIR)/libp10fp36-signed-df-pdp6-v1.a
 GCC_FREESTANDING_CTYPE_DIR = $(PDP10_PREFIX)/lib/gcc-lib/pdp10-dec-none/3.2/freestanding
 
 $(FREESTANDING_LIBC_STRING): runtime/libc/kcc-libc-string-v1.c $(KCC)
@@ -101,13 +103,24 @@ $(FREESTANDING_FP36_ARCHIVE): $(FREESTANDING_FP36_SOURCE)
 
 freestanding-fp36: $(FREESTANDING_FP36_ARCHIVE)
 
-install-freestanding-libc: freestanding-libc freestanding-ctype freestanding-fp36
+# Dedicated signed D-format conversion member.  Keep the earlier FP36
+# archive byte-identical to its verified v1 evidence.  These two
+# directions share the exact unsigned D-format helpers in that archive.
+$(FREESTANDING_SIGNED_DF_ARCHIVE): $(FREESTANDING_SIGNED_DF_SOURCE)
+	@mkdir -p $(HOST_BUILD_DIR)/libp10fp36-signed-df-pdp6-v1
+	$(PDP10_DAS) -F -C -O $(HOST_BUILD_DIR)/libp10fp36-signed-df-pdp6-v1/kcc-libc-fp36-signed-df-pdp6-v1.dobj $(FREESTANDING_SIGNED_DF_SOURCE)
+	$(PDP10_DARC) -o $@ $(HOST_BUILD_DIR)/libp10fp36-signed-df-pdp6-v1/kcc-libc-fp36-signed-df-pdp6-v1.dobj
+
+freestanding-signed-df: $(FREESTANDING_SIGNED_DF_ARCHIVE)
+
+install-freestanding-libc: freestanding-libc freestanding-ctype freestanding-fp36 freestanding-signed-df
 	$(INSTALL) -d $(DESTDIR)$(FREESTANDING_LIBC_DIR)
 	$(INSTALL) -m 644 runtime/libc/kcc-libc-*.s runtime/libc/p10bytes-v2.s \
 		$(FREESTANDING_LIBC_STRING) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 	$(INSTALL) -m 644 $(FREESTANDING_LIBC_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 	$(INSTALL) -m 644 $(FREESTANDING_CTYPE_SOURCE) $(FREESTANDING_CTYPE_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 	$(INSTALL) -m 644 $(FREESTANDING_FP36_SOURCE) $(FREESTANDING_FP36_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
+	$(INSTALL) -m 644 $(FREESTANDING_SIGNED_DF_SOURCE) $(FREESTANDING_SIGNED_DF_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 
 # GCC and KCC use the same PDP-10 C ABI for these two freestanding
 # entry points.  Install the exact same assembly/objects for GCC, not
@@ -119,6 +132,14 @@ install-gcc-freestanding-ctype: freestanding-ctype
 install-gcc-freestanding-fp36: freestanding-fp36
 	$(INSTALL) -d $(DESTDIR)$(GCC_FREESTANDING_CTYPE_DIR)
 	$(INSTALL) -m 644 $(FREESTANDING_FP36_SOURCE) $(FREESTANDING_FP36_ARCHIVE) $(DESTDIR)$(GCC_FREESTANDING_CTYPE_DIR)/
+
+install-gcc-freestanding-signed-df: freestanding-signed-df
+	$(INSTALL) -d $(DESTDIR)$(GCC_FREESTANDING_CTYPE_DIR)
+	$(INSTALL) -m 644 $(FREESTANDING_SIGNED_DF_SOURCE) $(FREESTANDING_SIGNED_DF_ARCHIVE) $(DESTDIR)$(GCC_FREESTANDING_CTYPE_DIR)/
+
+install-kcc-freestanding-signed-df: freestanding-signed-df
+	$(INSTALL) -d $(DESTDIR)$(FREESTANDING_LIBC_DIR)
+	$(INSTALL) -m 644 $(FREESTANDING_SIGNED_DF_SOURCE) $(FREESTANDING_SIGNED_DF_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 
 install-runtime: runtime
 	$(INSTALL) -d $(DESTDIR)$(KCCLIBDIR)
@@ -152,6 +173,8 @@ uninstall:
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10ctype-c-locale-v1.a
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-fp36-pdp6-v1.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10fp36-pdp6-v1.a
+	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-fp36-signed-df-pdp6-v1.s
+	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10fp36-signed-df-pdp6-v1.a
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-string-v1.s
 	@for f in $(RUNTIME); do \
 	    $(RM) "$(DESTDIR)$(KCCLIBDIR)/$${f##*/}"; \
@@ -167,5 +190,5 @@ clean:
 	$(RM) -r $(HOST_BUILD_DIR) $(NATIVE_BUILD_DIR)
 
 .PHONY: all cross native depend runtime install install-native \
-	install-runtime install-headers freestanding-libc freestanding-ctype freestanding-fp36 install-gcc-freestanding-ctype install-gcc-freestanding-fp36 \
+	install-runtime install-headers freestanding-libc freestanding-ctype freestanding-fp36 freestanding-signed-df install-gcc-freestanding-ctype install-gcc-freestanding-fp36 install-gcc-freestanding-signed-df install-kcc-freestanding-signed-df \
 	install-freestanding-libc uninstall clean
