@@ -2519,6 +2519,10 @@ simsubbp (PCODE *p)
 	case PTA_PCONST:
 	case PTA_REGIS:
 	case PTA_MINDEXED:
+	case PTA_RCONST:
+	    /* The peephole optimizer can fold a byte-pointer operand to a
+	    ** numeric constant, including zero.  Preserve that operand and
+	    ** let the ordinary P_MOVE output path load it into AC16. */
 	    break;
 	default:
 	    int_error ("simsubbp: bad adrmode: %ld", (INT) typ);
