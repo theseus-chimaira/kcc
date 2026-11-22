@@ -1548,6 +1548,11 @@ fn_abi_direct_peer_simple(NODE *n)
     case Q_MEMBER:
         return 1;
     default:
+        /* Statement/control nodes (including Q_SWITCH) have no result
+        ** type.  They cannot be scalar peers of a direct ABI pair.
+        ** Reject them conservatively instead of asking sizetype(NULL). */
+        if (n->Ntype == NULL)
+            return 0;
         return sizetype(n->Ntype) != 2;
     }
 }
