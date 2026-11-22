@@ -242,7 +242,9 @@ host_pdp10_float_word_v1 (double d)
 	return 0; /* Host subnormals underflow the PDP-10 exponent range. */
     if (exponent == 0x7ff)
 	{
-	  int_error ("host_pdp10_float_word_v1: nonfinite constant");
+	  /* Nonfinite host intermediates cannot be encoded in PDP-10 F format;
+	  ** this is a source-range diagnostic, not an internal error. */
+	  error ("Floating constant overflow (no PDP-10 nonfinite value)");
 	  return 0;
 	}
 
@@ -263,7 +265,7 @@ host_pdp10_float_word_v1 (double d)
 	return 0;
     if (exponent > 255)
 	{
-	  int_error ("host_pdp10_float_word_v1: exponent overflow");
+	  error ("Floating constant exponent exceeds PDP-10 F format");
 	  return 0;
 	}
     word = ((unsigned long long) exponent << 27) | fraction;

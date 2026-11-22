@@ -3446,7 +3446,10 @@ host_pdp10_double_words (double d, unsigned INT * w1, unsigned INT * w2)
 	return;
 	}
     if (exponent == 03777) {
-	int_error ("host_pdp10_double_words: nonfinite constant");
+	/* PDP-10 D format has no infinity or NaN encoding.  Source
+	** constants and folded expressions can overflow the host format;
+	** diagnose them as user errors, not compiler internal failures. */
+	error ("Floating constant overflow (no PDP-10 nonfinite value)");
 	*w1 = *w2 = 0;
 	return;
     }
@@ -3456,7 +3459,7 @@ host_pdp10_double_words (double d, unsigned INT * w1, unsigned INT * w2)
 	return;
     }
     if (exponent > 0377) {
-	int_error ("host_pdp10_double_words: exponent overflow");
+	error ("Floating constant exponent exceeds PDP-10 D format");
 	*w1 = *w2 = 0;
 	return;
     }
