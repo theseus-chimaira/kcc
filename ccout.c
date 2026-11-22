@@ -2126,8 +2126,15 @@ simadjbp (PCODE *p)
     ** and negative counts use the shared word-stride pointer helper. */
     if (n < 0 || n > 3) {
 	if (p->Preg != 1) {
-	    outstr("\tPUSH\t17,1\n");
-	    fprintf(out, "\tSETM\t1,%o\n", p->Preg);
+	    outadjsp(1);
+	    outstr("\tMOVEM\t1,0(17)\n");
+	    /* PDP-6 accumulators are not ordinary low-core memory operands.
+	    ** Transfer the pointer through a real stack slot, not SETM or
+	    ** MOVE with a register number as the effective address. */
+	    outadjsp(1);
+	    fprintf(out, "\tMOVEM\t%o,0(17)\n", p->Preg);
+	    outstr("\tMOVE\t1,0(17)\n");
+	    outadjsp(-1);
 	}
 	fprintf(out, "\tMOVE\t%o,[", R_SCRREG);
 	outnum(n);
@@ -2140,8 +2147,12 @@ simadjbp (PCODE *p)
 	    ++crtref[CRT_ADJBP];
 	}
 	if (p->Preg != 1) {
-	    fprintf(out, "\tSETM\t%o,1\n", p->Preg);
-	    outstr("\tPOP\t17,1\n");
+	    outadjsp(1);
+	    outstr("\tMOVEM\t1,0(17)\n");
+	    fprintf(out, "\tMOVE\t%o,0(17)\n", p->Preg);
+	    outadjsp(-1);
+	    outstr("\tMOVE\t1,0(17)\n");
+	    outadjsp(-1);
 	}
 	return;
     }
