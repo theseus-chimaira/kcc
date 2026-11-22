@@ -1940,67 +1940,61 @@ outadjbp_body (void)
     static int adjbp_label = 0;
     int n = adjbp_label++;
 
-    /* PDP-6 has no ADJBP instruction and its accumulators must not be
-    ** treated as low-core memory operands.  Keep the pointer and negative
-    ** adjustment scratch values in real stack memory while simulating it.
+    /* Convert the signed byte displacement to a whole-word displacement
+    ** plus a nonnegative byte remainder.  For byte size S, a word holds
+    ** floor(36/S) bytes.  At most floor(36/S)-1 IBPs are then required.
+    **
+    ** PDP-6 accumulators cannot be read as low-core memory operands.
+    ** Marshal the registers and both IDIV divisors through actual stack
+    ** memory.  Six words hold saved AC13-15, pointer, count, and divisor.
     **
     ** Entry:  AC1  = byte pointer
     **         AC16 = signed byte count
     ** Exit:   AC1  = adjusted byte pointer
-    ** Preserves AC13, AC14, AC15; clobbers AC16.
+    ** Preserves AC13, AC14, AC15 and AC16.
     */
     fprintf(out, "\tJUMPE\t1,%%ADJX%o\n", n);
     fprintf(out, "\tJUMPE\t16,%%ADJX%o\n", n);
-    /* Preserve the helper's fixed scratch ACs here rather than at every
-    ** call site.  This costs the same push/pop traffic at run time, but
-    ** emits the six save/restore instructions only once per module. */
-    outstr("\tPUSH\t17,13\n");
-    outstr("\tPUSH\t17,14\n");
-    outstr("\tPUSH\t17,15\n");
-    outstr("\tPUSH\t17,1\n");
-    fprintf(out, "\tJUMPL\t16,%%ADJN%o\n", n);
-    fprintf(out, "%%ADJP%o:\tIBP\t0(17)\n", n);
-    fprintf(out, "\tSOJG\t16,%%ADJP%o\n", n);
-    fprintf(out, "\tJRST\t%%ADJR%o\n", n);
+    outadjsp(6);
+    outstr("\tMOVEM\t13,-5(17)\n");
+    outstr("\tMOVEM\t14,-4(17)\n");
+    outstr("\tMOVEM\t15,-3(17)\n");
+    outstr("\tMOVEM\t1,-2(17)\n");
+    outstr("\tMOVEM\t16,-1(17)\n");
 
-    /* Negative adjustment.  Layout after ADJSP +2 is:
-    **   -2(17) pointer, -1(17) byte size S, 0(17) scratch.
-    */
-    fprintf(out, "%%ADJN%o:\tADD\t17,[2,,2]\n", n);
+    /* Extract S, then compute bytes per word = 36 / S. */
     outstr("\tHLRZ\t13,-2(17)\n");
     outstr("\tLSH\t13,-6\n");
     outstr("\tANDI\t13,077\n");
-    outstr("\tMOVEM\t13,-1(17)\n");
-    fprintf(out, "%%ADNI%o:\tHLRZ\t14,-2(17)\n", n);
-    outstr("\tLSH\t14,-014\n");
-    outstr("\tANDI\t14,077\n");
-    outstr("\tMOVEI\t15,044\n");
-    outstr("\tSUB\t15,-1(17)\n");
-    outstr("\tMOVEM\t15,0(17)\n");
-    fprintf(out, "\tCAMN\t14,0(17)\n\t JRST\t%%ADJW%o\n", n);
-    outstr("\tADD\t14,-1(17)\n");
-    fprintf(out, "\tJRST\t%%ADJS%o\n", n);
-    fprintf(out, "%%ADJW%o:\tHRRZ\t15,-2(17)\n", n);
-    outstr("\tSUBI\t15,1\n");
-    outstr("\tHRRM\t15,-2(17)\n");
-    outstr("\tMOVEI\t15,044\n");
-    fprintf(out, "%%ADJL%o:\tSUB\t15,-1(17)\n", n);
-    fprintf(out, "\tJUMPGE\t15,%%ADJL%o\n", n);
-    outstr("\tADD\t15,-1(17)\n");
-    outstr("\tMOVEM\t15,0(17)\n");
-    outstr("\tMOVE\t14,0(17)\n");
-    fprintf(out, "%%ADJS%o:\tHLRZ\t15,-2(17)\n", n);
-    outstr("\tANDI\t15,07777\n");
-    outstr("\tLSH\t14,014\n");
+    fprintf(out, "\tJUMPE\t13,%%ADJR%o\n", n);
+    outstr("\tMOVEM\t13,0(17)\n");
+    outstr("\tMOVEI\t14,044\n");
+    outstr("\tIDIV\t14,0(17)\n");
+    fprintf(out, "\tJUMPE\t14,%%ADJR%o\n", n);
+
+    /* IDIV gives a truncated quotient.  Correct the negative remainder
+    ** to obtain floor(count / bytes_per_word) and 0 <= rem < bpw. */
     outstr("\tMOVEM\t14,0(17)\n");
-    outstr("\tIOR\t15,0(17)\n");
-    outstr("\tHRLM\t15,-2(17)\n");
-    fprintf(out, "\tAOJL\t16,%%ADNI%o\n", n);
-    outstr("\tSUB\t17,[2,,2]\n");
-    fprintf(out, "%%ADJR%o:\tPOP\t17,1\n", n);
-    outstr("\tPOP\t17,15\n");
-    outstr("\tPOP\t17,14\n");
-    outstr("\tPOP\t17,13\n");
+    outstr("\tMOVE\t13,-1(17)\n");
+    outstr("\tIDIV\t13,0(17)\n");
+    fprintf(out, "\tJUMPGE\t14,%%ADJA%o\n", n);
+    outstr("\tSUBI\t13,1\n");
+    outstr("\tADD\t14,0(17)\n");
+
+    /* Adjust only the word-address half; keep P/S/index fields intact. */
+    fprintf(out, "%%ADJA%o:\tMOVEM\t13,0(17)\n", n);
+    outstr("\tHRRZ\t15,-2(17)\n");
+    outstr("\tADD\t15,0(17)\n");
+    outstr("\tHRRM\t15,-2(17)\n");
+    fprintf(out, "\tJUMPE\t14,%%ADJR%o\n", n);
+    fprintf(out, "%%ADJP%o:\tIBP\t-2(17)\n", n);
+    fprintf(out, "\tSOJG\t14,%%ADJP%o\n", n);
+
+    fprintf(out, "%%ADJR%o:\tMOVE\t1,-2(17)\n", n);
+    outstr("\tMOVE\t15,-3(17)\n");
+    outstr("\tMOVE\t14,-4(17)\n");
+    outstr("\tMOVE\t13,-5(17)\n");
+    outadjsp(-6);
     fprintf(out, "%%ADJX%o:\n", n);
 }
 
@@ -2128,7 +2122,9 @@ simadjbp (PCODE *p)
     }
 
     n = p->Pvalue;
-    if (n < 0) {
+    /* Limit in-line IBP expansion to tiny positive offsets.  Large positive
+    ** and negative counts use the shared word-stride pointer helper. */
+    if (n < 0 || n > 3) {
 	if (p->Preg != 1) {
 	    outstr("\tPUSH\t17,1\n");
 	    fprintf(out, "\tSETM\t1,%o\n", p->Preg);
