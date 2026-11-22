@@ -5423,8 +5423,21 @@ static SYMBOL *izsym;   /* Symbol for var being initialized */
 NODE *
 pizer(SYMBOL *s)
 {
-    izautof = isauto(izsym = s);        /* Set "globals" for subroutines */
-    return piztype(s->Stype, 0);        /* Do outermost-level parse for type */
+    NODE *result;
+    SYMBOL *saved_sym = izsym;
+    int saved_auto = izautof;
+
+    /* A compound literal may invoke pizer recursively while an enclosing
+    ** aggregate initializer is still being parsed.  Preserve the outer
+    ** initializer's symbol and storage-duration context: otherwise an
+    ** unbounded outer array can accidentally update the compound literal's
+    ** type, leaving the array bound at zero and crashing gizlist. */
+    izsym = s;
+    izautof = isauto(s);
+    result = piztype(s->Stype, 0);
+    izsym = saved_sym;
+    izautof = saved_auto;
+    return result;
 }
 
 /* PIZTYPE - Parse initializer for a given type.
