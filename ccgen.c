@@ -1563,6 +1563,17 @@ gizlist(NODE *n, TYPE *t, SYMBOL *s)	/* N_IZLIST to initialize from */
         return;
     }
 
+    /* KCC does not have a distinct complete zero-length array type:
+    ** Tsize == 0 also denotes an incomplete array.  Reject an empty
+    ** initializer that cannot determine its bound, rather than silently
+    ** emitting a zero-sized object or reporting an internal error. */
+    if (t->Tspec == TS_ARRAY && t->Tsize == 0 && n != NULL
+      && n->Nop == N_IZLIST && n->Nleft == NULL
+      && n->Nright == NULL) {
+	error("Empty array initializer cannot determine array size");
+	return;
+    }
+
     if ((wdsleft = sizetype(t)) <= 0) {		/* Paranoia */
 	int_error("gizlist: bad size: %ld %N", (INT) wdsleft, n);
 	return;					/* Don't try to fill out */

@@ -2728,6 +2728,11 @@ simsmove (PCODE *p)
 
 	default:
 
+	    /* GNU empty arrays and empty initializers have zero storage.
+	    ** Their aggregate copy is an exact no-op, not an invalid BLT. */
+	    if (size == 0)
+		return;
+
 	    if (size <= 0)
 		{
 		int_error ("simsmove: bad size %ld", (INT) size);
