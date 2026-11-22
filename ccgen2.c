@@ -2793,19 +2793,28 @@ gdimodezero(NODE *n, int op, int reverse)
     NODE *v;
     VREG *r;
     int hi, lo;
+    INT chi, clo;
 
     if (n->Nop != Q_EQUAL && n->Nop != Q_NEQ)
         return 0;
 
     v = NULL;
-    if (n->Nright
-      && (n->Nright->Nop == N_ICONST || n->Nright->Nop == N_PCONST)
-      && n->Nright->Niconst == 0)
-        v = n->Nleft;
-    else if (n->Nleft
-      && (n->Nleft->Nop == N_ICONST || n->Nleft->Nop == N_PCONST)
-      && n->Nleft->Niconst == 0)
-        v = n->Nright;
+    /* Niconst holds only the low word of a wide integer literal.
+    ** A nonzero multiple of 2^35 has a zero low word, but must not
+    ** be mistaken for zero by this two-word comparison shortcut.
+    */
+    if (n->Nright && n->Nright->Nop == N_ICONST
+      && tisdimode(n->Nright->Ntype)) {
+        dimode_iconst_words(n->Nright, &chi, &clo);
+        if (chi == 0 && clo == 0)
+            v = n->Nleft;
+    }
+    if (!v && n->Nleft && n->Nleft->Nop == N_ICONST
+      && tisdimode(n->Nleft->Ntype)) {
+        dimode_iconst_words(n->Nleft, &chi, &clo);
+        if (chi == 0 && clo == 0)
+            v = n->Nright;
+    }
 
     if (!v || !tisdimode(v->Ntype))
         return 0;
