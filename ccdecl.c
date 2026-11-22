@@ -4451,7 +4451,8 @@ declarator(SYMBOL *d)
                     idsym->Sclass = SC_EXLINK;  /* Fake out paramlist */
                 nextoken();                             /* Start paramlist parse */
                 pp = addpp(pp, fundecl(d,
-                    (paramok && !inproto && d->Sclass != SC_TYPEDEF)
+                    (paramok && !inproto && d->Sclass != SC_TYPEDEF
+                     && pp == NULL)
                     ? 0 : DF_INPROTO));
                 if (idsym)                      /* Restore real class after fakeout */
                     {
