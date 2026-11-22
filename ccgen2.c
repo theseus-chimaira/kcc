@@ -279,6 +279,7 @@ static int gdimodirectstore(VREG *, NODE *);
 static void gdimove(VREG *, VREG *);
 static VREG *gdimode_from_int(VREG *, TYPE *, TYPE *, NODE *);
 static VREG *gdimode_pdp6_floatcast(VREG *, TYPE *, int);
+static VREG *gdimode_fixsf_call(VREG *, TYPE *);
 static VREG *gint_pdp6_floatcast(VREG *, TYPE *, int, int);
 static VREG *gint_pdp6_fixcast(VREG *, TYPE *, int, int);
 static void gretmove(TYPE *, VREG *, VREG *);
@@ -1766,6 +1767,40 @@ gdimode_pdp6_floatcast(VREG *r, TYPE *tto, int to_float)
     VR2(res)->Vrtype = tto;
     if (!to_float)
         code8(P_TLZ, VR2(res), 0400000L);
+    return res;
+}
+
+/* Convert a native single float to signed 71-bit DImode on CPUs with
+** canonical PDP-10 SF.  FIX only returns a single 36-bit integer, so
+** it cannot implement this conversion.  The freestanding libgcc
+** __fixsfdi helper returns the complete signed pair in AC1:AC2.
+*/
+static VREG *
+gdimode_fixsf_call(VREG *r, TYPE *tto)
+{
+    VREG *res;
+    SYMBOL *s;
+    int src;
+
+    vrspillothers(r, (VREG *)NULL);
+    src = vrtoreal(r);
+    code00(P_PUSH, R_SP, src);
+    ++stackoffset;
+    vrfree(r);
+    codemdx(P_MOVE, 1, (SYMBOL *)NULL, 0, R_SP);
+    s = symfidstr("__fixsfdi");
+    if (s == NULL) {
+        s = symgcreat("__fixsfdi");
+        s->Sclass = SC_EXTREF;
+    }
+    ++s->Srefs;
+    code6(P_PUSHJ, VR_SP, s);
+    code8(P_ADJSP, VR_SP, -1);
+    --stackoffset;
+    res = vrretdget();
+    res->Vrtype = tto;
+    VR2(res)->Vrtype = tto;
+    code8(P_TLZ, VR2(res), 0400000L);
     return res;
 }
 
@@ -5939,6 +5974,9 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	case CAST_FP_IT:
 	    if (!r)
 		return (VREG *)-1;	/* Stop if just checking. */
+	    if (tgcpu != TGCPU_PDP6 && tisdimode(tto) &&
+	        !tisunsign(tto) && tfrom->Tspec == TS_FLOAT)
+		return gdimode_fixsf_call(r, tto);
 	    if (tgcpu == TGCPU_PDP6 && !tisdimode(tto))
 		return gint_pdp6_fixcast(r, tto,
 		    tfrom->Tspec != TS_FLOAT, tisunsign(tto));
