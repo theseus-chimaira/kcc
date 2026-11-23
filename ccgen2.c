@@ -8950,10 +8950,12 @@ gcall (NODE* n)
     int directtail;
     int directargs;
     int directstackwords;
+    int indirect_target_saved;
 
     calladdr = NULL;
     directargs = 0;
     directstackwords = 0;
+    indirect_target_saved = 0;
 
     /* Inline the smallest freestanding memcpy before the generic call path
     ** spills registers and constructs an ABI argument block. */
@@ -9114,22 +9116,24 @@ gcall (NODE* n)
 
     /* Evaluate an ordinary indirect C call target before loading the fixed
     ** argument ACs.  gaddress() may need a scratch register; evaluating it
-    ** after AC1..AC4 are populated can overwrite a live argument, especially
-    ** in non-optimized code.  The C language does not sequence evaluation of
-    ** the function designator relative to its arguments, so this order is
-    ** valid.  Keeping CALLADDR live also prevents the argument generator from
-    ** allocating its register.
+    ** after AC1..AC4 are populated can overwrite a live argument.
+    **
+    ** AC16 is also the output emitter's scratch register.  Argument
+    ** evaluation, notably PDP-6 byte-pointer adjustment, may overwrite it.
+    ** Store the target in one real stack word until all arguments are ready;
+    ** reload AC16 immediately before the indirect PUSHJ.  This also covers
+    ** nested calls and stack-passed arguments without relying on AC16 being
+    ** preserved by compiler-internal pseudo-op expansions.
     */
     if (!(fnflags & (TF_BLISS | TF_FORTRAN | TF_INTERRUPT))
       && n->Nleft->Nop != Q_IDENT) {
         calladdr = gaddress(n->Nleft);
-        /* AC1..AC4 are fixed argument destinations and may overwrite the
-        ** register chosen for the function designator.  Preserve the target
-        ** in KCC's reserved AC16 before argument setup.  fn_needs_scrreg()
-        ** makes the containing function save/restore AC16 for indirect calls.
-        */
-        code00(P_MOVE, R_SCRREG, vrtoreal(calladdr));
+        /* The function designator is evaluated exactly once.  Its stack
+        ** slot is below the outgoing argument area. */
+        code00(P_PUSH, R_SP, vrtoreal(calladdr));
         flushcode();
+        ++stackoffset;
+        indirect_target_saved = 1;
         vrfree(calladdr);
         calladdr = NULL;
     }
@@ -9233,8 +9237,11 @@ gcall (NODE* n)
 #endif
     if (n->Nleft->Nop == Q_IDENT)
 	code6(P_PUSHJ, VR_SP, n->Nleft->Nid);	/* optimization */
-    else
+    else {
+        if (indirect_target_saved)
+            codemdx(P_MOVE, R_SCRREG, (SYMBOL *)NULL, narg, R_SP);
         codemdx(P_PUSHJ, R_SP, (SYMBOL *)NULL, 0, R_SCRREG);
+    }
 
     /* Arguments proven dead at the first bare call no longer need their
     ** incoming ABI ACs reserved after control returns from that call.
@@ -9253,6 +9260,10 @@ gcall (NODE* n)
 	code8 (P_ADJSP, VR_SP, narg);
 	stackoffset += narg;
 	}
+    if (indirect_target_saved) {
+        code8(P_ADJSP, VR_SP, -1);
+        --stackoffset;
+    }
 
     if ((n->Ntype->Tspec == TS_STRUCT || n->Ntype->Tspec == TS_UNION)
       && siz > 2 && siz <= GCCABI_RET_REGS)
