@@ -22,7 +22,8 @@ extern SYMBOL *defauto(char *, TYPE *), *defstatic(char *, TYPE *); /* CCDECL */
 extern NODE *pizer(SYMBOL *);		/* CCDECL */
 extern SYMBOL *funchk(int, int, SYMBOL *, SYMBOL *);	/* CCDECL */
 extern TYPE *findtype(int, TYPE *), *findftype(TYPE *, TYPE *),	/* CCSYM */
-	*findqtype(TYPE *, INT), *findutype(TYPE *),
+	*findptype(int, TYPE *, TYPE *), *findqtype(TYPE *, INT),
+	*findutype(TYPE *),
 	*findctype(int, INT, unsigned INT, TYPE *);
 extern INT sizearray(TYPE *), sizeptobj(TYPE *);	/* CCSYM */
 extern SYMBOL *newlabel(void);	/* CCSYM */
@@ -75,6 +76,7 @@ static NODE *bin_asm(void), *bin_offsetof(void), *bin_jffo(void);
 static NODE *bin_muuo(void);
 #endif
 static int cmpatype(TYPE *, TYPE *);
+static SYMBOL *gnu_builtin_memlib_v13(SYMBOL *);
 static int stmtpackedagg(INT);
 static void stmtintname(char *, char *, unsigned int);
 static INT stmtpackedbit(INT);
@@ -2969,6 +2971,53 @@ pincdec(struct node * n, int op)
 ** On return, current token is the next one after the expression.
 */
 
+/* Type the GNU builtins for the standard freestanding memory operations.
+** Keep their __builtin_* symbol identity distinct from an ordinary libc
+** identifier; a translation unit can define a static function named
+** strcmp, for example, without changing what __builtin_strcmp means.
+** CCOUT maps the builtin's external reference to the real libc entry.
+** Explicit parameters convert object pointers to the byte-pointer ABI.
+** Only recognize otherwise undeclared builtins used as function calls.
+*/
+static SYMBOL *
+gnu_builtin_memlib_v13(SYMBOL *s)
+{
+    int is_set, is_compare;
+    TYPE *result, *params;
+    TYPE *byteptr;
+    SYMBOL d;
+
+    if (strcmp(s->Sname, "__builtin_memcpy") == 0)
+        is_set = is_compare = 0;
+    else if (strcmp(s->Sname, "__builtin_memset") == 0)
+        is_set = 1, is_compare = 0;
+    else if (strcmp(s->Sname, "__builtin_strcmp") == 0)
+        is_set = 0, is_compare = 1;
+    else
+        return s;
+
+    byteptr = findtype(TS_PTR, chartype);
+    if (is_compare) {
+        result = inttype;
+        params = findptype(TS_PARAM,
+                           findptype(TS_PARAM, NULL, byteptr), byteptr);
+    } else {
+        result = voidptrtype;
+        params = findptype(TS_PARAM,
+                           findptype(TS_PARAM,
+                                     findptype(TS_PARAM, NULL, siztype),
+                                     is_set ? inttype : voidptrtype),
+                           voidptrtype);
+    }
+
+    memset(&d, 0, sizeof(d));
+    d.Sclass = SC_EXTREF;
+    d.Stype = findftype(result, params);
+    s = funchk(0, SC_EXTREF, &d, s);
+    ++s->Srefs;
+    return s;
+}
+
 static NODE *
 primary(void)
 {
@@ -2996,21 +3045,24 @@ primary(void)
 
 		case SC_UNDEF:		/* Undefined identifier may be function call */
 		    if (token != T_LPAREN)	/* Check for function-call case */
-					/* Undefined, complain */
-			{
-			error("Undefined identifier: %S", s);
-			freesym(s);		/* Flush losing symbol */
-			return ndeft(N_UNDEF, deftype);
-		/* Returns special undef node so can continue processing */
+			{			/* Undefined, complain */
+			    error("Undefined identifier: %S", s);
+			    freesym(s);		/* Flush losing symbol */
+			    return ndeft(N_UNDEF, deftype);
+			    /* Return special undef node to continue parsing. */
 			}
-	    /* Pretend we declared this identifier as
-	    ** "extern int ident();" in current block.
-	    */
-		    note("Call to undeclared function %S", s);
-		    d.Sclass = SC_EXTREF;	/* Storage class as if "extern" */
-		    d.Stype = findftype(inttype, (TYPE *)NULL);	/* Set type */
-		    s = funchk(0, SC_EXTREF, &d, s);	/* Perform funct declaration */
-		    s->Srefs++;			/* Say referenced by call */
+		    s = gnu_builtin_memlib_v13(s);
+		    if (s->Sclass == SC_UNDEF)
+			{
+			/* Pretend we declared this identifier as
+			** "extern int ident();" in the current block.
+			*/
+			    note("Call to undeclared function %S", s);
+			    d.Sclass = SC_EXTREF;
+			    d.Stype = findftype(inttype, (TYPE *)NULL);
+			    s = funchk(0, SC_EXTREF, &d, s);
+			    s->Srefs++;	/* Referenced by call */
+			}
 
 	    /* Now can drop through to handle normally */
 

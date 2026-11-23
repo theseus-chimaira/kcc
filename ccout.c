@@ -3837,8 +3837,51 @@ outmidef (SYMBOL *s)
 void
 outmiref (SYMBOL *s)
     {
+    /* A GNU builtin has its own parser symbol, independent of a local
+    ** function with the same ordinary library name.  Only an external
+    ** builtin reference is lowered to the target's actual libc entry.
+    ** A user-defined __builtin_* function is never silently renamed.
+    */
+    if ((s->Sclass == SC_EXTREF || s->Sclass == SC_XEXTREF)
+	&& s->Sname[0] == '_' && s->Sname[1] == '_'
+	&& s->Sname[2] == 'b')
+        {
+        if (!strcmp(s->Sname, "__builtin_memcpy"))
+            { outid("memcpy"); return; }
+        if (!strcmp(s->Sname, "__builtin_memset"))
+            { outid("memset"); return; }
+        if (!strcmp(s->Sname, "__builtin_strcmp"))
+            { outid("strcmp"); return; }
+        }
+
     switch (s->Sclass)
 	{
+	case SC_INTREF:
+	case SC_INTDEF:
+	case SC_INLINK:
+	    /* Internal linkage must not occupy a public assembler symbol.
+	    ** In long-identifier mode, the historical SIXBIT map is not
+	    ** otherwise emitted: prefix the complete name with '$', which
+	    ** cannot begin an ordinary C identifier.  This keeps a static
+	    ** strcmp separate from the compiler's libc strcmp reference.
+	    ** Preserve the existing compact SIXBIT mapping in legacy mode.
+	    */
+#if HOST_DAIMOS
+	    outc('$');
+	    outid(s->Sname);
+#else
+	    if (longidents)
+		{
+		outc('$');
+		outid(s->Sname);
+		}
+	    else if (s->Smaplab)
+		outsix(s->Smaplab);
+	    else
+		int_error("outmiref: no internal map for \"%s\"", s->Sname);
+#endif
+	    break;
+
 	case SC_ISTATIC:
 	    outid (s->Ssym->Sname);
 	    break;
