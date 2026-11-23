@@ -104,7 +104,7 @@ static void simptrcnv (PCODE *), simsmove (PCODE *),
 	simadjsp (PCODE *), simadjbp (PCODE *), simdfop (PCODE *),
 	outadjsp (INT), outdmovn (int);
 static void outadjbp_body (void);
-static void outmpdbl (INT *, int), outpreamble (void),
+static void outmpdbl (INT *, int, int), outpreamble (void),
 	outlpnum (unsigned INT, int), outinstr (PCODE *),
 	outrawnum (unsigned INT), outpnum (unsigned INT), outop (int), outreg (int),
 	outpti (int, INT), outaddress (PCODE *),
@@ -1687,7 +1687,7 @@ outinstr (PCODE *p)
 	    if (tgmachuse.mapdbl)		/* If target mach fmt is different */
 		{
 #ifdef __COMPILER_KCC__
-		outmpdbl ((INT *)&p->Pdouble, i);/* Output part of mapped double */
+		outmpdbl ((INT *)&p->Pdouble, i, 1);/* Mapped literal word */
 #else
 		unsigned INT dword1, dword2;
 		host_pdp10_double_words (p->Pdouble, &dword1, &dword2);
@@ -1714,14 +1714,18 @@ outinstr (PCODE *p)
 		{
 		outc ('[');
 #ifdef __COMPILER_KCC__
-		outmpdbl ((INT *) &p->Pdouble, 3);	/* Output mapped double */
+		outmpdbl ((INT *) &p->Pdouble, 3, 1); /* Two-word code literal */
 #else
 		unsigned INT dword1, dword2;
 		host_pdp10_double_words (p->Pdouble, &dword1, &dword2);
 		outpnum (dword1);
-		outnl ();
-		outtab ();
-		outtab ();
+		if (GAS_DIALECT)
+		    outc (',');
+		else {
+		    outnl ();
+		    outtab ();
+		    outtab ();
+		}
 		outpnum (dword2);
 #endif
 		outc (']');
@@ -1730,9 +1734,13 @@ outinstr (PCODE *p)
 		{
 		outc ('[');
 		outnum (p->Pdouble1);
-		outnl ();
-		outtab ();
-		outtab ();
+		if (GAS_DIALECT)
+		    outc (',');
+		else {
+		    outnl ();
+		    outtab ();
+		    outtab ();
+		}
 		outnum (p->Pdouble2);
 		outc (']');
 		}
@@ -3397,7 +3405,7 @@ outflt (int typ, INT *ptr, int flags)
 	}
     else if (tgmachuse.mapdbl)	/* If target mach fmt is different */
 	{
-	outmpdbl (ptr, 3);		/* output mapped double */
+	outmpdbl (ptr, 3, (flags & OF_CONST) != 0);
 	typ = 2;
 	}
     else
@@ -3516,7 +3524,11 @@ host_pdp10_double_words (double d, unsigned INT * w1, unsigned INT * w2)
 **	This is also used by CCGEN for data.
 */
 static void
-outmpdbl (INT *ip, int which)  /* 1 = 1st wd, 2 = 2nd wd, 3 = both wds (dbl) */
+outmpdbl (INT *ip, int which, int literal)
+/* 1 = first word, 2 = second word, 3 = both.
+ * GAS code literals require a comma between words; static double data
+ * still requires two separately emitted assembler data words.
+ */
 {
 #ifdef  __COMPILER_KCC__		/* native floating point format */
 
@@ -3539,7 +3551,7 @@ outmpdbl (INT *ip, int which)  /* 1 = 1st wd, 2 = 2nd wd, 3 = both wds (dbl) */
     if (which&01)
 	outpnum (*ip);		/* 1st wd always output as is */
     if (which==03)
-	outstr ("\n\t\t");
+	outstr (GAS_DIALECT && literal ? "," : "\n\t\t");
     if (which&02)
 	outpnum (second);	/* 2nd word has been mapped */
 #else			/* not native - assume IEEE as used by Turbo C */
@@ -3561,7 +3573,7 @@ outmpdbl (INT *ip, int which)  /* 1 = 1st wd, 2 = 2nd wd, 3 = both wds (dbl) */
 	unsigned INT word1, word2;
 	host_pdp10_double_words (*((double *)ip), &word1, &word2);
 	outpnum (word1);
-	outstr ("\n\t\t");
+	outstr (GAS_DIALECT && literal ? "," : "\n\t\t");
 	outpnum (word2);
 	return;
 	}
