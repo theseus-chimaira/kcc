@@ -114,7 +114,7 @@ static INT locctr;	/* Location counter (only for tracking # wds output) */
 */
 
 
-/* Normalize signed GCC-ABI DImode argument pairs for KCC's internal
+/* Normalize GCC-ABI DImode argument pairs for KCC's internal
 ** high36:low35 representation.  GCC duplicates the sign into bit 35 of
 ** the low word; KCC arithmetic keeps that bit clear.  Stack-resident low
 ** words are normalized when loaded by gdimemload().
@@ -130,7 +130,7 @@ gccabi_normalize_dimode_regs(void)
     while (p && p->Tspec == TS_PARAM) {
         t = p->Tsubt;
         siz = sizetype(t);
-        if (siz == 2 && tisdimode(t) && !tisunsign(t)) {
+        if (siz == 2 && tisdimode(t)) {
             lowreg = 0;
             if (cum < GCCABI_ARG_REGS - 1)
                 lowreg = cum + 2;
@@ -1033,9 +1033,10 @@ genfunct (NODE* n)
 	** preserve it locally, avoiding two extra prologue/epilogue words in the
 	** common case on PDP-6, which has no native DMOVE/DMOVEM.
 	*/
-        gccabi_normalize_dimode_regs();
-	if (!fnabidirect)
-	    gccabi_arg_prologue();
+        if (fnabidirect)
+            gccabi_normalize_dimode_regs();
+        else
+            gccabi_arg_prologue();
 	if (fnsavescr)
 	    {
 	    code00(P_PUSH, R_SP, R_SCRREG);

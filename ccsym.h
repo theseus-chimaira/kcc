@@ -406,6 +406,7 @@ enum symbolspec {
 #define SF_ANONALIAS	0400000000	/* Promoted name from anonymous aggregate */
 #define SF_ALLOCA	01000000000	/* Compiler-owned caller-frame alloca builtin */
 #define SF_ASMREF	02000000000	/* V32: actually emitted symbol reference */
+#define SF_ENUMUNSIGNED 04000000000L /* Enum tag: all enumerators nonnegative */
 #define SF_OVCLS (SF_MACRO|SF_MEMBER|SF_TAG|SF_LABEL)	/* All ov classes */
 
 

@@ -273,7 +273,7 @@ static VREG *gpackedbitstorereg(NODE *, VREG *, TYPE *);
 static VREG *gpackedbitcopy(NODE *, NODE *, TYPE *, int);
 static VREG *gpackedcopyreg(NODE *, VREG *, TYPE *);
 static void gasm(NODE *), gjffo(NODE *);
-static void gdimemload(VREG *, VREG *, TYPE *, int);
+static void gdimemload(VREG *, VREG *, int);
 static void gdimemstore(VREG *, VREG *);
 static int gdimodirectstore(VREG *, NODE *);
 static void gdimove(VREG *, VREG *);
@@ -889,15 +889,15 @@ dimode_negative_power2_exp(INT hi, INT lo)
 
 /* Load integral DImode value from memory at idx into pair q. */
 static void
-gdimemload(VREG *q, VREG *idx, TYPE *t, int keep)
+gdimemload(VREG *q, VREG *idx, int keep)
 {
     int ar;
 
     ar = vrreal(idx);
     codek4(P_MOVE, q, idx);
     codemdx(P_MOVE, vrreal(VR2(q)), NULL, 1, ar);
-    if (!tisunsign(t))
-        code8(P_TLZ, VR2(q), 0400000L);
+    /* Both signed and unsigned 71-bit objects use the same ABI bits. */
+    code8(P_TLZ, VR2(q), 0400000L);
     if (!keep)
 	vrfree(idx);
 }
@@ -934,8 +934,8 @@ gdimemstore(VREG *reg, VREG *ra)
      * sequence in a fixed text buffer.  The latter exceeded 80 bytes once
      * GCC-compatible low-word sign copying was added.
      */
-    if (reg->Vrtype && !tisunsign(reg->Vrtype)) {
-        /* Live signed DImode pairs are already canonical high36:low35.
+    {
+        /* Live DImode pairs are already canonical high36:low35.
         ** Only copy the high sign into the external memory representation.
         */
         n = kccfmt(buf, sizeof(buf), "\tTLNE\t%o,0400000\n", hi);
@@ -947,7 +947,7 @@ gdimemstore(VREG *reg, VREG *ra)
     codestr(buf, n);
     n = kccfmt(buf, sizeof(buf), "\tMOVEM\t%o,1(%o)\n", lo, ar);
     codestr(buf, n);
-    if (reg->Vrtype && !tisunsign(reg->Vrtype)) {
+    {
         n = kccfmt(buf, sizeof(buf), "\tTLZ\t%o,0400000\n", lo);
         codestr(buf, n);
     }
@@ -1019,7 +1019,7 @@ gdimodirectstore(VREG *reg, NODE *nod)
     lo = vrreal(VR2(reg));
     flushcode();
 
-    if (!tisunsign(reg->Vrtype)) {
+    {
         /* The live pair is already canonical; encode only the duplicated
         ** memory sign bit, then clear it again after the store below.
         */
@@ -1032,7 +1032,7 @@ gdimodirectstore(VREG *reg, NODE *nod)
     codemdx(P_DMOVEM, hi, msym, off, index);
     flushcode();
 
-    if (!tisunsign(reg->Vrtype)) {
+    {
         n = kccfmt(buf, sizeof(buf), "\tTLZ\t%o,0400000\n", lo);
         codestr(buf, n);
     }
@@ -2150,6 +2150,28 @@ retry_alloc:
         codestr(buf, n);
         }
 
+    /* For magnitudes below 2^35, the native signed IDIV is exact.
+    ** Reuse the numerator pair (no new scratch or stack words).
+    ** The shared sign-restoration tail also handles signed operations. */
+    if (nlo == nhi + 1) {
+        n = kccfmt(buf, sizeof(buf),
+            "\tJUMPN\t%o,%%DIDIV%dW\n"
+            "\tJUMPN\t%o,%%DIDIV%dW\n"
+            "\tJUMPE\t%o,%%DIDIV%dW\n"
+            "\tMOVE\t%o,0%o\n"
+            "\tIDIV\t%o,0%o\n"
+            "\tSETZ\t%o,\n"
+            "\tMOVE\t%o,0%o\n"
+            "\tJRST\t%%DIDIV%dF\n"
+            "%%DIDIV%dW:\n",
+            nhi, lab, dhi, lab, dlo, lab,
+            nhi, nlo, nhi, dlo,
+            wantmod ? rhi : qhi,
+            wantmod ? rlo : qlo, wantmod ? nlo : nhi,
+            lab, lab);
+        codestr(buf, n);
+    }
+
     if (wantmod)
         n = kccfmt(buf, sizeof(buf),
             "\tAND\t%o,[0377777777777]\n"
@@ -2373,6 +2395,10 @@ retry_alloc:
         cnt, lab);
         }
     codestr(buf, n);
+    if (nlo == nhi + 1) {
+        n = kccfmt(buf, sizeof(buf), "%%DIDIV%dF:\n", lab);
+        codestr(buf, n);
+    }
 
     if (is_signed)
         {
@@ -2547,12 +2573,12 @@ gdimodecompl(VREG *r)
     (void) vrstoreal(r, VR2(r));
     hi = vrreal(r);
     lo = vrreal(VR2(r));
-    /* Both words carry the sign bit in the GCC ABI representation.
-    ** Complement both complete words so ~(DImode)0 becomes (-1, -1). */
+    /* Register pairs are canonical; complement only 71 value bits. */
     n = kccfmt(buf, sizeof(buf),
         "\tSETCA\t%o,\n"
-        "\tSETCA\t%o,\n",
-        hi, lo);
+        "\tSETCA\t%o,\n"
+        "\tTLZ\t%o,0400000\n",
+        hi, lo, lo);
     codestr(buf, n);
 }
 
@@ -8252,13 +8278,13 @@ gprimary(NODE *n)
                 r->Vrtype = n->Ntype;
                 VR2(r)->Vrtype = n->Ntype;
                 code12(P_DMOVE, r, autooff_v11(n->Nid));
-                /* Signed DImode memory duplicates the high sign bit in
+                /* DImode memory duplicates the high sign bit in
                 ** bit 35 of the low word.  Internal VREG pairs instead
                 ** carry an unsigned low35.  Normalize after the direct
                 ** automatic load, just as the general memory load does.
                 ** Without this, equal negative values compare different
                 ** after one has been stored in an automatic. */
-                if (tisdimode(n->Ntype) && !tisunsign(n->Ntype))
+                if (tisdimode(n->Ntype))
                     code8(P_TLZ, VR2(r), 0400000L);
             }
 	    else
@@ -9055,29 +9081,6 @@ gccabi_tail_regs(void)
                 }
             }
         }
-        if (siz == 2 && tisdimode(t) && !tisunsign(t)) {
-            int lowreg;
-            lowreg = 0;
-            if (cum < GCCABI_ARG_REGS - 1)
-                lowreg = cum + 2;
-            else if (cum == GCCABI_ARG_REGS - 1)
-                lowreg = GCCABI_ARG_REGS;
-            if (lowreg) {
-                /* The private compatibility stack image contains KCC's
-                ** canonical low35 form, so encode it directly for the ABI.
-                */
-                if (cum < GCCABI_ARG_REGS - 1) {
-                    gccabi_dimode_encode_regs(cum + 1, lowreg);
-                } else {
-                    /* Split pair: the high word remains in the external
-                    ** stack area, so reload it temporarily to test sign. */
-                    codemdx(P_MOVE, R_ABITMP, (SYMBOL *)NULL,
-                            -(stackoffset + 1 + cum + 1), R_SP);
-                    gccabi_dimode_encode_regs(R_ABITMP, lowreg);
-                }
-                flushcode();
-            }
-        }
         cum += siz;
         p = p->Tproto;
     }
@@ -9430,7 +9433,7 @@ gcall (NODE* n)
 	r = vrretget ();		/* one return register */
     else if (siz == 2) {
 	r = vrretdget ();		/* two */
-        if (tisdimode(n->Ntype) && !tisunsign(n->Ntype))
+        if (tisdimode(n->Ntype))
             code8(P_TLZ, VR2(r), 0400000L);
     }
     else if (siz > GCCABI_RET_REGS)
@@ -9540,14 +9543,14 @@ gfnarg(NODE *n)
 	    break;
 	case 2:
 	    reg = genexpr(n);
-            if (tisdimode(n->Ntype) && !tisunsign(n->Ntype)) {
-                /* Internal signed DImode is already low35-canonical. */
+            if (tisdimode(n->Ntype)) {
+                /* Internal DImode is already low35-canonical. */
                 code8(P_TLN+POF_ISSKIP+POS_SKPE, reg, 0400000L);
                 code8(P_TLO, VR2(reg), 0400000L);
             }
 	    code0(P_PUSH, VR_SP, reg);
 	    code0(P_PUSH, VR_SP, VR2(reg));
-            if (tisdimode(n->Ntype) && !tisunsign(n->Ntype))
+            if (tisdimode(n->Ntype))
                 code8(P_TLZ, VR2(reg), 0400000L);
 	    vrfree(reg);
 	    stackoffset += 2;
@@ -10090,7 +10093,7 @@ getmem(VREG *reg, TYPE *t, int byte, int keep)
 	    q = vrdget();
 	    q->Vrtype = t;		/* Set C type of object in reg */
 	    if (tisdimode(t))
-		gdimemload(q, reg, t, keep);
+		gdimemload(q, reg, keep);
 	    else {
                 /* On PDP-6/KA10 DMOVE expands to two MOVEs.  Preserve the
                 ** address until both words have been fetched; otherwise the

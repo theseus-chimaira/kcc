@@ -1431,7 +1431,7 @@ greturn (NODE *n)
 		    vrfree(r);
 		else
 		    code0 (P_DMOVE, VR_RETVAL, r);
-                if (!tisunsign(n->Ntype)) {
+                {
                     /* KCC keeps live DImode low35-canonical.  Returning it
                     ** only needs to copy the high sign into the ABI bit.
                     */

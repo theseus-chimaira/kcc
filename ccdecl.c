@@ -3088,13 +3088,15 @@ pbase(SYMBOL *symp)
                     break;
 
                 case T_ENUM:
-                    (void) tagspec(TS_ENUM);
-                    nt = inttype;
+                    nt = tagspec(TS_ENUM);
+                    /* Match GCC's word-sized compatible integer type.
+                    ** Enumerator constants themselves remain int. */
+                    nt = (nt && (nt->Tsmtag->Sflags & SF_ENUMUNSIGNED))
+                        ? uinttype : inttype;
                     nflag = 1;
 
                     break;
 
-                /* Enums always type "int", but have tags and syms defined. */
 
                 case T_SIGNED:
                     nflag = PF_SIGNED;
@@ -3757,6 +3759,7 @@ sdeclenum(SYMBOL *tag)
     s = NULL;
     val = -1;                   /* start at zero (after pre-incrementing) */
     last = tag;
+    tag->Sflags |= SF_ENUMUNSIGNED;
     for (;; nextoken())
         {
         if (token == T_RBRACE)
@@ -3806,6 +3809,8 @@ sdeclenum(SYMBOL *tag)
                 }
             s->Svalue = ++val;
             }
+        if (s->Svalue < 0)
+            tag->Sflags &= ~SF_ENUMUNSIGNED;
         if (token != T_COMMA)
             break;
         }
