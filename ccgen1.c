@@ -1385,6 +1385,7 @@ greturn (NODE *n)
     VREG*	r;
     VREG*	r2;
     int		i = n->Nreg;
+    int finalreturn = n == retfall;
     if (optobj && deadjump ())		/* If in dead code, do nothing */
 	return;
 
@@ -1461,7 +1462,7 @@ greturn (NODE *n)
 	** emitted after the function body.  Other returns still jump to the
 	** shared label.
 	*/
-	if (n != retfall)
+	if (!optobj || !finalreturn)
 	    code6(P_JRST, NULL, retlabel);
 	return;
 	}
@@ -1500,6 +1501,17 @@ genretepilog(int i)
 
     if (retlabel)
 	{
+	/* A tail transfer may already have unwound the frame.  Omit the
+	** shared return only if the final instruction cannot fall through
+	** and no generated jump references this private label.
+	*/
+	if (optobj && retlabel->Svalue == 0 && deadjump())
+	    {
+	    freelabel(retlabel);
+	    retlabel = NULL;
+	    retfall = NULL;
+	    return;
+	    }
 	/* A shared epilogue can have many incoming return jumps.  Flush them
 	** before emitting the label; the forward-label optimizer assumes a
 	** much smaller local jump set and cannot safely fold this fan-in.
