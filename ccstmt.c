@@ -1648,7 +1648,7 @@ condexpr(void)
 static NODE *
 binary(int prec)
 {
-    int nprec, op, typ;
+    int nprec, op, typ, function_eq;
     NODE *lx, *rx, *bx;	/* Left, right, and binary expressions */
 
     lx = castexpr();	/* First get a left-hand <cast-expr> expression */
@@ -1659,6 +1659,7 @@ binary(int prec)
 	if ((nprec = tok[token].tkprec) <= prec)
 	    break;		/* New op has lower prec than current, stop */
 	op = token;		/* Save op */
+	function_eq = -1;
 	nextoken();
 	rx = binary(nprec);	/* Now get right-hand side of expression */
 
@@ -1732,6 +1733,20 @@ binary(int prec)
 		    continue;
 		    }
 		bx->Ntype = inttype;	/* OK, type of result is always int */
+		/* Two occurrences of the same function designator name the
+		** same function address.  The implicit function-to-pointer
+		** conversion is value preserving, so no runtime comparison
+		** (or reference to the function body) is required.  Evaluate
+		** this identity even in -n mode: it is a language semantic,
+		** not an optional optimizer heuristic.
+		*/
+		if ((op == Q_EQUAL || op == Q_NEQ)
+		  && bx->Nleft->Nop == Q_IDENT
+		  && bx->Nright->Nop == Q_IDENT
+		  && bx->Nleft->Nid != NULL
+		  && bx->Nleft->Nid == bx->Nright->Nid
+		  && bx->Nleft->Nid->Stype->Tspec == TS_FUNCT)
+		    function_eq = (op == Q_EQUAL);
 		break;
 
 	    case Q_MPLY:
@@ -1812,6 +1827,12 @@ binary(int prec)
 			/* likely lossage with & precedence */
 	    advise("Bitwise operation on result of comparison -- use parentheses");
 
+	/* Perform semantic identity folding only *after* the generic binary
+	** validation above has consumed both operands.  Replacing bx too
+	** early would leave NULL children for its final type/flag checks.
+	*/
+	if (function_eq >= 0)
+	    bx = ndeficonst(function_eq);
 	lx = bx;		/* Binary expr becomes new left-hand operand */
 	}
     return lx;

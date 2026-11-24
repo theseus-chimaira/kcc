@@ -51,6 +51,10 @@ outnl(void)
 #include <string.h>
 #include <stdlib.h>	/* calloc () */
 
+#if HOST_UNIX
+extern void kcc_inline_ref_v32(SYMBOL *);
+#endif
+
 /*
  * DAIMOS native output is always DAS/GAS syntax.  Keep the historical
  * runtime dialect switch for hosted KCC, but make it a compile-time constant
@@ -127,6 +131,21 @@ extern char *mlbptr;
 extern char mainname[];
 int	    _word_cnt;		/* KAR-2/91, function wd cnt stat */
 static int whichseg;	/* 1 = code, -1 = data, 0 = unknown */
+
+#if HOST_UNIX
+/* Section state belongs to the active assembler output stream. */
+int
+kcc_inline_segment_v32(void)
+{
+    return whichseg;
+}
+
+void
+kcc_inline_set_segment_v32(int seg)
+{
+    whichseg = seg;
+}
+#endif
 
 
 /*
@@ -615,6 +634,14 @@ outdecl (void)
 
 	    case SC_EXTREF:		/* External linkage sym referenced */
 	    case SC_XEXTREF:
+#if HOST_UNIX
+		/* Parser references from discarded inline functions are not
+		** actual relocations.  Export only symbols present in emitted
+		** code or in a reachable deferred function body.
+		*/
+		if (!(s->Sflags & SF_ASMREF))
+		    continue;
+#endif
 		/* Calls to the compiler-owned alloca expression are emitted
 		** directly in the caller's frame; no external symbol exists.
 		** A spurious EXTERN would cause the freestanding linker to
@@ -623,6 +650,7 @@ outdecl (void)
 		if (s->Sflags & SF_ALLOCA)
 		    continue;
 	    /* Symbol not defined.  Ask for it if needed */
+#if !HOST_UNIX
 		if (s->Srefs == 0)	/* If never used, don't ask. */
 		    {
 		    if (!delete)		/* If keeping asm file, */
@@ -630,6 +658,7 @@ outdecl (void)
 		    else
 			continue;		/* Otherwise just ignore */
 		    }
+#endif
 		outstr (GAS_DIALECT ? "\t.extern\t" : "\tEXTERN\t");
 		break;
 	    }
@@ -3844,6 +3873,9 @@ outmidef (SYMBOL *s)
 void
 outmiref (SYMBOL *s)
     {
+#if HOST_UNIX
+    kcc_inline_ref_v32(s);
+#endif
     /* A GNU builtin has its own parser symbol, independent of a local
     ** function with the same ordinary library name.  Only an external
     ** builtin reference is lowered to the target's actual libc entry.

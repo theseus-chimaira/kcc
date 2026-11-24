@@ -59,6 +59,7 @@ static void gdo(NODE *), gfor(NODE *), gif(NODE *),
 	gwhile(NODE *), greturn(NODE *);
 static SYMBOL *gtoplab(void); 
 static int labchk(NODE *);
+static int stmtends_v32(NODE *);
 static int indloopmatch(NODE *, NODE **, SYMBOL **);
 static int indbodywrites(NODE *, SYMBOL *);
 static NODE *laststmt(NODE *);
@@ -395,6 +396,13 @@ genstmt(NODE *n)
 		n->Nleft->Nendlab = beg->Nendlab;	/* Copy from 1st */
 
 	    genstmt(n->Nleft);
+	    /* Suppress the unreachable tail even in -n mode.  A label in
+	    ** that tail may still be entered by a goto or switch, so in
+	    ** that case preserve the complete suffix.
+	    */
+	    if (n->Nright && stmtends_v32(n->Nleft)
+	      && !labchk(n->Nright))
+		break;
 
 	#if !KCC_PHASE_GEN
 	    if (optgen && bsym != NULL && st->Nright != NULL
@@ -481,6 +489,30 @@ laststmt(struct node * n)
 		n = n->Nleft;
 	}
 	return(n);
+}
+
+/* Only syntactically unconditional exits or front-end-folded conditions
+** prove a statement cannot fall through.  Unknown shapes remain live.
+*/
+static int
+stmtends_v32(NODE *n)
+{
+    if (n == NULL)
+        return 0;
+    switch (n->Nop) {
+    case Q_RETURN:
+    case Q_GOTO:
+    case Q_BREAK:
+    case Q_CONTINUE:
+        return 1;
+    case Q_IF:
+        if (n->Nleft && n->Nleft->Nop == N_ICONST && n->Nright)
+            return stmtends_v32(n->Nleft->Niconst
+                ? n->Nright->Nleft : n->Nright->Nright);
+        return 0;
+    default:
+        return 0;
+    }
 }
 
 static INT
@@ -855,7 +887,7 @@ gif(struct node * n)
     ** control could jump into them using either case or goto labels.
     ** Hence the labchk() to see whether the parse tree contains such labels...
     */
-    if (l->Nop == N_ICONST && optgen) {		/* If cond is constant */
+    if (l->Nop == N_ICONST) {		/* A known condition is semantic. */
 	if (l->Niconst && !labchk(nelse)) {	/* if (1) & "else" flushable */
 	    if (nthen) {
 		nthen->Nendlab = n->Nendlab;

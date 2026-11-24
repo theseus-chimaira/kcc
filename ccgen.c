@@ -12,6 +12,9 @@
 #include "ccgen.h"
 #include "ccchar.h"
 #include <string.h>
+#if HOST_UNIX
+#include <stdlib.h>
+#endif
 
 /* Imported (external) functions used herein */
 extern void ridlsym(SYMBOL *);
@@ -739,6 +742,200 @@ fn_needs_scrreg(NODE *root)
     return 0;
 }
 
+/* Static inline bodies cannot be emitted eagerly: a function may never
+** become reachable, and its calls or data references must not become
+** link-time dependencies.  On hosted cross builds, spool each candidate's
+** generated assembly to disk and keep only a small symbol-reference graph
+** in RAM.  The graph contains references from ACTUALLY emitted machine
+** operands, not the parser's pre-optimization Srefs counters.  This is
+** particularly important for function-address comparisons and dead code.
+** Native KGEN output remains unchanged until its own file-service spool
+** integration is available; it must not gain an implicit hosted tmpfile.
+*/
+#if HOST_UNIX
+struct inline_ref_v32 {
+    struct inline_ref_v32 *next;
+    SYMBOL *symbol;
+};
+
+struct inline_def_v32 {
+    struct inline_def_v32 *next;
+    struct inline_ref_v32 *refs;
+    SYMBOL *symbol;
+    long start;
+    long length;
+    int live;
+};
+
+static FILE *inline_spool_v32;
+static FILE *inline_parent_v32;
+static struct inline_def_v32 *inline_head_v32, *inline_tail_v32;
+static struct inline_def_v32 *inline_active_v32;
+static int inline_parent_segment_v32;
+
+extern int kcc_inline_segment_v32(void);
+extern void kcc_inline_set_segment_v32(int);
+
+/* Called by CCOUT only for symbols appearing in actual assembly operands.
+** References inside an inactive candidate must not mark global symbols
+** live until that candidate itself becomes reachable.
+*/
+void
+kcc_inline_ref_v32(SYMBOL *s)
+{
+    struct inline_ref_v32 *ref;
+
+    if (s == NULL || (s->Sclass != SC_INTDEF && s->Sclass != SC_INTREF
+      && s->Sclass != SC_EXTREF && s->Sclass != SC_XEXTREF))
+        return;
+
+    if (inline_active_v32 == NULL) {
+        s->Sflags |= SF_ASMREF;
+        return;
+    }
+    if (s == inline_active_v32->symbol)
+        return;
+    for (ref = inline_active_v32->refs; ref; ref = ref->next)
+        if (ref->symbol == s)
+            return;
+    ref = (struct inline_ref_v32 *)malloc(sizeof(*ref));
+    if (ref == NULL) {
+        int_error("KCC inline spool: cannot allocate dependency entry");
+        return;
+    }
+    ref->symbol = s;
+    ref->next = inline_active_v32->refs;
+    inline_active_v32->refs = ref;
+}
+
+static int
+kcc_inline_begin_v32(SYMBOL *s)
+{
+    struct inline_def_v32 *rec;
+
+    if (inline_spool_v32 == NULL) {
+        inline_spool_v32 = tmpfile();
+        if (inline_spool_v32 == NULL) {
+            int_error("KCC inline spool: cannot create temporary file");
+            return 0;
+        }
+    }
+    rec = (struct inline_def_v32 *)calloc(1, sizeof(*rec));
+    if (rec == NULL || fseek(inline_spool_v32, 0L, SEEK_END) != 0) {
+        free(rec);
+        int_error("KCC inline spool: cannot append definition");
+        return 0;
+    }
+    rec->start = ftell(inline_spool_v32);
+    if (rec->start < 0) {
+        free(rec);
+        int_error("KCC inline spool: cannot determine output offset");
+        return 0;
+    }
+    rec->symbol = s;
+    if (inline_tail_v32)
+        inline_tail_v32->next = rec;
+    else
+        inline_head_v32 = rec;
+    inline_tail_v32 = rec;
+
+    inline_parent_v32 = out;
+    inline_parent_segment_v32 = kcc_inline_segment_v32();
+    inline_active_v32 = rec;
+    out = inline_spool_v32;
+    kcc_inline_set_segment_v32(1);
+    outstr("\n\t.text\n");
+    return 1;
+}
+
+static void
+kcc_inline_end_v32(void)
+{
+    long end;
+
+    if (fflush(inline_spool_v32) != 0)
+        int_error("KCC inline spool: failed writing definition");
+    end = ftell(inline_spool_v32);
+    if (end < inline_active_v32->start)
+        int_error("KCC inline spool: invalid definition length");
+    else
+        inline_active_v32->length = end - inline_active_v32->start;
+    out = inline_parent_v32;
+    kcc_inline_set_segment_v32(inline_parent_segment_v32);
+    inline_active_v32 = NULL;
+}
+
+/* Called just before OUTDONE: emit a closure of genuinely referenced
+** candidate functions and their own references.  No AST is retained,
+** and a recursive/cyclic static-inline call graph is handled by the
+** monotone visited flag.  Replaying a definition is a raw disk copy;
+** its reference edges were already recorded during code generation.
+*/
+void
+kcc_inline_finish_v32(void)
+{
+    struct inline_def_v32 *rec, *next;
+    struct inline_ref_v32 *ref, *rnext;
+    int progress, emitted;
+    char buf[1024];
+
+    if (inline_spool_v32 == NULL)
+        return;
+
+    do {
+        progress = 0;
+        for (rec = inline_head_v32; rec; rec = rec->next) {
+            if (rec->live || !(rec->symbol->Sflags & SF_ASMREF))
+                continue;
+            rec->live = 1;
+            ++progress;
+            for (ref = rec->refs; ref; ref = ref->next)
+                ref->symbol->Sflags |= SF_ASMREF;
+        }
+    } while (progress);
+
+    emitted = 0;
+    for (rec = inline_head_v32; rec; rec = rec->next) {
+        long left;
+
+        if (!rec->live)
+            continue;
+        if (fseek(inline_spool_v32, rec->start, SEEK_SET) != 0) {
+            int_error("KCC inline spool: cannot read definition");
+            break;
+        }
+        left = rec->length;
+        while (left > 0) {
+            size_t count = left > (long)sizeof(buf)
+                ? sizeof(buf) : (size_t)left;
+            if (fread(buf, 1, count, inline_spool_v32) != count
+              || fwrite(buf, 1, count, out) != count) {
+                int_error("KCC inline spool: failed replaying definition");
+                left = 0;
+                break;
+            }
+            left -= (long)count;
+        }
+        emitted = 1;
+    }
+    if (emitted) {
+        outstr("\n\t.text\n");
+        kcc_inline_set_segment_v32(1);
+    }
+    for (rec = inline_head_v32; rec; rec = next) {
+        next = rec->next;
+        for (ref = rec->refs; ref; ref = rnext) {
+            rnext = ref->next;
+            free(ref);
+        }
+        free(rec);
+    }
+    fclose(inline_spool_v32);
+    inline_spool_v32 = NULL;
+    inline_head_v32 = inline_tail_v32 = inline_active_v32 = NULL;
+}
+#endif /* HOST_UNIX */
+
 /* GENCODE - Generate code/data from parse-tree node
 */
 void
@@ -750,7 +947,19 @@ gencode(NODE *n)
 		if (!nerrors) gendata(n); 	/* Generate data definition */
 		break;
 	    case N_FUNCTION:
-		if (!nerrors) genfunct(n);	/* Generate function instrs */
+		if (!nerrors) {
+#if HOST_UNIX
+		    SYMBOL *s = n->Nleft->Nleft->Nid;
+		    int deferred = (s->Sclass == SC_INTDEF
+		        && (s->Sflags & SF_INLINE))
+		        ? kcc_inline_begin_v32(s) : 0;
+#endif
+		    genfunct(n);
+#if HOST_UNIX
+		    if (deferred)
+		        kcc_inline_end_v32();
+#endif
+		}
                 vlaclear_v12();          /* Release per-function VLA metadata */
 		ridlsym((SYMBOL *)NULL);	/* Flush any local symbols */
 		break;

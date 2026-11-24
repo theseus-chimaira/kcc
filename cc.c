@@ -93,6 +93,9 @@ extern void syminit(void), ppinit(void), lexinit(void), initpar(void),
 	outinit(void), outdone(int),
 	ppdefine(int, char **, int, char **), passthru(FILE *),
 	gencode(NODE *);
+#if HOST_UNIX && !KCC_PHASE_CPP
+extern void kcc_inline_finish_v32(void);
+#endif
 #if KCC_PHASE_CPP
 extern int ppstream_write(FILE *);
 #endif
@@ -1566,6 +1569,9 @@ module_loop:
 	}
 	if (kind == KIR_REC_MODULE_END) {
 	    mainflg = kir_read_mainflag();
+#if HOST_UNIX
+	    kcc_inline_finish_v32();
+#endif
 	    outdone(mainflg);
 	    break;
 	}
@@ -1788,6 +1794,9 @@ module_loop:
 		break;
 	    }
 
+#if HOST_UNIX
+	kcc_inline_finish_v32();
+#endif
 	outdone (mainflg);		/* Output assembler postamble stuff */
 
 	if (module_pragma)
