@@ -583,6 +583,28 @@ tntdef(void)
 ** tree after the fact.  Addresses of unrelated local variables do not need
 ** to disable register-resident parameters.
 */
+/* Numeric conversions may lower to ABI calls even without N_FNCALL.
+** Keep the incoming volatile argument ACs live across those conversions
+** by routing them through the same preservation analysis as real calls.
+** Match the helper cases in gcastr(), including non-PDP6 SF-to-DImode. */
+static int
+fn_abi_cast_call(NODE *n)
+{
+    TYPE *from, *to;
+    if (n->Nop != N_CAST || !n->Nleft)
+        return 0;
+    from = n->Nleft->Ntype;
+    to = n->Ntype;
+    if (tgcpu == TGCPU_PDP6) {
+        if (n->Ncast == CAST_FP_IT)
+            return !tisdimode(to) || !tisunsign(to);
+        if (n->Ncast == CAST_IT_FP)
+            return !tisdimode(from) || !tisunsign(from);
+    }
+    return n->Ncast == CAST_FP_IT && tisdimode(to)
+        && !tisunsign(to) && from->Tspec == TS_FLOAT;
+}
+
 /* FN_ABI_LEAF - Conservatively recognize a call-free function body.
 **
 ** This is intentionally bounded: no CFG and no recursive walk.  Unknown
@@ -612,7 +634,7 @@ fn_abi_leaf(NODE *root, int *has_query)
         op = n->Nop;
         left = right = NULL;
 
-        if (op == N_FNCALL || op == Q_ASM
+        if (op == N_FNCALL || op == Q_ASM || fn_abi_cast_call(n)
 #if SYS_CSI
             || op == Q_MUUO
 #endif
@@ -1093,7 +1115,7 @@ fn_abi_tailonly(NODE *root)
         op = n->Nop;
         left = right = NULL;
 
-        if (op == Q_ASM
+        if (op == Q_ASM || fn_abi_cast_call(n)
 #if SYS_CSI
             || op == Q_MUUO
 #endif

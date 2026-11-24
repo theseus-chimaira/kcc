@@ -3027,8 +3027,12 @@ simuidiv (PCODE *p)
     fprintf (out,"\tLSH\t%o,1\n", rr);	/* r = 2*r0 */
     fprintf (out,"\tADD\t%o,0(17)\n", rr);	/* add saved odd bit */
     outadjsp (-1);
+    /* The reconstructed remainder is unsigned and can have its
+    ** high bit set even though d is positive.  In that case r>=d. */
+    fprintf (out,"\tJUMPL\t%o,%%UIDS%o\n", rr, lab);
     fprintf (out,"\tCAMGE\t%o,0%o\n", rr, R_SCRREG);
     fprintf (out,"\t JRST\t%%UIDD%o\n", lab);
+    fprintf (out,"%%UIDS%o:\n", lab);
     fprintf (out,"\tSUB\t%o,0%o\n", rr, R_SCRREG);
     fprintf (out,"\tAOJA\t%o,%%UIDD%o\n", rq, lab);	/* ++quotient, done */
 

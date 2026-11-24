@@ -226,8 +226,14 @@ evalbool(NODE *e)
 {
     switch (e->Nop) {
 	case N_ACONST:		return 1;	/* Label address is never null */
-	case N_PCONST:		/* Pointer constant same as int constant */
-	case N_ICONST:	return (e->Niconst ? 1 : 0);
+	case N_PCONST: return (e->Niconst != 0);
+	case N_ICONST:
+	    if (tisdimode(e->Ntype)) {
+		INT hi, lo;
+		dimode_iconst_words(e, &hi, &lo);
+		return (hi != 0 || lo != 0);
+	    }
+	    return (e->Niconst != 0);
 	case N_FCONST:	return (e->Nfconst ? 1 : 0);
     }
     return -1;
@@ -1332,7 +1338,7 @@ evalb1op(NODE *e)
 		}
 		break;
 	    case Q_PLUS:
-		if (e->Nright->Nfconst == 0.0)
+		if (e->Nright->Nop == N_FCONST && e->Nright->Nfconst == 0.0)
 		    return e->Nleft;		/* f+0 => f */
 		break;
 	    case Q_MINUS:

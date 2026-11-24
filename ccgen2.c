@@ -1681,11 +1681,18 @@ gdimodemul(VREG *r1, VREG *r2)
 	scrlo, bhi, scrlo, alo, prodhi, scrlo);
     codestr(buf, n);
 
-    /* The result is computed modulo 2^71.  ahi and bhi are already the
-    ** upper two's-complement words, so adding the two cross products to
-    ** the carry from alo*blo gives the correct high 36 bits for both
-    ** signed and unsigned multiplication.  No separate sign correction
-    ** is needed. */
+    /* With radix 2^35, ahi*bhi contributes at bit 70, which is
+    ** still inside a 71-bit result.  Only the parity of each high
+    ** word matters; XOR that contribution into the high sign bit. */
+    n = kccfmt(buf, sizeof(buf),
+        "\tMOVE\t%o,0%o\n"
+        "\tAND\t%o,0%o\n"
+        "\tTRNE\t%o,1\n"
+        "\t TLC\t%o,0400000\n",
+        scrlo, ahi, scrlo, bhi, scrlo, prodhi);
+    codestr(buf, n);
+
+    /* The result is computed modulo 2^71 for either signedness. */
     n = kccfmt(buf, sizeof(buf),
 	"\tAND\t%o,[0377777777777]\n",
 	prodlo);
@@ -2696,7 +2703,12 @@ gboolean(NODE *n, SYMBOL *false, int reverse)
 
 	case N_ICONST:
 	case N_PCONST:
-	    op = n->Niconst;		/* unconditional condition */
+	    if (n->Nop == N_ICONST && tisdimode(n->Ntype)) {
+		INT hi, lo;
+		dimode_iconst_words(n, &hi, &lo);
+		op = (hi != 0 || lo != 0);
+	    } else
+		op = (n->Niconst != 0);
 	    if (reverse && op)
 		break;	/* jump when true and true? */
 	    if (!reverse && !op)
@@ -2708,7 +2720,13 @@ gboolean(NODE *n, SYMBOL *false, int reverse)
 	    if ((r = genexpr(n)) != NULL)	/* get expression into reg (may be discarded)*/
 		{
 		int bits = tbitsize(n->Ntype);	/* Find # bits of value */
-		if (bits < TGSIZ_WORD)		/* If not full wd, then */
+		if (tisdimode(n->Ntype)) {
+		    /* Both words contribute to scalar truth. Keep the pair
+		    ** allocated until the OR has been emitted. */
+		    (void) vrstoreal(r, VR2(r));
+		    code00(P_IOR, vrreal(r), vrreal(VR2(r)));
+		    vrnarrow(r);
+		} else if (bits < TGSIZ_WORD)	/* If not full wd, then */
 		    r = guintwiden(r, bits, n);	/* widen it unsignedly! */
 		code6(reverse? P_JUMP+POS_SKPN : P_JUMP+POS_SKPE,
 			    r, false);	/* test and jump */
@@ -3295,6 +3313,11 @@ gboolop(NODE *n, int reverse)
     if (   n->Nleft->Ntype->Tspec == TS_DOUBLE
 	|| n->Nleft->Ntype->Tspec == TS_LNGDBL )
 	{
+        /* The continuation word has only 35 fraction bits.  Its
+        ** sign-copy slot is ignored by hardware floating operations.
+        ** Compare the value, not that redundant bit. */
+        code8(P_TLZ, VR2(r1), 0400000L);
+        code8(P_TLZ, VR2(r2), 0400000L);
 	switch (op)
 	    {
 	    case P_CAM+POF_ISSKIP+POS_SKPL:
@@ -4650,6 +4673,16 @@ gbinary(NODE *n)
 static VREG *
 garithop(int op, struct vreg * r1, struct vreg * r2, int ts)
 {
+    /* A defined shift count fits in one word even if its C type is
+    ** long long.  The count is in the low 35-bit continuation, not
+    ** the high word.  Drop the pair only after reloading it. */
+    if ((op == Q_LSHFT || op == Q_RSHFT || op == Q_ASLSH || op == Q_ASRSH)
+      && vrispair(r2)) {
+        (void) vrstoreal(r2, VR2(r2));
+        r2 = VR2(r2);
+        vrnarrow(r2);
+        r2->Vrtype = inttype;
+    }
     switch(op)
 	{
 	case Q_ASPLUS:
@@ -5939,7 +5972,8 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 		return (VREG *)-1;
 	    /* Pair-valued scalar zero is represented by two zero words. */
 	    if (vrispair(r)) {
-		code0(P_IOR, r, VR2(r));
+		(void) vrstoreal(r, VR2(r));
+		code00(P_IOR, vrreal(r), vrreal(VR2(r)));
 		vrnarrow(r);
 	    }
 	    /* SKIPE leaves zero unchanged and skips the MOVEI; any nonzero
