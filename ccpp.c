@@ -3587,7 +3587,18 @@ margs(tlist_t * tabptr, int maxsto, int nexpected, int variadic)
 
 	/* Add token to current arg, get next, and continue loop */
     prevlast = tl.tl_tail;	/* Remember previous last-ptr */
-    tltadd(tl, tokize());	/* Always copy token for now */
+	/* Argument tokens can come from a previously expanded replacement
+	** list, not just the source file. Preserve permanent recursion
+	** suppression on those identifiers when collecting the new argument.
+	** tokize() alone would reset IS_MHID to IS_UNK and expand them again.
+	** Copy only the token status, not its link into the old list.
+	*/
+	{
+	    PPTOK tok = tokize();
+	    if (rawptr && rawpp == T_IDENT && rawptr->pt_is == IS_MHID)
+		tok.pt_is = IS_MHID;
+	    tltadd(tl, tok);
+	}
 	}		/* End of loop */
 
     return nargs;		/* Return # of args parsed into array */
