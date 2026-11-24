@@ -3445,6 +3445,7 @@ else
 	i = margs(&mf.mf_argtl[0], mf.mf_nargs, mf.mf_nargs,
 		(sym->Sflags & SF_MACVAR) != 0); /* Parse args */
 
+
 	/* Complain if the fixed argument count is wrong.  A variadic macro
 	** may have an empty variadic argument; the final argument slot is
 	** synthesized below when it was omitted entirely.
@@ -3707,7 +3708,20 @@ mexpand(tlist_t il, int hs)
 	/* Handle expansion of the macro pointed to by "sym".
 	** This is a simple-minded method that has the virtue of working.
 	*/
-	ml = mexpsym(sym, hs);		/* Expand into ml */
+	/* If the replacement list was exhausted while looking for the
+	** invocation's '(' (or while reading its arguments), the call
+	** crosses into an enclosing token stream.  Intersect the hideset
+	** with the one at that boundary: names suppressed solely by the
+	** exhausted inner replacement become expandable again.  Keep all
+	** still-active enclosing hideset entries, including recursion
+	** protection within the actual replacement list.
+	*/
+	if (sym->Smacnpar >= 0 && mactlev < ourlev) {
+	    int escaped = ourlev - mactlev;
+	    int callhs = (escaped >= hs) ? 0 : hs - escaped;
+	    ml = mexpsym(sym, callhs);
+	} else
+	    ml = mexpsym(sym, hs); /* Expand into ml */
 	if (ml.tl_head)			/* If anything was returned, */
 	    mtlpush(ml);		/* put it on input for rescan! */
 	continue;
