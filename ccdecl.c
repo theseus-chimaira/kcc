@@ -2739,7 +2739,10 @@ staticassertdecl(void)
         nextoken();
         if (token == T_SCONST)
             {
-            msg = constant.csptr;
+            if (constant.cwide & (NF_STRWIDE | NF_STR9))
+                error("Narrow diagnostic string expected in _Static_assert");
+            else
+                msg = constant.csptr;
             nextoken();
             }
         else
@@ -6085,12 +6088,16 @@ pizarray(TYPE *t, int lev)
 
     /* Keep the historical string-literal special case. */
     gotstr = 0;
-    if (tischar(subt) && token == T_SCONST) {
+    if (token == T_SCONST && (tischar(subt)
+        || ((constant.cwide & NF_STRWIDE)
+            && cmputype(subt, inttype)))) {
         n = pexizer(1);
         if (n == NULL || n->Nop != N_SCONST) {
             int_error("pizarray: bad sconst");
             return NULL;
         }
+        if (((n->Nflag & NF_STRWIDE) != 0) != (tischar(subt) == 0))
+            error("String literal and array element types do not match");
         gotstr = 1;
         cnt = n->Nsclen;
         root = ndeftl(N_IZLIST, t, n);

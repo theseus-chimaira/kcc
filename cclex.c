@@ -17,6 +17,7 @@ int strncmp (const char *, const char *, size_t);
 size_t strlen (const char *);
 
 /* Imported functions */
+extern TYPE *findctype(int, INT, unsigned INT, TYPE *);
 extern SYMBOL *symfind(char *, int);	/* CCSYM */
 extern int nextpp(void);		/* CCPP */
 extern void pushpp(void);		/* CCPP */
@@ -30,7 +31,8 @@ long lex_take_gnuattrs(void);
 /* Internal functions */
 static int trident(void), trintcon(void), trfltcon(void),
 	trstrcon(void), trchrcon(void);
-static int spcident(char *, char *, int), cchar(char **);
+static int spcident(char *, char *, int);
+static INT cchar(char **, int);
 static int zerotok(void), dzerotok(void), szerotok(void);
 static int strctok(char *), skipgnuattr(void), skipcxxattr(void),
 	attralignval(char *), gnuattrname(char *, char *);
@@ -384,7 +386,7 @@ spcident(char * to, char * frm, int cnt)
 		return 0;		/* Leave loop */
 
 	    case '\\':
-		c = cchar(&frm);	/* Get escaped char */
+		c = (int)cchar(&frm, 0);	/* Get escaped char */
 		--frm;			/* Back up so ++ gets next */
 					/* and drop thru to default */
 	    /* FALLTHROUGH */
@@ -633,6 +635,7 @@ strctok(char * s)
     if (savelits++ == 0)
 	slcreset();
     constant.ctype = strcontype;
+    constant.cwide = 0;
     constant.csptr = slcbeg();
     while (*s)
 	(void)slcput(*s++);
@@ -1251,111 +1254,116 @@ fltdone:
 **	merged into one!
 */
 
-static
-int
-trstrcon (void)
+/* Store octets most significant first.  Do not allocate a second literal
+** pool or expand ordinary strings unless a wide prefix (or ninth bit)
+** actually requires it.  Only the current, last pool object is promoted. */
+static void
+slcencode(char *p, int stride, unsigned INT value)
 {
-    char*	cp;
-    int		wideflg, escval;
+    while (stride) {
+        p[--stride] = (char)(value & 0377);
+        value >>= 8;
+    }
+}
 
+static int
+slcpromote(char *start, int count, int oldstride, int stride)
+{
+    int i, k, extra = count * (stride - oldstride);
+    unsigned INT v;
+    if (extra >= slcleft)
+        return 0;
+    for (i = count; i > 0; --i) {
+        v = 0;
+        for (k = 0; k < oldstride; ++k)
+            v = (v << 8) | ((unsigned char)start[(i-1)*oldstride+k] & 0377);
+        slcencode(start + (i-1)*stride, stride, v);
+    }
+    slcptr += extra;
+    slcleft -= extra;
+    return 1;
+}
 
-    if (savelits++ == 0)	/* Can char pool be reset? */
-	slcreset();		/* Yes, do so */
+static int
+trstrcon(void)
+{
+    char *cp, *start;
+    int flags = 0, stride = 1, count = 0, wide, k;
+    unsigned INT value;
 
-    constant.ctype = strcontype;  /* Set constant type to string const */
-    constant.csptr = slcbeg ();		/* Set constant string ptr */
-			    
-    /* Internal checks to verify token is correct */
-
-    if ((cp = curval.cp) == 0)
-	{
-	int_error("trstrcon: no str");
-	return szerotok ();
-	}
-
-    if ((wideflg = *cp) == 'L')
-	++cp;	/* Get wchar_t indicator if any */
-
-    if (*cp != '"')
-	{
-	int_error ("trstrcon: no \"");
-	return szerotok ();
-	}
-
-    for ( ; ; )
-	{
-	switch (*++cp)
-	    {
-	    case '\\':			/* Escape char */
-		slcput (escval = cchar (&cp));	/* Handle and map it */
-		--cp;			/* Need to ensure ++ gets next */
-		if (escval & ~tgcmask)	/* Did we truncate any bits? */
-		    {
-		    printf ("escval = %o, tgcmask = %o\n", escval, tgcmask);
-		    error ("Escape-seq value too large for char");
-		    }
-		continue;
-
-	    case '"':			/* End of string? */
-		if (*++cp)
-		    int_error("trstrcon: trailing junk");
-		if (clevel < CLEV_ANSI)	/* Check for string concatenation? */
-		    break;			/* Nope, just return what we got */
-
-	    /* Hairy stuff... must look at next token! */
-		for (;;)		/* Dumb loop to flush wsp */
-		    {
-		    switch (nextpp())
-			{
-			case T_WSP:
-			case T_EOL:
-			    continue;
-			case T_SCONST:
-			    if ((cp = curval.cp) != 0	/* Paranoia token check */
-				&& (*cp == wideflg)	/* Wideness must match */
-				&& (*cp == '"'		/* Paranoia format check */
-				 || (*cp == 'L' && *++cp == '"')))
-				break;	/* Hurray, resume main loop! */
-				/* Everything's been set up... */
-		    /* Can't concatenate next literal, drop thru */
-			/* FALLTHROUGH */
-			default:
-			    pushpp();		/* Push current token back */
-			    cp = NULL;		/* Say we're done */
-			    break;		/* Quit loop and return */
-			}
-		    break;		/* Stop inner loop */
-		    }
-		if (cp)
-		    continue;	/* Resume outer loop if concating */
-		break;		/* else just leave switch */
-
-	    case '\0':
-		int_error("trstrcon: no delim");
-		break;
-	    default:
-		(void) slcput(*cp);
-		continue;
-
-	    }
-	break;			/* Break from main switch is break from loop */
-	}
-
-    /* OK, now finalize string literal in pool. */
-#if 0	/* 5/91 Dynamic tables */
-    {
-	constant.cslen = slcend();	/* slcend() flags error in slcresize() */
-	constant.csptr = (char *) ((ptrdiff_t) slcptr - constant.cslen);
-	printf("%d:%s\t", (int) (constant.csptr), constant.csptr);
-	}
-#else
-    if ((constant.cslen = slcend()) < 0)
-	{
-	error("Too many string literal chars, internal overflow");
-	return szerotok();
-	}
-#endif
+    if (savelits++ == 0)
+        slcreset();
+    start = slcbeg();
+    cp = curval.cp;
+    for (;;) {
+        if (cp == NULL) {
+            int_error("trstrcon: no str");
+            return szerotok();
+        }
+        wide = (*cp == 'L');
+        if (wide) {
+            ++cp;
+            if (!(flags & NF_STRWIDE)) {
+                if (!slcpromote(start, count, stride, 5))
+                    goto overflow;
+                stride = 5;
+                flags = NF_STRWIDE;
+            }
+        }
+        if (*cp++ != '"') {
+            int_error("trstrcon: no quote");
+            return szerotok();
+        }
+        while (*cp && *cp != '"') {
+            value = (unsigned INT)cchar(&cp, wide);
+            if (!wide && (value & ~(unsigned INT)tgcmask)) {
+                error("Escape-seq value too large for char");
+                value &= tgcmask;
+            }
+            if (stride == 1 && value > 0377) {
+                if (!slcpromote(start, count, stride, 2))
+                    goto overflow;
+                stride = 2;
+                flags = NF_STR9;
+            }
+            if (stride >= slcleft)
+                goto overflow;
+            slcencode(slcptr + 1, stride, value);
+            slcptr += stride;
+            slcleft -= stride;
+            ++count;
+        }
+        if (*cp != '"' || cp[1]) {
+            int_error("trstrcon: bad delimiter");
+            return szerotok();
+        }
+        if (clevel < CLEV_ANSI)
+            break;
+        do {
+            k = nextpp();
+        } while (k == T_WSP || k == T_EOL);
+        if (k != T_SCONST) {
+            pushpp();
+            break;
+        }
+        cp = curval.cp;
+    }
+    if (stride >= slcleft)
+        goto overflow;
+    slcencode(slcptr + 1, stride, 0);
+    slcptr += stride;
+    slcleft -= stride;
+    constant.cslen = count + 1;
+    constant.csptr = start;
+    constant.cwide = flags;
+    constant.ctype = (flags & NF_STRWIDE)
+        ? findctype(TS_ARRAY, typbsiztab[TS_ARRAY], count + 1, inttype)
+        : strcontype;
     return token = T_SCONST;
+
+overflow:
+    error("Too many string literal chars, internal overflow");
+    return szerotok();
 }
 
 #if 0	/* 5/91 Dynamic tables */
@@ -1385,6 +1393,8 @@ szerotok(void)
     constant.csptr = "";		/* Set constant string ptr */
 #endif
     constant.cslen = 1;
+    constant.cwide = 0;
+    constant.ctype = strcontype;
     return token = T_SCONST;
 }
 
@@ -1396,7 +1406,7 @@ trchrcon (void)
 {
     char *cp;
     int wideflg;
-    unsigned long val;
+    unsigned INT val;
 
     /* Internal checks to verify token is correct */
     if ((cp = curval.cp) == 0)
@@ -1412,13 +1422,27 @@ trchrcon (void)
 	return zerotok();
 	}
 
+    constant.cwide = 0;
+    if (wideflg == 'L') {
+        val = (unsigned INT)cchar(&cp, 1);
+        if (*cp != '\'') {
+            error("Wide character constant must contain one character");
+            return zerotok();
+        }
+        constant.ctype = inttype;
+        val &= 0777777777777L;
+        if (val & 0400000000000L)
+            val |= ~(unsigned INT)0777777777777L;
+        constant.cvalue = (INT)val;
+        return T_CCONST;
+    }
     val = 0;
     for (;;)
 	{
 	if (val & ~(((unsigned long)1 << (TGSIZ_INT-TGSIZ_CHAR)) - 1))
 	    error("Character constant overflow");
 	val <<= TGSIZ_CHAR;
-	val |= cchar(&cp) & ((1<<TGSIZ_CHAR)-1);	/* Put into word */
+	val |= cchar(&cp, 0) & ((1<<TGSIZ_CHAR)-1);	/* Put into word */
 	if (*cp == '\'')		/* Most common case, just one char */
 	    break;
 	if (!*cp)
@@ -1428,9 +1452,7 @@ trchrcon (void)
 	    }
 	}
 
-    constant.ctype = (wideflg == 'L')
-			? chartype	/* Wide char const is special type */
-			: inttype;	/* Normal char const is type int */
+    constant.ctype = inttype;
 
     constant.cvalue = val;
     return T_CCONST;
@@ -1444,11 +1466,11 @@ trchrcon (void)
 */
 
 static
-int
-cchar (char **acp)
+INT
+cchar (char **acp, int wide)
     {
     char*	cp = *acp;
-    int		c = *cp;
+    INT		c = (unsigned char)*cp;
 
 
     if (c == '\\')
@@ -1499,6 +1521,28 @@ cchar (char **acp)
 		c = '?';
 		break;	/* To avoid trigraphs */
 
+            case 'u':
+            case 'U':
+                if (wide) {
+                    int digits = (*cp == 'u') ? 4 : 8;
+                    unsigned INT u = 0;
+                    while (digits--) {
+                        if (!isxdigit(*++cp)) {
+                            error("Invalid universal character name");
+                            *acp = cp;
+                            return 0;
+                        }
+                        u = (u << 4) | toint(*cp);
+                    }
+                    if (u > 0x10ffffL || (u >= 0xd800L && u <= 0xdfffL)
+                      || (u < 0xa0 && u != 0x24 && u != 0x40 && u != 0x60))
+                        error("Invalid universal character name");
+                    *acp = cp + 1;
+                    return (INT)u;
+                }
+                error("Universal character name requires wide literal");
+                break;
+
 	    case 'x':	/* Hexadecimal escape sequence */
 
 		if (isxdigit(*++cp))
@@ -1513,7 +1557,7 @@ cchar (char **acp)
 			if (c & ((unsigned INT)017 << (TGSIZ_INT - 4)))
 			    ovfl++;
 
-			c = ((unsigned) c << 4) + toint (*cp);
+			c = ((unsigned INT)c << 4) + toint (*cp);
 			}
 
 		    if (ovfl)
@@ -1548,7 +1592,7 @@ cchar (char **acp)
 
 		*acp = cp;
 
-		if (c > 255)
+		if (!wide && c > 255)
 		    {
 		    if (!clevkcc)
 			error ("Char const exceeds 8 bits");

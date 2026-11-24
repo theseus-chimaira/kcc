@@ -767,6 +767,15 @@ genautoiz(NODE *base, NODE *iz, TYPE *t)
 
     switch (t->Tspec) {
     case TS_ARRAY:
+        if (iz->Nleft && iz->Nleft->Nop == N_SCONST
+          && (iz->Nleft->Nflag & NF_STRWIDE)) {
+            NODE *str = iz->Nleft;
+            for (idx = 0; idx < (INT)t->Tsize && idx < str->Nsclen; ++idx) {
+                dst = genizindex(base, t->Tsubt, idx);
+                genautoiz(dst, ndeficonst((INT)strlit_get(str, (int)idx)), t->Tsubt);
+            }
+            return;
+        }
         slot = iz;
         for (idx = 0; slot != NULL && idx < (INT)t->Tsize;
              ++idx, slot = slot->Nright) {

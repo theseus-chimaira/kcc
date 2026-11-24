@@ -8241,7 +8241,10 @@ gprimary(NODE *n)
 	    r = vrget();
 	    r->Vrtype = n->Ntype;		/* Set C type of object in reg */
 	/* Get byte ptr to str, using given bytesize of type! */
-	    code10(P_MOVE, r, n->Nsclab, elembsize(n->Ntype), 0);
+        if (n->Nflag & NF_STRWIDE)
+            code3(P_MOVE, r, n->Nsclab);
+        else
+            code10(P_MOVE, r, n->Nsclab, elembsize(n->Ntype), 0);
 	    return r;
 
 	case N_ACONST:		/* GNU label address (&&label) */
@@ -9683,7 +9686,9 @@ gaddress(NODE *n)
     SYMBOL *s;
 
     switch (n->Nop)
-	{
+        {
+        case N_SCONST:
+            return gprimary(n);
 	case N_COMPLIT:	/* C99 compound literal */
 	    if (n->Nleft != NULL && n->Nleft->Nop == N_DATA)
 		genadata(n->Nleft);

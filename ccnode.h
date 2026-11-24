@@ -155,6 +155,10 @@ NODE {
 #define NF_USERCAST	0400	/* This N_CAST was explicitly given by user */
 #define NF_WIDE		01000	/* N_ICONST uses n_var1.n_int as high word */
 #define NF_QUERYNORMAL	02000	/* Q_QUERY may merge outside ABI return ACs */
+#define NF_STRWIDE      010000  /* N_SCONST: 36-bit elements, 5 octets each */
+#define NF_STR9         020000  /* N_SCONST: 9-bit elements, 2 octets each */
+#define STRLIT_STRIDE(f) (((f)&NF_STRWIDE) ? 5 : ((f)&NF_STR9) ? 2 : 1)
+extern unsigned INT strlit_get(NODE *, int);
 #define NF_VLA          04000   /* function contains variable length arrays */
 /* Null-pointer detection flag; used in N_PTR and Q_MEMBER nodes. */
 #define NF_USENPD  020000000000 /* Null pointer detection flag */

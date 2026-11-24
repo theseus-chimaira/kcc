@@ -205,14 +205,19 @@ readgraph(FILE *fp, INT *head, unsigned hn, NODE **root, INT *record)
         extra=(int)w[j++];
         if(p->Nop==N_ICONST||p->Nop==N_PCONST||p->Nop==N_ECONST){ p->Niconst=unpackint(&w[j]); j+=KIR_INT_CHUNKS; p->n_var1.n_int=unpackint(&w[j]); j+=KIR_INT_CHUNKS; }
         else if(p->Nop==N_FCONST){ union{double d; unsigned char b[sizeof(double)];}du; memset(&du,0,sizeof(du)); for(k=0;k<(unsigned)extra&&k<sizeof(double);++k)du.b[k]=(unsigned char)w[j++]; p->Nfconst=du.d; }
-        else if(p->Nop==N_SCONST){ p->Nsclen=extra; if(extra>0){ p->Nsconst=(char*)calloc((unsigned)extra,1); if(!p->Nsconst)goto bad; } }
+        else if(p->Nop==N_SCONST){
+            if(extra<=0 || (unsigned)extra > (unsigned)-1 / STRLIT_STRIDE(p->Nflag)) goto bad;
+            p->Nsclen=extra;
+            p->Nsconst=(char*)calloc((unsigned)extra * STRLIT_STRIDE(p->Nflag),1);
+            if(!p->Nsconst)goto bad;
+        }
     }
     for(;;){
         if(readrec(fp,&kind,w,KIR_MAX_RECORD_WORDS,&n)) goto bad;
         if(kind==KIR_REC_EXTEND) break;
         if(kind==KIR_REC_STRING&&n>=2) {
             unsigned id=(unsigned)w[0],off=(unsigned)w[1],k; NODE*p;
-            if(id==0||id>nn||(p=last_nodes[id])==NULL||p->Nop!=N_SCONST||off+n-2>(unsigned)p->Nsclen)goto bad;
+            if(id==0||id>nn||(p=last_nodes[id])==NULL||p->Nop!=N_SCONST||off>(unsigned)p->Nsclen*STRLIT_STRIDE(p->Nflag) || n-2>(unsigned)p->Nsclen*STRLIT_STRIDE(p->Nflag)-off)goto bad;
             for(k=2;k<n;++k)p->Nsconst[off+k-2]=(char)w[k];
             continue;
         }

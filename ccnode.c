@@ -167,6 +167,19 @@ NODE *ndefl(int op, NODE *l)		{ NSET(op,0,0,l,0) }
 NODE *ndefr(int op, NODE *r)		{ NSET(op,0,0,0,r) }
 NODE *ndeflr(int op, NODE *l, NODE *r)	{ NSET(op,0,0,l,r) }
 
+/* Decode literal storage independently of host byte size or endianness.
+** Ordinary strings retain one host character per element. */
+unsigned INT
+strlit_get(NODE *n, int i)
+{
+    int k, stride = STRLIT_STRIDE(n->Nflag);
+    unsigned INT v = 0;
+    const unsigned char *p = (const unsigned char *)n->Nsconst + i * stride;
+    for (k = 0; k < stride; ++k)
+        v = (v << 8) | (p[k] & 0377);
+    return v;
+}
+
 /* Auxiliaries for common kinds of node definitions */
 
 /* NDEFICONST - Makes a N_ICONST node of type (int) and sets its value.
@@ -322,7 +335,10 @@ int ind;
 	fprintf(fdeb, ", val = %ld\n", (INT) n->Niconst);
 	return;
     case N_SCONST:
-	fprintf(fdeb, ", val = \"%s\" (%d)\n", n->Nsconst, n->Nsclen);
+	if (n->Nflag & (NF_STRWIDE | NF_STR9))
+            fprintf(fdeb, ", encoded string (%d elements)\n", n->Nsclen);
+        else
+            fprintf(fdeb, ", val = \"%s\" (%d)\n", n->Nsconst, n->Nsclen);
 	return;
     case Q_IDENT:
 	fprintf(fdeb, ", name \"%s\"\n", n->Nid->Sname);

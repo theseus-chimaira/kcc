@@ -2562,7 +2562,8 @@ sizeexpr(void)
 	*/
 	if (e->Nop == N_SCONST)	/* Is it string constant? */
 	    {
-	    n->Niconst = e->Nsclen;	/* Yes, return length! */
+	    n->Niconst = e->Nsclen * ((e->Nflag & NF_STRWIDE)
+                    ? TGSIZ_WORD / TGSIZ_CHAR : 1);
 	    constexpr = saveconst;	/* restore state of flag */
 	    return n;
 	    }
@@ -3271,7 +3272,8 @@ primary(void)
 	    break;
 
 	case T_SCONST:		/* Handle <string-literal> */
-	    n = ndeft(N_SCONST, constant.ctype);
+	    n = ndeftf(N_SCONST, constant.ctype, constant.cwide
+                | ((constant.cwide & NF_STRWIDE) ? NF_LVALUE | NF_GLOBAL : 0));
 	    n->Nsconst = constant.csptr; /* get pointer */
 	    n->Nsclen = constant.cslen;	/* and num chars including null */
 	    nextoken();
@@ -3458,7 +3460,7 @@ bin_asm(void)
     ** This must be a single string literal after constant optimization.
     */
     if (!n || n->Nleft || (n = evalexpr(n->Nright)) ==NULL
-	    || n->Nop != N_SCONST)
+	    || n->Nop != N_SCONST || (n->Nflag & (NF_STRWIDE | NF_STR9)))
 	error("Arg to \"asm\" must be a single string literal");
 
     return ndef(Q_ASM, voidtype, 0, n, (NODE*)NULL);
@@ -3538,7 +3540,7 @@ bin_muuo(void)
 	return ndeficonst(0);
 	}
 
-    if (param1->Nop != N_SCONST)
+    if (param1->Nop != N_SCONST || (param1->Nflag & (NF_STRWIDE | NF_STR9)))
 	error("1st arg to \"imuuo\" must be a string literal");
     else if (!strcmp(param1->Nsconst, "CIRC"))
 	{

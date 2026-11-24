@@ -4,5 +4,6 @@
 #define NULL ((void *)0)
 #define ptrdiff_t int
 #define size_t unsigned int
+typedef int wchar_t;
 
 #endif

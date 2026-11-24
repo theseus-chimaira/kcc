@@ -415,8 +415,9 @@ writestring(FILE *fp, unsigned id, NODE *p)
     unsigned i;
     if (p->Nop == N_SCONST && p->Nsclen > 0) {
         unsigned off = 0;
-        while (off < (unsigned)p->Nsclen) {
-            INT sw[KIR_MAX_RECORD_WORDS]; unsigned cnt = (unsigned)p->Nsclen - off;
+        unsigned bytes = (unsigned)p->Nsclen * STRLIT_STRIDE(p->Nflag);
+        while (off < bytes) {
+            INT sw[KIR_MAX_RECORD_WORDS]; unsigned cnt = bytes - off;
             if (cnt > KIR_MAX_RECORD_WORDS - 2) cnt = KIR_MAX_RECORD_WORDS - 2;
             sw[0] = id; sw[1] = off;
             for (i = 0; i < cnt; ++i) sw[i+2] = (unsigned INT)(unsigned char)p->Nsconst[off+i];

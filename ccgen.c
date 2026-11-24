@@ -1239,9 +1239,20 @@ gliterals(void)
 	outlab(litstrings->Nsclab);	/* Emit generated label */
 	freelabel(litstrings->Nsclab);	/* and then can free it. */
 	outstr("\t");			/* spaced out from string. */
-	outscon(litstrings->Nsconst,	/* Output string literal, */
-		    litstrings->Nsclen,	/* this long */
-		    elembsize(litstrings->Ntype));	/* of this bytesize. */
+        if (litstrings->Nflag & NF_STRWIDE) {
+            int i;
+            for (i = 0; i < litstrings->Nsclen; ++i)
+                outval((INT)strlit_get(litstrings, i));
+        } else {
+            int i, width = elembsize(litstrings->Ntype);
+            bytbeg(width);
+            for (i = 0; i < litstrings->Nsclen; ++i) {
+                unsigned INT v = strlit_get(litstrings, i);
+                if (width == 6) v = tosixbit((int)v);
+                outval((INT)v);
+            }
+            bytend();
+        }
 	outnl();				/* End with final newline */
 	litstrings = litstrings->Nscnext;	/* chain through list */
     }
@@ -1498,7 +1509,7 @@ gizptr(NODE *n)
 	    pv.pv_id = n->Nsclab = newlabel();	/* Get fwd lab for later use */
 	    n->Nscnext = litstrings;	/* Link on string stack */
 	    litstrings = n;		/* Now on stack */
-	    pv.pv_bsize = elembsize(n->Ntype);	/* Set bsize */
+	    pv.pv_bsize = (n->Nflag & NF_STRWIDE) ? 0 : elembsize(n->Ntype);
 	    return CT_ADDR;			/* Say address generated */
 
 	case N_ACONST:
@@ -1525,7 +1536,8 @@ gizptr(NODE *n)
 
 	case N_ADDR:
 	    switch (n->Nleft->Nop) {
-		case N_COMPLIT:		/* address of static compound literal */
+		case N_SCONST:
+        case N_COMPLIT:		/* address of static compound literal */
 		    return gizptr(n->Nleft);
 
 		case N_PTR:			/* &(*()) is no-op */
@@ -1799,6 +1811,15 @@ gizlist(NODE *n, TYPE *t, SYMBOL *s)	/* N_IZLIST to initialize from */
 	    gizbytes(n, t, s, 0);	/* Yep, go handle top-lev bytearray */
 	    return;			/* Nothing left */
 	}
+        if (n->Nleft && n->Nleft->Nop == N_SCONST
+          && (n->Nleft->Nflag & NF_STRWIDE)) {
+            INT i;
+            NODE *str = n->Nleft;
+            for (i = 0; i < (INT)t->Tsize && i < str->Nsclen; ++i)
+                outval((INT)strlit_get(str, (int)i));
+            outzwds(wdsleft - i);
+            return;
+        }
 	nelts = t->Tsize;		/* Get # elements in array */
 	t = t->Tsubt;			/* Use member type from now on */
 	elwds = sizetype(t);		/* Find # wds per element */
@@ -2052,6 +2073,14 @@ gizpacked(NODE *n, TYPE *t, SYMBOL *s)
             outzbs(gizpackedbytes(t));
             return;
         }
+        if (q && q->Nleft && q->Nleft->Nop == N_SCONST
+          && (q->Nleft->Nflag & NF_STRWIDE)) {
+            NODE *str = q->Nleft;
+            for (i = 0; i < nelts; ++i)
+                gizpackedputbits(i < str->Nsclen
+                    ? strlit_get(str, (int)i) : 0, TGSIZ_WORD);
+            return;
+        }
         for (i = 0; i < nelts; ++i) {
             if (q != NULL) {
                 gizpacked(q->Nleft, et, s);
@@ -2123,7 +2152,6 @@ gizbytes(NODE *izl, TYPE *t, SYMBOL *s, int lev) /* Level (0 is top level) */
     int savmode = bsiz;		/* Remember initial mode */
     INT nbs = sizearray(t);	/* # of bottom elements (bytes) in array */
     INT i;
-    char *cp;
 
     /* A missing designated slot means zero-initialize the complete byte
     ** object at this level.  Sparse designated arrays deliberately carry
@@ -2158,14 +2186,15 @@ gizbytes(NODE *izl, TYPE *t, SYMBOL *s, int lev) /* Level (0 is top level) */
 		if (izl != n || n->Nright) {	/* Must be only thing! */
 		    int_error("gizbytes: str not sole node %N", n);
 		}
-		cp = n->Nleft->Nsconst;
-		i = nbs > n->Nleft->Nsclen ? n->Nleft->Nsclen : nbs;
-		nbs -= i;
-		if (i > 0) do {
-		    if (bsiz == 6) outval((INT)tosixbit(*cp));
-		    else outval((INT)*cp);
-		    ++cp;
-		} while (--i > 0);
+                i = nbs > n->Nleft->Nsclen ? n->Nleft->Nsclen : nbs;
+                nbs -= i;
+                {
+                    int j;
+                    for (j = 0; j < i; ++j) {
+                        unsigned INT v = strlit_get(n->Nleft, j);
+                        outval(bsiz == 6 ? (INT)tosixbit((int)v) : (INT)v);
+                    }
+                }
 		break;
 	    case N_IZLIST:		/* Subarray */
 		gizbytes(n->Nleft, t->Tsubt,s, lev+1);	/* Do recursively */

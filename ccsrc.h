@@ -5,7 +5,7 @@
 
 /*
  * Raw C source reader.  This layer is below C translation phase 1.
- * It accepts host byte ASCII, native/host-container packed 7-bit ASCII,
+ * It accepts host byte text, native/host-container packed 7-bit ASCII,
  * and S6REC C-SIX without exposing storage encoding to the preprocessor.
  */
 enum ccsrc_mode {

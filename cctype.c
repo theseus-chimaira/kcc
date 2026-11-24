@@ -592,7 +592,7 @@ convcast(struct type * t, struct node * n)
 
     op = cast_op(t, n->Ntype);		/* find out which cast to use */
     if (op == CAST_PT_PT && clevkcc	/* Special hack for KCC extension */
-	&& n->Nop == N_SCONST		/* If casting string literal */
+	&& n->Nop == N_SCONST && !(n->Nflag & NF_STRWIDE)	/* Narrow literal */
 	&& tischar(t->Tsubt)) {		/* to another kind of char ptr */
 	n->Ntype = t;			/* then just change type of const! */
 	return n;			/* And code gen will win. */
@@ -752,7 +752,7 @@ convarrfn(struct node * n)
                    : findtype(TS_PTR, et);
                 }
 
-		if (n->Nop == Q_IDENT || n->Nop == Q_PLUS) {
+		if (n->Nop == Q_IDENT || n->Nop == Q_PLUS || n->Nop == N_SCONST) {
 		    n->Ntype = pt;
 		    n->Nflag &= ~NF_LVALUE;	/* Ensure not an lvalue */
 		} else

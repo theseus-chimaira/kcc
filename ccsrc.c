@@ -196,7 +196,9 @@ physical_getc(CCSRC *s)
             else s->eof = 1;
             return EOF;
         }
-        return (int)(c & 0177U);
+        /* Host byte source is not a packed seven-bit word stream.
+         * Preserve the full input byte for character and string tokens. */
+        return (int)c;
     }
 
     if (s->mode == CCSRC_ASCII_WORDS) {
