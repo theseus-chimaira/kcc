@@ -1005,6 +1005,8 @@ static long maxdbl[2] = {MAXPOSLONG, MAXPOSLONG};
 #define MAXPOSDOUBLE (*(double *)maxdbl)	/* Native 72-bit double layout. */
 #else
 #include <float.h>
+#include <stdlib.h>
+#include <math.h>
 #define MAXPOSDOUBLE DBL_MAX
 #endif
 
@@ -1023,6 +1025,26 @@ trfltcon(void)
 	int_error("trfltcon: bad str");
 	return dzerotok();
 	}
+#ifndef __COMPILER_KCC__
+    /* Host digit-by-digit accumulation rounds at every decimal digit.
+    ** Convert once instead, so exactly representable values agree with
+    ** their arithmetic equivalents. Native KCC retains its own parser. */
+    if (!(c == '0' && (cp[1] == 'x' || cp[1] == 'X'))) {
+        char *end;
+        value = strtod(cp, &end);
+        if (end == cp) {
+            error("Bad floating constant");
+            return dzerotok();
+        }
+        if (!isfinite(value)) {
+            error("Floating constant overflow (no PDP-10 nonfinite value)");
+            return dzerotok();
+        }
+        cp = end;
+        c = *cp;
+        goto fltdone;
+    }
+#endif
 	
     /* C99 hexadecimal floating constants use a binary exponent. */
     if (c == '0' && (cp[1] == 'x' || cp[1] == 'X'))
@@ -1213,6 +1235,10 @@ fltdone:
 	constant.ctype = dbltype;	/* Set constant type to double */
 	constant.Cdouble = value;	/* and set constant value */
 	}
+    if (c) {
+        error("Bad floating constant suffix");
+        return dzerotok();
+    }
     return token = T_FCONST;
 }
 

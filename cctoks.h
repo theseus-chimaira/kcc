@@ -308,6 +308,9 @@ tokdef(N_VLA,   0, TKTY_NULL, 0) /* Runtime VLA allocation declaration */
 tokdef(N_VLARST, 0, TKTY_NULL, 0) /* Restore dynamic VLA stack mark */
 tokdef(N_NODE,	0,	TKTY_NULL, 0)	/* Random substructure node op */
 tokdef(N_ERROR,	0,	TKTY_NULL, 0)	/* Error placeholder (stmt or expr) */
+/* Append extension tokens to keep existing phase-stream op numbers. */
+tokdef(T_GNU_ALIGNOF,"__alignof__",TKTY_RWOP,RWF_KCC+14)
+tokdef(T_GNU_ALIGNOF2,"__alignof",TKTY_RWOP,RWF_KCC+14)
 
 #ifndef TOKDEF_DEFINED		/* If doing enum defs, wrap up. */
 	NTOKDEFS		/* # of tokens defined */

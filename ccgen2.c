@@ -4932,6 +4932,8 @@ gbyteptrconstminus(VREG *p, TYPE *pt, INT count)
     int bits, bpw, trail;
 
     bits = elembsize(pt);
+    if (pt->Tspec == TS_PTR && pt->Tsubt->Tspec == TS_VOID)
+        bits = TGSIZ_CHAR;
     bpw = bits > 0 ? TGSIZ_WORD / bits : 0;
     steps = sizeptobj(pt) * count;
     if (bpw <= 0 || steps <= 0)
@@ -4990,7 +4992,9 @@ gptrop(int op, struct vreg * r1, struct vreg * r2, struct type * lt, struct type
 		    vrlowiden(r1);			/* Must widen */
 		    code0(P_SUBBP, r1, r2);		/* Do the sub */
 		    if (previous && previous->Pop == P_SUBBP)
-			previous->Pbsize = tisbitptr(lt) ? 1 : (tispackedptr(lt) ? TGSIZ_CHAR : elembsize(lt));
+			previous->Pbsize = tisbitptr(lt) ? 1 :
+			    ((tispackedptr(lt) || lt->Tsubt->Tspec == TS_VOID)
+			     ? TGSIZ_CHAR : elembsize(lt));
 		    vrnarrow(r1 = VR2(r1));		/* Result in 2nd word */
 		    }
 		else
@@ -10204,6 +10208,10 @@ bptrref(NODE *n)
 {
     switch (n->Nop)
 	{
+	case N_COMPLIT:
+	    /* Classify the hidden object without evaluating its initializer.
+	    ** gaddress() executes that initializer at the actual access. */
+	    return bptrref(n->Nright);
 	case Q_DOT:
 	case Q_MEMBER:
 	    return (n->Nxoff < 0			/* bitfield? */

@@ -47,6 +47,8 @@ extern NODE *ldecllist (void);	/* from CCDECL */
 extern int isdecl (void);		/* from CCDECL */
 extern void endlsym (SYMBOL *);
 extern SYMBOL *lsymhead;		/* CCSYM block-scope marker */
+extern SYMBOL *symfind(char *, int), *symfnext(SYMBOL *);
+extern SYMBOL *symgcreat(char *), *shmacsym(SYMBOL *);
 
 /* Exported functions */
 INT pconst(void);			/* For CCDECL and CCINP */
@@ -474,6 +476,56 @@ funstmt(void)
 ** Ref. [1] A.9
 */
 
+/* A C99 selection/iteration statement and each associated substatement
+** introduce scopes even without braces.  Keep VLA lifetime tracking in
+** step with the lexical scopes.  The parser has already read one token
+** past an unbraced statement, so rebind an identifier whose old local
+** symbol just became invisible.
+*/
+static NODE *
+scopedstmt_v35(NODE *(*parse)(void))
+{
+    SYMBOL *prevlsym, *old;
+    struct vlablock_v12 vb;
+    NODE *n, *rst;
+
+    if (!CSTD_HAS(CSTD_C99))
+        return parse();
+    prevlsym = beglsym();
+    memset(&vb, 0, sizeof(vb));
+    vb.parent = vlablock_cur_v12;
+    vb.entry = vlaregion_cur_v12;
+    vlablock_cur_v12 = &vb;
+    n = parse();
+    if (vb.mark != NULL) {
+        rst = ndefop(N_VLARST);
+        rst->Nid = vb.mark;
+        n = ndeflr(N_STATEMENT, n, ndefl(N_STATEMENT, rst));
+    }
+    vlaregion_cur_v12 = vb.entry;
+    vlablock_cur_v12 = vb.parent;
+    old = (token == Q_IDENT) ? csymbol : NULL;
+    endlsym(prevlsym);
+    if (old != NULL && (old->Sflags & SF_XLOCAL)) {
+        if (old->Srefs > 0)
+            --old->Srefs;
+        csymbol = symfind(old->Sname, 1);
+        if (csymbol->Sclass == SC_MACRO) {
+            SYMBOL *s = symfnext(csymbol);
+            csymbol = s ? s : shmacsym(symgcreat(old->Sname));
+        }
+    }
+    return n;
+}
+
+static NODE *
+substatement_v35(void)
+{
+    if (token == T_LBRACE)
+        return statement();  /* The compound parser owns this scope. */
+    return scopedstmt_v35(statement);
+}
+
 static NODE *
 statement(void)
 {
@@ -501,7 +553,7 @@ statement(void)
 	    return s;
 
 	case Q_SWITCH:
-	    s = switchstmt();
+	    s = scopedstmt_v35(switchstmt);
 	    break;
 	case Q_CASE:
 	    stmt_number--;
@@ -510,19 +562,19 @@ statement(void)
 	    stmt_number--;
 	    return defaultstmt();
 	case Q_DO:
-	    s = dostmt();
+	    s = scopedstmt_v35(dostmt);
 	    break;
 	case Q_WHILE:
-	    s = whilestmt();
+	    s = scopedstmt_v35(whilestmt);
 	    break;
 	case Q_FOR:
-	    s = forstmt();
+	    s = scopedstmt_v35(forstmt);
 	    break;
 	case Q_GOTO:
 	    s = gotostmt();
 	    break;
 	case Q_IF:
-	    s = ifstmt();
+	    s = scopedstmt_v35(ifstmt);
 	    break;
 	case Q_RETURN:
 	    s = returnstmt();
@@ -676,7 +728,7 @@ dostmt(void)
     cc.prev = vlacont_v12; cc.target = vlaregion_cur_v12; vlacont_v12 = &cc;
     contlevel++;
     breaklevel++;
-    stmt = statement();
+    stmt = substatement_v35();
     breaklevel--;
     contlevel--;
     vlabreak_v12 = bc.prev; vlacont_v12 = cc.prev;
@@ -708,7 +760,7 @@ whilestmt(void)
     cc.prev = vlacont_v12; cc.target = vlaregion_cur_v12; vlacont_v12 = &cc;
     breaklevel++;
     contlevel++;
-    stmt = statement();
+    stmt = substatement_v35();
     breaklevel--;
     contlevel--;
     vlabreak_v12 = bc.prev; vlacont_v12 = cc.prev;
@@ -808,7 +860,7 @@ forstmt(void)
     cc.prev = vlacont_v12; cc.target = vlaregion_cur_v12; vlacont_v12 = &cc;
     contlevel++;
     breaklevel++;
-    s = statement();
+    s = substatement_v35();
     breaklevel--;
     contlevel--;
     vlabreak_v12 = bc.prev; vlacont_v12 = cc.prev;
@@ -830,11 +882,11 @@ ifstmt(void)
     expect(T_LPAREN);
     cond = exprcntrl();
     expect(T_RPAREN);
-    then = statement();
+    then = substatement_v35();
     if (token == T_ELSE)
 	{
 	nextoken();
-	elsec = statement();
+	elsec = substatement_v35();
 	}
     else
 	elsec = NULL;
@@ -960,7 +1012,7 @@ switchstmt(void)
 	    sw.swrange &= cond->Nright->Niconst;
 	}
 
-    stmt = statement();
+    stmt = substatement_v35();
 
     caselevel--;
     breaklevel--;
@@ -1124,8 +1176,18 @@ returnstmt(void)
 	    e = evalifok(convasgn(t, expression()));
 	else
 	    {
-	    error("Return expression illegal in function returning void");
-	    (void)expression();		/* Parse and ignore expr */
+	    NODE *side = expression();
+	    if (!clevkcc || side->Ntype->Tspec != TS_VOID)
+	        error("Return expression illegal in function returning void");
+	    else {
+	        /* GNU permits returning a void expression. Execute its side
+	        ** effects before the ordinary void return; no value register. */
+	        e = ediscifok(evalifok(side));
+	        expect(T_SCOLON);
+	        nreg = ndefop(Q_RETURN);
+	        nreg->Nreg = _reg_count;
+	        return ndeflr(N_STATEMENT, e, ndefl(N_STATEMENT, nreg));
+	    }
 	    e = NULL;
 	    }
 	}
@@ -2047,6 +2109,8 @@ unary(void)
 	case T_SIZEOF:
 	    return sizeexpr();	/* Parse <sizeof-expr> */
 	case T_ALIGNOF:
+	case T_GNU_ALIGNOF:
+	case T_GNU_ALIGNOF2:
 	    return alignexpr_v1();	/* Parse C11 <_Alignof-expr> */
 
 	case T_EXTENSION:
@@ -2293,40 +2357,74 @@ static NODE *
 alignexpr_v1(void)
 {
     TYPE *t;
-    NODE *n;
+    NODE *n, *e;
     INT a;
+    int gnu = token != T_ALIGNOF;
+    int saveconst = constexpr;
 
     n = ndeft(N_ICONST, siztype);
     n->Niconst = 0;
 
     nextoken();
+    constexpr = 0;
     if (token != T_LPAREN)
         {
+        if (gnu) {
+            e = unary();
+            t = e->Ntype;
+            goto expression_alignment;
+        }
         error("Expected '(' after _Alignof");
+        constexpr = saveconst;
         return n;
         }
     nextoken();
     if (!(csymbol && (tok[token].tktype == TKTY_RWTYPE
                    || csymbol->Sclass == SC_TYPEDEF)))
         {
+        if (gnu) {
+            tokpush(T_LPAREN, (SYMBOL *)NULL);
+            e = unary();
+            t = e->Ntype;
+            goto expression_alignment;
+        }
         error("Type name expected in _Alignof");
         while (token != T_EOF && token != T_RPAREN)
             nextoken();
         if (token == T_RPAREN)
             nextoken();
+        constexpr = saveconst;
         return n;
         }
 
     t = typename();
     expect(T_RPAREN);
+    goto type_alignment;
+
+expression_alignment:
+    if (tisbitf(t)) {
+        error("Alignment of bit-field is invalid");
+        constexpr = saveconst;
+        return n;
+    }
+type_alignment:
+    constexpr = saveconst;
 
     if (t->Tspec == TS_VOID)
         {
+        if (gnu) {
+            n->Niconst = 1;
+            return n;
+        }
         error("Operand of _Alignof has void type");
         return n;
         }
     if (t->Tspec == TS_FUNCT)
         {
+        if (gnu) {
+            n->Niconst = TGSIZ_WORD / TGSIZ_CHAR;
+            return n;
+        }
         error("Operand of _Alignof has function type");
         return n;
         }
@@ -2947,7 +3045,7 @@ pincdec(struct node * n, int op)
 	error("Operand of ++ or -- must have scalar type");
     else if (tisconst(n->Ntype))
 	error("Operand of ++ or -- cannot be const-qualified");
-    else if (n->Ntype->Tspec == TS_PTR && n->Ntype->Tsubt->Tspec == TS_VOID)
+    else if (!clevkcc && n->Ntype->Tspec == TS_PTR && n->Ntype->Tsubt->Tspec == TS_VOID)
 	error("Operand of ++ or -- cannot be ptr to void");
     else if (n->Ntype->Tspec == TS_PTR && sizeptobj(n->Ntype) == 0)
 	error("Pointer operand of ++ or -- must point to object of known size");
@@ -3704,6 +3802,10 @@ vla_object_v11(TYPE *t)
 {
     if (t == NULL)
         return 0;
+    /* GNU void-pointer arithmetic steps in C address units.  Keep the
+    ** void type incomplete for declarations and strict ISO modes. */
+    if (t->Tspec == TS_VOID)
+        return clevkcc;
     if (t->Tspec != TS_ARRAY)
         return sizetype(t) != 0;
     while (t != NULL && t->Tspec == TS_ARRAY) {

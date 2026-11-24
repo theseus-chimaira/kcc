@@ -4616,6 +4616,15 @@ break;
 	break;		/* Add token */
 
     case T_SHARP:
+	/* Only function-like replacement lists use # as stringizing.
+	** In an object-like macro it is an ordinary preprocessing token,
+	** including when it is an operand of ## (C99 hash_hash example).
+	*/
+	if (mf->mf_nargs < 0) {
+	    if (wspf) tltadd(tl, sptok), mf->mf_len++;
+	    mf->mf_len++;
+	    break;
+	}
 	if (tskipwsp() != T_IDENT)
 	    {
 	    error("Formal parameter must follow the # operator");
