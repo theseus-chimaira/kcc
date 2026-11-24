@@ -1113,15 +1113,22 @@ gretmove(TYPE *t, VREG *dst, VREG *src)
 	code0(P_MOVE, dst, src);
 }
 
-/* Return a free physical AC not listed in avoid[0..navoid-1], or 0. */
+/* Return an unassigned physical AC no higher than LIMIT, excluding the
+** protected direct-ABI arguments and the explicit avoid set.
+**
+** Ordinary expressions must stop at r_maxnopreserve (AC7).  The
+** restoring DImode divider is different: it needs up to eight scratch
+** ACs in addition to four inputs.  It explicitly pushes and restores
+** any preserved scratch ACs that it selects, so it may use AC10..AC14
+** as well.  Never allow either caller to use KCC's reserved AC15/16. */
 static int
-gdimode_try_ac(int avoid[], int navoid)
+gdimode_try_ac_upto(int avoid[], int navoid, int limit)
 {
     int r, i, conflict;
 
-    for (r = 1; r < NREGS; r++)
+    for (r = r_minnopreserve; r <= limit; r++)
 	{
-	if (!rfree(r))
+	if (!rfree(r) || (fnargkeepmask & (1 << r)))
 	    continue;
 	conflict = 0;
 	for (i = 0; i < navoid; i++)
@@ -1136,15 +1143,33 @@ gdimode_try_ac(int avoid[], int navoid)
     return 0;
 }
 
+/* Untracked preserved register variables make AC10..AC14 unsafe as
+** scratch in raw inline arithmetic, so limit those users to AC1..AC7. */
+static int
+gdimode_try_ac(int avoid[], int navoid)
+{
+    return gdimode_try_ac_upto(avoid, navoid, r_maxnopreserve);
+}
+
+/* Only callers that save and restore every preserved scratch AC may use
+** this wider search (the restoring DImode divider does exactly that). */
+static int
+gdimode_try_saved_ac(int avoid[], int navoid)
+{
+    return gdimode_try_ac_upto(avoid, navoid, R_MAXREG);
+}
+
 /* Return the high AC of a free adjacent pair outside the avoid set. */
 static int
 gdimode_try_pair(int avoid[], int navoid)
 {
     int r, i, conflict;
 
-    for (r = 1; r + 1 < NREGS; r++)
+    for (r = r_minnopreserve; r + 1 <= r_maxnopreserve; r++)
 	{
-	if (!rfree(r) || !rfree(r + 1))
+	if (!rfree(r) || !rfree(r + 1)
+	  || (fnargkeepmask & (1 << r))
+	  || (fnargkeepmask & (1 << (r + 1))))
 	    continue;
 	conflict = 0;
 	for (i = 0; i < navoid; i++)
@@ -1597,17 +1622,40 @@ gdimodemul(VREG *r1, VREG *r2)
     avoid[navoid++] = r1lo;
     avoid[navoid++] = r2hi;
     avoid[navoid++] = r2lo;
-    scrlo = gdimode_pick_ac(avoid, navoid);
-    avoid[navoid++] = scrlo;
-
-    /* Both input pairs remain live and unmodified until the final copy-out.
-    ** The old four-AC snapshot was only needed by the former vrallspill path. */
+    /* MUL writes both its high AC and the *next* AC.  Reserve the
+    ** adjacent output pair before choosing the single-word scratch:
+    ** selecting the scratch first can fragment the three available
+    ** temporaries, leaving only a pair straddling AC7/AC10.  AC10 is
+    ** callee-preserved and can hold a live register variable.
+    **
+    ** When the current VREG layout offers no adjacent free pair,
+    ** spill and reload both operands through the normal allocator.
+    ** This path is only needed under register pressure and must not
+    ** turn a preserved register into an untracked scratch operand. */
     prodhi = gdimode_try_pair(avoid, navoid);
     if (prodhi == 0)
-	int_error("gdimodemul: no product AC pair");
+	{
+	vrallspill();
+	(void) vrstoreal(r1, VR2(r1));
+	(void) vrstoreal(r2, VR2(r2));
+	(void) vrstoreal(r2, r1);
+	ahi = r1hi = vrreal(r1);
+	alo = r1lo = vrreal(VR2(r1));
+	bhi = r2hi = vrreal(r2);
+	blo = r2lo = vrreal(VR2(r2));
+	navoid = 0;
+	avoid[navoid++] = r1hi;
+	avoid[navoid++] = r1lo;
+	avoid[navoid++] = r2hi;
+	avoid[navoid++] = r2lo;
+	prodhi = gdimode_try_pair(avoid, navoid);
+	if (prodhi == 0)
+	    int_error("gdimodemul: no product AC pair after spilling");
+	}
     prodlo = prodhi + 1;
     avoid[navoid++] = prodhi;
     avoid[navoid++] = prodlo;
+    scrlo = gdimode_pick_ac(avoid, navoid);
 
     /* ACs are addressable as memory locations 0-17.  The operand
     ** snapshots can therefore feed MUL/IMUL directly; do not round-trip
@@ -1965,7 +2013,7 @@ retry_alloc:
     avoid[navoid++] = nlo;
     avoid[navoid++] = dhi;
     avoid[navoid++] = dlo;
-#define DIVAC(v) ((v = gdimode_try_ac(avoid, navoid)) != 0 \
+#define DIVAC(v) ((v = gdimode_try_saved_ac(avoid, navoid)) != 0 \
                   ? (avoid[navoid++] = v, 1) : 0)
     qhi = qlo = 0;
     if ((!wantmod && (!DIVAC(qhi) || !DIVAC(qlo)))
@@ -1986,7 +2034,8 @@ retry_alloc:
     ** register-use tracking performed by the code optimizer.  A free AC
     ** is not necessarily call-volatile: AC10..AC14 may be unallocated in
     ** this function while still holding live values in its GCC/KCC caller.
-    ** Save only the preserved scratch ACs actually selected.  The input
+    ** This path explicitly permits those otherwise forbidden ACs because
+    ** it saves and restores each selected preserved scratch.  The input
     ** and result pairs are excluded by DIVAC and must not be restored.
     ** Restoring in reverse order makes this safe for nested expressions
     ** and keeps both stackoffset and peak stack use bounded.
