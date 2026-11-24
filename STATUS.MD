@@ -1,3 +1,21 @@
+## KCC HISTORICAL RUNTIME CLOSURE (2026-11-24, V43)
+
+Commit b57fa3e rebases the v38 repair onto cdcadb0. Both signed and
+unsigned integral DImode memory and ABI transfers use the duplicated
+low-word sign bit; internal register arithmetic uses 71 value bits.
+Nonnegative enums use the unsigned word-compatible integer type;
+enumerator constants retain int. Small-magnitude wide division uses
+native IDIV before the restoring divider, preserving signed results.
+
+All six historical failures still reproduced before installation.
+Rebased staged compiler: 6/6 repaired cells and 169/169 guards PASS,
+plus seven existing ABI/language compatibility scripts. Installed
+recheck: 6/6 PASS with unchanged step budgets. Installed hosted SHA256:
+ec336dcde92a22311a2dba69d6940daea466a7296d4fc8668aebfef5106c6602.
+Testkit de81287 records exact evidence. Zero active historical KCC
+failures in the v28 cohort. No full sweep or native execution/RAM
+measurement. Independent native KGEN edits remain separate.
+
 ## KCC AUTOMATIC INITIALIZER CALL LIVENESS (2026-11-24, V1917)
 
 Both first-call parameter-liveness scanners in `ccdecl.c` now check
