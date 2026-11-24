@@ -3101,7 +3101,8 @@ pincdec(struct node * n, int op)
 ** strcmp, for example, without changing what __builtin_strcmp means.
 ** CCOUT maps the builtin's external reference to the real libc entry.
 ** Explicit parameters convert object pointers to the byte-pointer ABI.
-** Only recognize otherwise undeclared builtins used as function calls.
+** Recognize otherwise undeclared builtins and, in GNU/KCC mode,
+** their standard library spellings.  Explicit declarations always win.
 */
 static SYMBOL *
 gnu_builtin_memlib_v13(SYMBOL *s)
@@ -3111,9 +3112,11 @@ gnu_builtin_memlib_v13(SYMBOL *s)
     TYPE *byteptr;
     SYMBOL d;
 
-    if (strcmp(s->Sname, "__builtin_memcpy") == 0)
+    if (strcmp(s->Sname, "__builtin_memcpy") == 0
+      || (clevkcc && strcmp(s->Sname, "memcpy") == 0))
         is_set = is_compare = 0;
-    else if (strcmp(s->Sname, "__builtin_memset") == 0)
+    else if (strcmp(s->Sname, "__builtin_memset") == 0
+      || (clevkcc && strcmp(s->Sname, "memset") == 0))
         is_set = 1, is_compare = 0;
     else if (strcmp(s->Sname, "__builtin_strcmp") == 0)
         is_set = 0, is_compare = 1;

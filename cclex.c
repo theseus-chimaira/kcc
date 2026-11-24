@@ -923,7 +923,7 @@ trintcon(void)
 		{
 		++cp;
 		if (!*cp)
-		    constant.ctype = (ovfl) ? ulongtype : longtype;
+		    constant.ctype = ulongtype; /* UL is unsigned regardless of value. */
 		else if (toupper(*cp) == 'L' && !*++cp)
 		    constant.ctype = ulonglongtype;
 		else
