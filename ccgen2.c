@@ -2588,6 +2588,7 @@ gboolean(NODE *n, SYMBOL *false, int reverse)
 {
     VREG *r;
     int op;
+    int raw_dimode_skip = 0;
 
     if (n == NULL)		/* Paranoia: bug catcher */
 	{
@@ -2631,6 +2632,16 @@ gboolean(NODE *n, SYMBOL *false, int reverse)
 	case Q_LESS:
 	case Q_GREAT:
 	case Q_EQUAL:
+	    /* Wide relational tests emit a final conditional JUMPN through
+	    ** codestr(), outside the buffered peephole representation.  The
+	    ** following P_JRST is skipped at run time when the comparison
+	    ** succeeds, but deadjump() cannot see that raw instruction and
+	    ** would discard a reachable then-arm return as dead code.
+	    ** Keep buffered skip folding for ordinary word comparisons.  */
+	    if (n->Nleft && tisdimode(n->Nleft->Ntype)
+	      && (n->Nop == Q_LEQ || n->Nop == Q_GEQ
+	       || n->Nop == Q_LESS || n->Nop == Q_GREAT))
+		raw_dimode_skip = 1;
 	    gboolop(n, reverse);		/* comparison, make skip */
 	    break;				/* followed by GOTO */
 
@@ -2657,6 +2668,8 @@ gboolean(NODE *n, SYMBOL *false, int reverse)
 	    return;				/* don't make spurious P_JRST */
 	}
     code6(P_JRST, (VREG *)NULL, false);	/* broke out, want a GOTO */
+    if (optobj && raw_dimode_skip)
+	flushcode();
 }
 
 /* GOR - Generate || expression
