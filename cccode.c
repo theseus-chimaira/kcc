@@ -3023,6 +3023,17 @@ rrpre2(struct pcode * p, struct pcode * np)
     int s = np->Pr2;
     PCODE *q;
 
+    /* PDP-6 long floating operations can consume an existing AC pair.
+    ** Folding its double constant into the operation instead makes
+    ** CCOUT save two scratch ACs, load the same two words, and restore
+    ** the scratch ACs.  Keep the original pair: fewer words and less
+    ** stack traffic.  Test before any DMOVN rewrite mutates the input.
+    */
+    if (tgarch == TGARCH_PDP6 && p->Ptype == PTA_DCONST
+      && (p->Pop == P_DMOVE || p->Pop == P_DMOVN)
+      && (op == P_DFAD || op == P_DFSB || op == P_DFDV || op == P_DFMP))
+        return 0;
+
     /* Check opcode of PREVIOUS instr.
     ** Breaking out of the switch statement simply leaves new instr alone
     ** and returns failure.
