@@ -1385,6 +1385,35 @@ fn_abi_param_used(NODE *root, SYMBOL *sym)
 ** preserved-register promotion and lets the call reuse the volatile AC.
 */
 static int
+fn_abi_initializers_leaf(NODE *d)
+{
+    NODE *iz;
+    int query;
+
+    /* N_DATA is executable for automatic declarations.  In particular
+    ** genadata() can call arbitrary functions, evaluate VLA bounds, or
+    ** initialize an aggregate.  Do not advance the first-call boundary
+    ** past any such declaration without proving it cannot clobber ACs.
+    ** Simple scalar call-free initializers retain the old fast path.
+    */
+    for (; d != NULL; d = d->Nright) {
+        if (d->Nop != N_DATA || d->Nleft == NULL
+          || d->Nleft->Nop != N_IZ)
+            return 0;
+        iz = d->Nleft->Nright;
+        if (iz == NULL)
+            continue;
+        if (iz->Nop == N_IZLIST || iz->Nop == N_VLA
+          || d->Nleft->Nleft == NULL
+          || d->Nleft->Nleft->Ntype == NULL
+          || sizetype(d->Nleft->Nleft->Ntype) != 1
+          || !fn_abi_leaf(iz, &query) || query)
+            return 0;
+    }
+    return 1;
+}
+
+static int
 fn_abi_drop_before_first_call(NODE *body, SYMBOL *sym)
 {
     NODE *stmt, *expr;
@@ -1398,6 +1427,8 @@ fn_abi_drop_before_first_call(NODE *body, SYMBOL *sym)
             return 0;
         expr = stmt->Nleft;
         if (expr == NULL || expr->Nop == N_DATA) {
+            if (expr != NULL && !fn_abi_initializers_leaf(expr))
+                return 0;
             stmt = stmt->Nright;
             continue;
         }
@@ -1425,6 +1456,8 @@ fn_abi_drop_first_call(NODE *body, SYMBOL *sym)
             return 0;
         expr = stmt->Nleft;
         if (expr == NULL || expr->Nop == N_DATA) {
+            if (expr != NULL && !fn_abi_initializers_leaf(expr))
+                return 0;
             stmt = stmt->Nright;
             continue;
         }
@@ -1872,7 +1905,8 @@ promote_abi_params(SYMBOL *args, SYMBOL *fn, NODE *body)
             return;
         if (s->Sclass == SC_ARG) {
             if (!fn_abi_drop_before_first_call(body, s)
-              && !fn_abi_drop_first_call(body, s))
+              && !(fn_abi_param_refs(body, s) == 1
+                   && fn_abi_drop_first_call(body, s)))
                 ++need;
         } else if (s->Sclass != SC_RARG)
             return;

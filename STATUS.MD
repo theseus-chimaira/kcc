@@ -1,3 +1,31 @@
+## KCC AUTOMATIC INITIALIZER CALL LIVENESS (2026-11-24, V1917)
+
+Both first-call parameter-liveness scanners in `ccdecl.c` now check
+automatic declaration initializers instead of skipping executable
+`N_DATA` nodes. Calls, VLA bounds, aggregate initialization and
+unproven expressions stop the volatile-register fast path. Simple
+call-free scalar initialization remains eligible. The preservation
+capacity check also uses the same single-reference condition as the
+subsequent parameter binding pass.
+
+The v37d compiler miscompiled the DAIMOS PURE service PI wrapper:
+its initial `mach_pi_disable()` call destroyed incoming AC arguments,
+and the later TRANSITION update did not address the process pointer.
+The corrected wrapper retains AC1--AC3 in preserved AC10--AC12 and
+updates the descriptor through the saved pointer.
+
+The standalone `kcc-init-abi-v1917` PDP-6 regression in daimos-testkit
+fails on v37d (exit 1) and passes with optimization enabled and disabled
+on the repaired compiler. The original v1612 PURE service regression,
+including its unsafe READY negative control, also passes. No new
+compiler data fields or target permanent RAM are required. The hosted
+compiler build is warning-free; native KCC itself was not rebuilt.
+
+Installed hosted compiler SHA256:
+`934fdfcefd1eba0c0df9fdee1704f659dc60c3ce02ba1daec0d0111218049b13`.
+Previous binary retained at
+`$TMPDIR/kcc-init-abi-v1917.QNVdcI/kcc-before-v1917`.
+
 ## KCC RUNTIME REPAIRS (2026-11-24, V37D)
 
 COMMITS B929249, F7D138C, C8618FB FIX UL SUFFIXES, GNU MEMORY BUILTIN
