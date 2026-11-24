@@ -257,6 +257,9 @@ evallog(NODE *e)
 	    return setlog(e, 1);	/* entire result is true. */
     }
     e->Nright = eval(e->Nright);	/* No joy; must now eval right */
+    /* A constant right operand needs no synthetic comparison or cast. */
+    if ((torf = evalbool(e->Nright)) >= 0)
+	return setlog(e, torf);
     e->Nop = Q_NEQ;			/* Transform 1&&e or 0||e */
     e->Nleft->Ntype = inttype;		/* into (0 != e) */
     setlog(e->Nleft, 0);
