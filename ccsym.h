@@ -404,6 +404,7 @@ enum symbolspec {
 #define SF_REGSPEC	0100000000	/* Declaration explicitly used register */
 #define SF_ANONMEM	0200000000	/* Physical C11 anonymous aggregate member */
 #define SF_ANONALIAS	0400000000	/* Promoted name from anonymous aggregate */
+#define SF_ALLOCA	01000000000	/* Compiler-owned caller-frame alloca builtin */
 #define SF_OVCLS (SF_MACRO|SF_MEMBER|SF_TAG|SF_LABEL)	/* All ov classes */
 
 

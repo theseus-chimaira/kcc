@@ -8430,6 +8430,51 @@ gprimary(NODE *n)
 /* GCALL - Generate function call
 */
 
+/* GNU alloca reserves storage in the current *caller's* dynamic frame.
+** Its lifetime ends at function return, exactly like a VLA allocation.
+** The parser marks this function as VLA-bearing, so AC14 remains a
+** stable fixed-frame anchor while SP advances independently here.
+** Space is counted in 9-bit C bytes; SP advances in 36-bit words.
+** The returned value is a genuine native nine-bit byte pointer.
+*/
+static VREG *
+galloca_v31(NODE *n)
+{
+    VREG *bytes, *result;
+    int oldflags;
+
+    if (!fnvla_v11 || n->Nright == NULL
+      || n->Nright->Nop != N_EXPRLIST || n->Nright->Nleft != NULL) {
+        int_error("galloca_v31: missing VLA frame or size argument");
+        return NULL;
+    }
+
+    bytes = genexpr(n->Nright->Nright);
+    if (bytes == NULL) {
+        int_error("galloca_v31: no size value");
+        return NULL;
+    }
+    oldflags = bytes->Vrflags;
+    bytes->Vrflags |= VRF_LOCK;
+
+    /* Round byte count up to 36-bit words.  An allocation larger than
+    ** the 18-bit physical stack address space is not representable.
+    */
+    code1(P_ADD, bytes, 3);
+    code8(P_LSH, bytes, -2);
+    result = vrget();
+    codemdx(P_MOVEI, vrtoreal(result), (SYMBOL *)NULL, 1, R_SP);
+    flushcode();
+    codemdx(P_ADJSP, R_SP, (SYMBOL *)NULL, 0, vrtoreal(bytes));
+    flushcode();
+    bytes->Vrflags = oldflags;
+    vrfree(bytes);
+
+    pitopc(result, TGSIZ_CHAR, 0, 1);
+    result->Vrtype = n->Ntype;
+    return result;
+}
+
 /* GCCABI_COLLECT_ARGS - Collect call arguments in source order. */
 static void
 gccabi_collect_args(NODE *n, NODE **args, int *nargs)
@@ -9018,6 +9063,10 @@ gcall (NODE* n)
     directargs = 0;
     directstackwords = 0;
     indirect_target_saved = 0;
+
+    if (n->Nleft != NULL && n->Nleft->Nop == Q_IDENT
+      && (n->Nleft->Nid->Sflags & SF_ALLOCA))
+        return galloca_v31(n);
 
     /* Inline the smallest freestanding memcpy before the generic call path
     ** spills registers and constructs an ABI argument block. */

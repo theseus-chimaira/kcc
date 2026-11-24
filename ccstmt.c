@@ -77,6 +77,8 @@ static NODE *bin_muuo(void);
 #endif
 static int cmpatype(TYPE *, TYPE *);
 static SYMBOL *gnu_builtin_memlib_v13(SYMBOL *);
+static SYMBOL *gnu_builtin_alloca_v31(SYMBOL *);
+extern void kcc_alloca_markfn_v31(void);
 static int stmtpackedagg(INT);
 static void stmtintname(char *, char *, unsigned int);
 static INT stmtpackedbit(INT);
@@ -2642,6 +2644,8 @@ posttail(NODE *n)
 
 	    /* Parse argument list if any */
 		n->Nright = parglist(sy, tp);	/* Get arglist (may be NULL) */
+		if (sy != NULL && (sy->Sflags & SF_ALLOCA))
+		    kcc_alloca_markfn_v31();
 		break;			/* Results aren't checked further. */
 
 	    case T_LBRACK:
@@ -3018,6 +3022,31 @@ gnu_builtin_memlib_v13(SYMBOL *s)
     return s;
 }
 
+/* Alloca is a caller-frame allocation expression, not an external
+** function.  Introduce its real pointer/size prototype only for an
+** undeclared direct call; explicitly defined user functions retain
+** their ordinary C symbol identity.  Code generation uses the VLA
+** frame anchor and emits no unresolved alloca relocation.
+*/
+static SYMBOL *
+gnu_builtin_alloca_v31(SYMBOL *s)
+{
+    SYMBOL d;
+
+    if (strcmp(s->Sname, "alloca") != 0
+      && strcmp(s->Sname, "__builtin_alloca") != 0)
+        return s;
+
+    memset(&d, 0, sizeof(d));
+    d.Sclass = SC_EXTREF;
+    d.Stype = findftype(voidptrtype,
+                        findptype(TS_PARAM, NULL, siztype));
+    s = funchk(0, SC_EXTREF, &d, s);
+    s->Sflags |= SF_ALLOCA;
+    ++s->Srefs;
+    return s;
+}
+
 static NODE *
 primary(void)
 {
@@ -3052,6 +3081,8 @@ primary(void)
 			    /* Return special undef node to continue parsing. */
 			}
 		    s = gnu_builtin_memlib_v13(s);
+		    if (s->Sclass == SC_UNDEF)
+		        s = gnu_builtin_alloca_v31(s);
 		    if (s->Sclass == SC_UNDEF)
 			{
 			/* Pretend we declared this identifier as

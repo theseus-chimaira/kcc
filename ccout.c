@@ -615,6 +615,13 @@ outdecl (void)
 
 	    case SC_EXTREF:		/* External linkage sym referenced */
 	    case SC_XEXTREF:
+		/* Calls to the compiler-owned alloca expression are emitted
+		** directly in the caller's frame; no external symbol exists.
+		** A spurious EXTERN would cause the freestanding linker to
+		** demand a nonexistent ordinary function provider.
+		*/
+		if (s->Sflags & SF_ALLOCA)
+		    continue;
 	    /* Symbol not defined.  Ask for it if needed */
 		if (s->Srefs == 0)	/* If never used, don't ask. */
 		    {

@@ -241,6 +241,17 @@ vlamarkfn_v11(void)
     Reg_Id[--_reg_count] = NULL;
 }
 
+/* GNU alloca has the same lifetime and fixed-frame requirements as a
+** dynamically sized VLA.  Share the existing AC14 frame allocation,
+** register demotion and return-time stack restoration rather than
+** introducing a separate stack convention for a builtin expression.
+*/
+void
+kcc_alloca_markfn_v31(void)
+{
+    vlamarkfn_v11();
+}
+
 static SYMBOL *
 vlahidden_v11(char *stem, TYPE *typ)
 {
