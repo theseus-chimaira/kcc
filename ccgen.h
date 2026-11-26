@@ -40,11 +40,12 @@ GEXT SYMBOL
     *looplabel;			/* label to go to on continue */
 
 /* Canonical loop induction-address context.  A matched for-loop may keep
-** &array[i] in one live VREG so expression generation can reuse it instead
-** of rebuilding base + index for every reference.
+** &array[i] in one reserved preserved AC, so expression generation can
+** reuse it instead of rebuilding base + index for every reference.
 */
 GEXT SYMBOL *indvarsym, *indbasesym;
-GEXT VREG *indptrreg;
+GEXT int indptrreg, fnindreg;
+extern int fn_has_indloop(NODE *);
 
 GEXT NODE *litstrings;	/* String constant list (CCGEN, CCGEN1, CCGEN2) */
 GEXT NODE *litnodes;	/* Arbitrary N_DATA literals generated within funct */

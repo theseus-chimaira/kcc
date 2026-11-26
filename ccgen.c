@@ -983,7 +983,7 @@ genfunct (NODE* n)
     extern
     int		_word_cnt;	/* KAR-2/91, from CCOUT # wds in function */
     int		i;
-    int		bltsave;
+    int		bltsave, nsave;
     VREG*	r;
 
 
@@ -993,6 +993,16 @@ genfunct (NODE* n)
     fndimodcalls = fn_dimode_divmod_count(n->Nright);
     fnsavescr = fn_needs_scrreg(n->Nright);
     fnframesave = 0;
+    /* Reserve one otherwise unused preserved AC for all eligible loops.
+    ** It is not a VREG and never appears on the spill list. */
+    fnindreg = 0;
+    indptrreg = 0;
+    indvarsym = indbasesym = NULL;
+    if (_reg_count < R_PRESERVE_COUNT - (fnvla_v11 != 0)
+      && fn_has_indloop(n->Nright)) {
+        fnindreg = r_maxnopreserve + 1 + _reg_count;
+    }
+    nsave = n->Nreg + (fnindreg != 0);
 
     if (n->Nleft->Nright)		/* Any local-scope static data defs? */
 	gendata(n->Nleft->Nright);	/* Yes, generate them first */
@@ -1060,7 +1070,7 @@ genfunct (NODE* n)
 	outprolog (curfn);		/* added 09/15/89 by MVS */
 #endif
 
-    if (n->Nreg <= R_PRESERVE_COUNT)	/* Reg linkage */
+    if (nsave <= R_PRESERVE_COUNT)	/* Reg linkage */
 	{
         /* If four consecutive preserved ACs are used and this
         ** function also has automatic storage, allocate both areas with
@@ -1068,13 +1078,13 @@ genfunct (NODE* n)
         ** ACs without autos this would merely replace four PUSHes by four
         ** instructions, so keep the simpler/faster historical sequence.
         */
-        bltsave = !isr && n->Nreg == 4 && maxauto > 0;
+        bltsave = !isr && nsave == 4 && maxauto > 0;
 	if (bltsave)
 	    {
-	    int first = 1 - n->Nreg - maxauto;
+	    int first = 1 - nsave - maxauto;
 	    int last = -maxauto;
 
-	    code8(P_ADJSP, VR_SP, n->Nreg + maxauto);
+	    code8(P_ADJSP, VR_SP, nsave + maxauto);
 	    flushcode();
 	    outstr("\tMOVEI\t0,");
 	    outnum(first);
@@ -1083,11 +1093,11 @@ genfunct (NODE* n)
 	    outstr("\n\tBLT\t0,");
 	    outnum(last);
 	    outstr("(17)\n");
-	    stackoffset += n->Nreg + maxauto;
-	    fnframesave += n->Nreg;
+	    stackoffset += nsave + maxauto;
+	    fnframesave += nsave;
 	    }
 
-        for (i = 0; i < n->Nreg;  i++)
+        for (i = 0; i < nsave;  i++)
 	    {
 	    /* Preserve allocated AC10-AC14 for every normal C function.
 	    ** Interrupt entry already saves the complete interrupted register
@@ -1105,7 +1115,7 @@ genfunct (NODE* n)
 		
 	    /* Initialize all reg parameters (often optimized away later) */
 
-	    if (Reg_Id[i]->Sclass == SC_RARG)
+	    if (i < _reg_count && Reg_Id[i]->Sclass == SC_RARG)
 	        {
 		if (Reg_Id[i]->Sflags & SF_ABIREG)
 		    code00(P_MOVE, Reg_Id[i]->Sreg, Reg_Id[i]->Svalue);
@@ -1138,8 +1148,8 @@ genfunct (NODE* n)
     genretinit(n->Nright);
     genstmt (n->Nright);		/* Generate code for body */
     if (!isr && !fnvla_v11 &&
-        (maxauto > 0 || _reg_count > 0 || fnsavescr || fnargregs > 0))
-	genretepilog(n->Nreg);
+        (maxauto > 0 || _reg_count > 0 || fnindreg || fnsavescr || fnargregs > 0))
+	genretepilog(nsave);
     endcode ();				/* Wrap up code */
 
     if (vrbfun) 

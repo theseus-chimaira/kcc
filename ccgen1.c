@@ -60,7 +60,7 @@ static void gdo(NODE *), gfor(NODE *), gif(NODE *),
 static SYMBOL *gtoplab(void); 
 static int labchk(NODE *);
 static int stmtends_v32(NODE *);
-static int indloopmatch(NODE *, NODE **, SYMBOL **);
+static int indloopmatch(NODE *, NODE **, SYMBOL **, SYMBOL **);
 static int indbodywrites(NODE *, SYMBOL *);
 static NODE *laststmt(NODE *);
 static int izruntime(NODE *);
@@ -1124,7 +1124,9 @@ indfindref(NODE *n, SYMBOL *iv, NODE **basep, SYMBOL **basesp, int *budget)
     if (indref(n, iv, basep, basesp))
         return 1;
     if (n->Nop == Q_IDENT || n->Nop == N_ICONST || n->Nop == N_FCONST
-      || n->Nop == N_PCONST || n->Nop == N_SCONST || n->Nop == N_VCONST)
+      || n->Nop == N_PCONST || n->Nop == N_SCONST || n->Nop == N_VCONST
+      || n->Nop == N_ECONST || n->Nop == N_ACONST || n->Nop == N_RETADDR
+      || n->Nop == N_UNDEF)
         return 0;
     return indfindref(n->Nleft, iv, basep, basesp, budget)
         || indfindref(n->Nright, iv, basep, basesp, budget);
@@ -1164,27 +1166,17 @@ indbodywrites(NODE *n, SYMBOL *iv)
         break;
     }
     if (n->Nop == Q_IDENT || n->Nop == N_ICONST || n->Nop == N_FCONST
-      || n->Nop == N_PCONST || n->Nop == N_SCONST || n->Nop == N_VCONST)
+      || n->Nop == N_PCONST || n->Nop == N_SCONST || n->Nop == N_VCONST
+      || n->Nop == N_ECONST || n->Nop == N_ACONST || n->Nop == N_RETADDR
+      || n->Nop == N_UNDEF)
         return 0;
     return indbodywrites(n->Nleft, iv) || indbodywrites(n->Nright, iv);
 }
 
-/* INDBODYHAZARDS - Detect invalid loop-carried register lifetimes.
-**
-** The induction-pointer optimization deliberately keeps one VREG live across
-** the complete loop body.  The ordinary statement generator predates that
-** optimization and assumes no VREG is live across statement-level branches.
-** A call in only one arm of an IF can therefore spill the induction VREG on
-** that arm and leave the common continuation with an unmatched stack restore.
-** An unconditional call is unsafe too: it can move the pointer to a new
-** physical register after the loop head was emitted, so the back-edge
-** updates a different register.  Only keep this strength reduction when
-** the body cannot call out or merge incompatible register states.
-**
-** Keep the optimization away from statement-level merge points.  Preserve
-** the existing terminal IF optimization ("if (...) continue/break/goto"),
-** because gif() lowers those directly to one conditional jump and creates no
-** branch join.  This is a correctness precondition, not a profitability test.
+/* Keep the existing narrow loop selection policy: no nested loops,
+** statement joins or explicit calls. The reserved physical AC now
+** survives expression spills/joins and compiler-generated helper calls.
+** Inline assembly is opaque and must not enter this optimization.
 */
 static int
 indbodyhazards(NODE *n)
@@ -1195,6 +1187,12 @@ indbodyhazards(NODE *n)
         return 0;
     switch (n->Nop) {
     case N_FNCALL:
+    case Q_ASM:
+    case N_STMTEXPR:
+    case N_COMPLIT:
+    case N_DATA:
+    case N_VLA:
+    case N_VLARST:
         return 1;
     case Q_IF:
         if (n->Nright == NULL)
@@ -1215,7 +1213,9 @@ indbodyhazards(NODE *n)
         break;
     }
     if (n->Nop == Q_IDENT || n->Nop == N_ICONST || n->Nop == N_FCONST
-      || n->Nop == N_PCONST || n->Nop == N_SCONST || n->Nop == N_VCONST)
+      || n->Nop == N_PCONST || n->Nop == N_SCONST || n->Nop == N_VCONST
+      || n->Nop == N_ECONST || n->Nop == N_ACONST || n->Nop == N_RETADDR
+      || n->Nop == N_UNDEF)
         return 0;
     return indbodyhazards(n->Nleft) || indbodyhazards(n->Nright);
 }
@@ -1229,7 +1229,7 @@ indbodyhazards(NODE *n)
 ** excluded because a goto could enter below the derived-pointer initializer.
 */
 static int
-indloopmatch(NODE *n, NODE **basep, SYMBOL **basesp)
+indloopmatch(NODE *n, NODE **basep, SYMBOL **basesp, SYMBOL **ivp)
 {
     NODE *pre, *pair, *init, *cond, *incr, *lhs;
     SYMBOL *iv;
@@ -1251,7 +1251,9 @@ indloopmatch(NODE *n, NODE **basep, SYMBOL **basesp)
     iv = init->Nleft->Nid;
     if (iv == NULL || iv->Stype == NULL || (iv->Sflags & SF_ADDRTAKEN)
       || tisanyvolat(iv->Stype) || !tisinteg(iv->Stype)
-      || sizetype(iv->Stype) != 1)
+      || tbitsize(iv->Stype) != TGSIZ_WORD
+      || (iv->Sclass != SC_AUTO && iv->Sclass != SC_RAUTO
+          && iv->Sclass != SC_ARG && iv->Sclass != SC_RARG))
         return 0;
     if (cond == NULL || cond->Nop != Q_LESS || cond->Nleft == NULL
       || cond->Nleft->Nop != Q_IDENT || cond->Nleft->Nid != iv
@@ -1266,15 +1268,69 @@ indloopmatch(NODE *n, NODE **basep, SYMBOL **basesp)
            && lhs->Nid == iv && incr->Nright
            && incr->Nright->Nop == N_ICONST && incr->Nright->Niconst == 1))
         return 0;
-    if (indbodywrites(n->Nright, iv) || indbodyhazards(n->Nright))
+    if (indbodyhazards(n->Nright) || indbodywrites(n->Nright, iv))
         return 0;
     budget = 1024;
     if (!indfindref(n->Nright, iv, basep, basesp, &budget))
         return 0;
-    indvarsym = iv;
+    *ivp = iv;
     return 1;
 }
 
+/* Find a candidate before emitting the function prologue. Only walk
+** statement children; expression nodes may contain non-node union data.
+** One reserved AC can serve sequential or mutually exclusive loops.
+** Nested active induction loops are forbidden by indbodyhazards().
+*/
+static int
+indscan(NODE *n, int *budget, int depth)
+{
+    NODE *base;
+    SYMBOL *bs, *iv;
+    if (depth >= 64)
+        return 0;
+    while (n && --*budget >= 0) {
+        switch (n->Nop) {
+        case N_STATEMENT:
+            if (indscan(n->Nleft, budget, depth + 1))
+                return 1;
+            n = n->Nright;
+            continue;
+        case Q_FOR:
+            if (indloopmatch(n, &base, &bs, &iv))
+                return 1;
+            /* FALLTHROUGH */
+        case Q_DO:
+        case Q_WHILE:
+        case Q_SWITCH:
+            n = n->Nright;
+            continue;
+        case Q_IF:
+            if (n->Nright == NULL)
+                return 0;
+            if (indscan(n->Nright->Nleft, budget, depth + 1))
+                return 1;
+            n = n->Nright->Nright;
+            continue;
+        case Q_CASE:
+        case N_LABEL:
+        case Q_DEFAULT:
+            n = n->Nleft;
+            continue;
+        default:
+            return 0;
+        }
+    }
+    return 0;
+}
+
+int
+fn_has_indloop(NODE *body)
+{
+    int budget = 4096;
+    return optgen && indscan(body, &budget, 0);
+}
+
 /* ----------------------- */
 /*	for statement      */
 /* ----------------------- */
@@ -1283,7 +1339,9 @@ gfor(struct node * n)
 {
     NODE *cond, *body, *incr, *init, *indbase;
     SYMBOL *saveb, *savel, *toplabel, *saveiv, *savebase, *ibase;
-    VREG *saveptr, *newptr;
+    SYMBOL *iv;
+    VREG *newptr;
+    int saveptr;
     int endtest, indactive;		/* safe to move test to end of loop */
 
     saveiv = indvarsym;
@@ -1292,7 +1350,7 @@ gfor(struct node * n)
     indbase = NULL;
     ibase = NULL;
     newptr = NULL;
-    indactive = indloopmatch(n, &indbase, &ibase);
+    indactive = fnindreg && !indptrreg && indloopmatch(n, &indbase, &ibase, &iv);
 
     cond = n->Nleft;
     body = n->Nright;
@@ -1320,8 +1378,11 @@ gfor(struct node * n)
 
     if (indactive) {
         newptr = genexpr(indbase);
+        code00(P_MOVE, fnindreg, vrtoreal(newptr));
+        vrfree(newptr);
+        indvarsym = iv;
         indbasesym = ibase;
-        indptrreg = newptr;
+        indptrreg = fnindreg;
     }
 
     toplabel = gtoplab();	/* Generate top-of-loop label and emit */
@@ -1348,7 +1409,7 @@ gfor(struct node * n)
 	if (!endtest) incr->Nendlab = toplabel;
 	genxrelease(incr);
         if (indactive)
-            code1(P_ADD, indptrreg, 1);
+            codr1(P_ADD, indptrreg, 1);
     }
 
     /* Finally generate loop back to condition test at top, unless actually
@@ -1366,7 +1427,6 @@ gfor(struct node * n)
     looplabel = savel;			/* restore outer loop continuation */
     freelabel(toplabel);		/* don't need top label any more */
     if (indactive) {
-        vrfree(newptr);
         indvarsym = saveiv;
         indbasesym = savebase;
         indptrreg = saveptr;
@@ -1384,7 +1444,9 @@ greturn (NODE *n)
     INT		siz;
     VREG*	r;
     VREG*	r2;
-    int		i = n->Nreg;
+    /* ABI parameter promotion happens after the return node is parsed.
+    ** Every exit must restore the actual final fixed-frame save area. */
+    int		i = _reg_count + (fnindreg != 0);
     int finalreturn = n == retfall;
     if (optobj && deadjump ())		/* If in dead code, do nothing */
 	return;
@@ -1483,7 +1545,7 @@ void
 genretinit(NODE *body)
 {
     retlabel = (!isr && !fnvla_v11 &&
-        (maxauto > 0 || _reg_count > 0 || fnsavescr || fnargregs > 0))
+        (maxauto > 0 || _reg_count > 0 || fnindreg || fnsavescr || fnargregs > 0))
         ? newlabel() : NULL;
     retfall = retlabel ? laststmt(body) : NULL;
     if (retfall && retfall->Nop != Q_RETURN)

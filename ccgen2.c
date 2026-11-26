@@ -4205,8 +4205,7 @@ gbinary(NODE *n)
           && indb->Nop == Q_IDENT && indb->Nid == indvarsym) {
             r1 = vrget();
             r1->Vrtype = n->Ntype;
-            (void)vrstoreal(indptrreg, r1);
-            code00(P_MOVE, vrreal(r1), vrreal(indptrreg));
+            code00(P_MOVE, vrreal(r1), indptrreg);
             return r1;
         }
     }
@@ -9045,8 +9044,8 @@ gcall (NODE* n)
 	        else
 		    gccabi_tail_regs();
             }
-	    if (R_PRESERVE_COUNT >= _reg_count)
-		for (j = 0; j < _reg_count; ++j) {
+	    if (R_PRESERVE_COUNT >= _reg_count + (fnindreg != 0))
+		for (j = 0; j < _reg_count + (fnindreg != 0); ++j) {
 		    codemdx(P_MOVE, j + r_maxnopreserve + 1, (SYMBOL *)NULL,
 			    1 + fnsavescr + (fnvla_v11 ? 1 : 0) + j - stackoffset, R_SP);
 		    flushcode();
