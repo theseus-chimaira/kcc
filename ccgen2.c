@@ -1117,7 +1117,7 @@ gretmove(TYPE *t, VREG *dst, VREG *src)
 ** protected direct-ABI arguments and the explicit avoid set.
 **
 ** Ordinary expressions must stop at r_maxnopreserve (AC7).  The
-** restoring DImode divider is different: it needs up to eight scratch
+** restoring DImode divider is different: it needs up to five scratch
 ** ACs in addition to four inputs.  It explicitly pushes and restores
 ** any preserved scratch ACs that it selects, so it may use AC10..AC14
 ** as well.  Never allow either caller to use KCC's reserved AC15/16. */
@@ -1963,8 +1963,8 @@ gdimodedivmod(VREG *r1, VREG *r2, int ts, int wantmod)
 {
     int nhi, nlo, dhi, dlo;
     int qhi, qlo, rhi, rlo;
-    int cnt, tmp1, tmp2, sgn;
-    int scratch[8], saved[8], nsaved, i;
+    int cnt, tmp1, sgn;
+    int scratch[5], saved[5], nsaved, i;
     int avoid[16], navoid;
     int is_signed;
     static int divlab;
@@ -2022,10 +2022,14 @@ retry_alloc:
     avoid[navoid++] = dlo;
 #define DIVAC(v) ((v = gdimode_try_saved_ac(avoid, navoid)) != 0 \
                   ? (avoid[navoid++] = v, 1) : 0)
-    qhi = qlo = 0;
-    if ((!wantmod && (!DIVAC(qhi) || !DIVAC(qlo)))
-        || !DIVAC(rhi) || !DIVAC(rlo) || !DIVAC(cnt)
-        || !DIVAC(tmp1) || !DIVAC(tmp2)
+    /* The numerator's unprocessed bits shift out at the top while the
+    ** quotient bits enter at the bottom.  After 71 iterations the same
+    ** pair contains the quotient; no separate quotient ACs are needed. */
+    qhi = nhi;
+    qlo = nlo;
+    sgn = 0;
+    if (!DIVAC(rhi) || !DIVAC(rlo) || !DIVAC(cnt)
+        || !DIVAC(tmp1)
         || (is_signed && !DIVAC(sgn)))
         {
         if (fast)
@@ -2047,16 +2051,13 @@ retry_alloc:
     ** Restoring in reverse order makes this safe for nested expressions
     ** and keeps both stackoffset and peak stack use bounded.
     */
-    scratch[0] = qhi;
-    scratch[1] = qlo;
-    scratch[2] = rhi;
-    scratch[3] = rlo;
-    scratch[4] = cnt;
-    scratch[5] = tmp1;
-    scratch[6] = tmp2;
-    scratch[7] = sgn;
+    scratch[0] = rhi;
+    scratch[1] = rlo;
+    scratch[2] = cnt;
+    scratch[3] = tmp1;
+    scratch[4] = sgn;
     nsaved = 0;
-    for (i = 0; i < 8; ++i)
+    for (i = 0; i < 5; ++i)
 	if (Register_Preserve(scratch[i]))
 	    {
 	    saved[nsaved++] = scratch[i];
@@ -2113,10 +2114,10 @@ retry_alloc:
                 "\tMOVN\t%o,0%o\n"
                 "\tAND\t%o,[0377777777777]\n"
                 "%%DIDIV%dD:\n",
-                tmp2, dhi,
-                tmp2,
-                tmp2,
-                tmp2, lab,
+                tmp1, dhi,
+                tmp1,
+                tmp1,
+                tmp1, lab,
                 dhi, dhi,
                 dlo,
                 dhi,
@@ -2136,11 +2137,11 @@ retry_alloc:
                 "\tMOVN\t%o,0%o\n"
                 "\tAND\t%o,[0377777777777]\n"
                 "%%DIDIV%dD:\n",
-                tmp2, dhi,
-                tmp2,
-                tmp2,
-                sgn, tmp2,
-                tmp2, lab,
+                tmp1, dhi,
+                tmp1,
+                tmp1,
+                sgn, tmp1,
+                tmp1, lab,
                 dhi, dhi,
                 dlo,
                 dhi,
@@ -2160,162 +2161,48 @@ retry_alloc:
             "\tJUMPE\t%o,%%DIDIV%dW\n"
             "\tMOVE\t%o,0%o\n"
             "\tIDIV\t%o,0%o\n"
-            "\tSETZ\t%o,\n"
             "\tMOVE\t%o,0%o\n"
+            "\tSETZ\t%o,\n"
             "\tJRST\t%%DIDIV%dF\n"
             "%%DIDIV%dW:\n",
             nhi, lab, dhi, lab, dlo, lab,
             nhi, nlo, nhi, dlo,
-            wantmod ? rhi : qhi,
             wantmod ? rlo : qlo, wantmod ? nlo : nhi,
+            wantmod ? rhi : qhi,
             lab, lab);
         codestr(buf, n);
     }
 
-    if (wantmod)
-        n = kccfmt(buf, sizeof(buf),
-            "\tAND\t%o,[0377777777777]\n"
-            "\tAND\t%o,[0377777777777]\n"
-            "\tSETZ\t%o,\n"
-            "\tSETZ\t%o,\n"
-            "\tMOVEI\t%o,0107\n"
-            "%%DIDIV%dL:\n"
-            /* bit = top bit of numerator; numerator <<= 1 */
-            "\tMOVE\t%o,0%o\n"
-            "\tLSH\t%o,-043\n"
-            "\tANDI\t%o,1\n"
-            "\tMOVE\t%o,0%o\n"
-            "\tLSH\t%o,-042\n"
-            "\tANDI\t%o,1\n"
-            "\tLSH\t%o,1\n"
-            "\tAND\t%o,[0377777777777]\n"
-            "\tLSH\t%o,1\n"
-            "\tIOR\t%o,0%o\n"
-            "\tAND\t%o,[0777777777777]\n"
-            /* rem = (rem << 1) | bit */
-            "\tMOVE\t%o,0%o\n"
-            "\tLSH\t%o,-042\n"
-            "\tANDI\t%o,1\n"
-            "\tLSH\t%o,1\n"
-            "\tAND\t%o,[0377777777777]\n"
-            "\tIOR\t%o,0%o\n"
-            "\tLSH\t%o,1\n"
-            "\tIOR\t%o,0%o\n"
-            "\tAND\t%o,[0777777777777]\n"
-            /* if rem < den, do not subtract */
-            "\tMOVE\t%o,0%o\n"
-            "\tTLC\t%o,0400000\n"
-            "\tMOVE\t%o,0%o\n"
-            "\tTLC\t%o,0400000\n"
-            "\tCAML\t%o,0%o\n"
-            "\t JRST\t%%DIDIV%dHC\n"
-            "\tJRST\t%%DIDIV%dNS\n"
-            "%%DIDIV%dHC:\n"
-            "\tCAME\t%o,0%o\n"
-            "\t JRST\t%%DIDIV%dSUB\n"
-            "\tCAML\t%o,0%o\n"
-            "\t JRST\t%%DIDIV%dSUB\n"
-            "\tJRST\t%%DIDIV%dNS\n"
-            "%%DIDIV%dSUB:\n"
-            "\tSUB\t%o,0%o\n"
-            "\tJUMPGE\t%o,%%DIDIV%dSB0\n"
-            "\tADD\t%o,[0400000000000]\n"
-            "\tSUBI\t%o,1\n"
-            "%%DIDIV%dSB0:\n"
-            "\tSUB\t%o,0%o\n"
-            "%%DIDIV%dNS:\n"
-            "\tSOJG\t%o,%%DIDIV%dL\n",
-            nlo, dlo,
-            rhi, rlo,
-            cnt,
-            lab,
-            tmp2, nhi,
-            tmp2,
-            tmp2,
-            tmp1, nlo,
-            tmp1,
-            tmp1,
-            nlo,
-            nlo,
-            nhi,
-            nhi, tmp1,
-            nhi,
-            tmp1, rlo,
-            tmp1,
-            tmp1,
-            rlo,
-            rlo,
-            rlo, tmp2,
-            rhi,
-            rhi, tmp1,
-            rhi,
-            tmp1, rhi,
-            tmp1,
-            tmp2, dhi,
-            tmp2,
-            tmp1, tmp2,
-            lab,
-            lab,
-            lab,
-            tmp1, tmp2,
-            lab,
-            rlo, dlo,
-            lab,
-            lab,
-            lab,
-            rlo, dlo,
-            rlo, lab,
-            rlo,
-            rhi,
-            lab,
-            rhi, dhi,
-            lab,
-            cnt, lab);
-    else
-        {
-        n = kccfmt(buf, sizeof(buf),
+    /* The low word's sign bit after LSH is the carry into the high
+    ** word.  Test and clear it in place instead of using a second
+    ** scratch AC.  Bias the divisor high word once for unsigned CAM;
+    ** subtracting that biased word then toggling bit 35 is equivalent
+    ** to subtracting the original word modulo 2^36.  The divisor dies
+    ** at the end of the operation. */
+    n = kccfmt(buf, sizeof(buf),
         "\tAND\t%o,[0377777777777]\n"
         "\tAND\t%o,[0377777777777]\n"
-        "\tSETZ\t%o,\n"
-        "\tSETZ\t%o,\n"
+        "\tTLC\t%o,0400000\n"
         "\tSETZ\t%o,\n"
         "\tSETZ\t%o,\n"
         "\tMOVEI\t%o,0107\n"
         "%%DIDIV%dL:\n"
-        /* q <<= 1 */
-        "\tMOVE\t%o,0%o\n"
-        "\tLSH\t%o,-042\n"
-        "\tANDI\t%o,1\n"
-        "\tLSH\t%o,1\n"
-        "\tAND\t%o,[0377777777777]\n"
-        "\tLSH\t%o,1\n"
-        "\tIOR\t%o,0%o\n"
-        "\tAND\t%o,[0777777777777]\n"
-        /* bit = top bit of numerator; numerator <<= 1 */
+        /* Save the next numerator bit and shift high36:low35. */
         "\tMOVE\t%o,0%o\n"
         "\tLSH\t%o,-043\n"
-        "\tANDI\t%o,1\n"
-        "\tMOVE\t%o,0%o\n"
-        "\tLSH\t%o,-042\n"
-        "\tANDI\t%o,1\n"
         "\tLSH\t%o,1\n"
-        "\tAND\t%o,[0377777777777]\n"
         "\tLSH\t%o,1\n"
+        "\tSKIPGE\t%o\n"
+        "\t IORI\t%o,1\n"
+        "\tTLZ\t%o,0400000\n"
+        /* Shift the remainder and insert the saved bit. */
+        "\tLSH\t%o,1\n"
+        "\tLSH\t%o,1\n"
+        "\tSKIPGE\t%o\n"
+        "\t IORI\t%o,1\n"
+        "\tTLZ\t%o,0400000\n"
         "\tIOR\t%o,0%o\n"
-        "\tAND\t%o,[0777777777777]\n"
-        /* rem = (rem << 1) | bit */
-        "\tMOVE\t%o,0%o\n"
-        "\tLSH\t%o,-042\n"
-        "\tANDI\t%o,1\n"
-        "\tLSH\t%o,1\n"
-        "\tAND\t%o,[0377777777777]\n"
-        "\tIOR\t%o,0%o\n"
-        "\tLSH\t%o,1\n"
-        "\tIOR\t%o,0%o\n"
-        "\tAND\t%o,[0777777777777]\n"
-        /* if rem < den, do not subtract */
-        "\tMOVE\t%o,0%o\n"
-        "\tTLC\t%o,0400000\n"
+        /* Compare unsigned high words, then canonical low words. */
         "\tMOVE\t%o,0%o\n"
         "\tTLC\t%o,0400000\n"
         "\tCAML\t%o,0%o\n"
@@ -2334,66 +2221,20 @@ retry_alloc:
         "\tSUBI\t%o,1\n"
         "%%DIDIV%dSB0:\n"
         "\tSUB\t%o,0%o\n"
-        "\tIORI\t%o,1\n"
-        "%%DIDIV%dNS:\n"
-        "\tSOJG\t%o,%%DIDIV%dL\n",
-        nlo, dlo,
-        qhi, qlo,
-        rhi, rlo,
-        cnt,
-        lab,
-        tmp1, qlo,
-        tmp1,
-        tmp1,
-        qlo,
-        qlo,
-        qhi,
-        qhi, tmp1,
-        qhi,
-        tmp2, nhi,
-        tmp2,
-        tmp2,
-        tmp1, nlo,
-        tmp1,
-        tmp1,
-        nlo,
-        nlo,
-        nhi,
-        nhi, tmp1,
-        nhi,
-        tmp1, rlo,
-        tmp1,
-        tmp1,
-        rlo,
-        rlo,
-        rlo, tmp2,
-        rhi,
-        rhi, tmp1,
-        rhi,
-        tmp1, rhi,
-        tmp1,
-        tmp2, dhi,
-        tmp2,
-        tmp1, tmp2,
-        lab,
-        lab,
-        lab,
-        tmp1, tmp2,
-        lab,
-        rlo, dlo,
-        lab,
-        lab,
-        lab,
-        rlo, dlo,
-        rlo, lab,
-        rlo,
-        rhi,
-        lab,
-        rhi, dhi,
-        qlo,
-        lab,
-        cnt, lab);
-        }
+        "\tTLC\t%o,0400000\n",
+        nlo, dlo, dhi, rhi, rlo, cnt, lab,
+        tmp1, nhi, tmp1, nhi, nlo, nlo, nhi, nlo,
+        rhi, rlo, rlo, rhi, rlo, rlo, tmp1,
+        tmp1, rhi, tmp1, tmp1, dhi, lab, lab, lab,
+        tmp1, dhi, lab, rlo, dlo, lab, lab, lab,
+        rlo, dlo, rlo, lab, rlo, rhi, lab, rhi, dhi, rhi);
+    codestr(buf, n);
+    if (!wantmod) {
+        n = kccfmt(buf, sizeof(buf), "\tIORI\t%o,1\n", qlo);
+        codestr(buf, n);
+    }
+    n = kccfmt(buf, sizeof(buf),
+        "%%DIDIV%dNS:\n\tSOJG\t%o,%%DIDIV%dL\n", lab, cnt, lab);
     codestr(buf, n);
     if (nlo == nhi + 1) {
         n = kccfmt(buf, sizeof(buf), "%%DIDIV%dF:\n", lab);
@@ -2442,12 +2283,13 @@ retry_alloc:
             }
         }
 
-    n = kccfmt(buf, sizeof(buf),
-        "\tMOVE\t%o,0%o\n"
-        "\tMOVE\t%o,0%o\n",
-        vrreal(r1), (wantmod ? rhi : qhi),
-        vrreal(VR2(r1)), (wantmod ? rlo : qlo));
-    codestr(buf, n);
+    if (wantmod) {
+        n = kccfmt(buf, sizeof(buf),
+            "\tMOVE\t%o,0%o\n"
+            "\tMOVE\t%o,0%o\n",
+            nhi, rhi, nlo, rlo);
+        codestr(buf, n);
+    }
 
     for (i = nsaved; i > 0; )
 	{
