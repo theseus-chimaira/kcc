@@ -4014,6 +4014,27 @@ sdeclanon_v7(SYMBOL *tag, SYMBOL *prevsmem, TYPE *type, INT *offset,
     return prevsmem;
 }
 
+/* Validate the full constant before narrowing it to a host int or using
+** it in either the layout or the bit-field type.  Error recovery must
+** leave a representable width: later expression parsing still inspects
+** the member even when its declaration has been diagnosed.
+*/
+static int
+bitfieldwidth(INT width, int named)
+{
+    if (width < 0 || width > TGSIZ_WORD)
+        {
+        error("Bit field longer than word (%d bits)", TGSIZ_WORD);
+        return 1;
+        }
+    if (named && width == 0)
+        {
+        error("Named bit-field cannot have zero width");
+        return 1;
+        }
+    return (int)width;
+}
+
 /* SDECLARATION - declare members of a struct or union
 */
 static SYMBOL *
@@ -4074,7 +4095,7 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                 *boffset = 0;   /* Force to word boundary */
                 (*offset)++;
                 }
-            fldsize((int)pconst(), offset, boffset); /* parse & handle size */
+            fldsize(bitfieldwidth(pconst(), 0), offset, boffset);
             (*inbitf)++;                        /* Say in bitfield now */
             }
         else
@@ -4161,7 +4182,7 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                 (*inbitf)++;                    /* Say now in bitfield */
 
                 nextoken();                     /* move over colon */
-                bsiz = pconst();                /* Parse size */
+                bsiz = bitfieldwidth(pconst(), 1); /* Parse and validate */
                 offcode = fldsize((int)bsiz, offset, boffset);  /* Handle it */
                 tempsym.Stype = findctype(ts,           /* Make bitfld type */
                         bsiz | (tempsym.Stype->Tflag&(TF_QUALS|TF_BOOL)),
