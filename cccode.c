@@ -1898,6 +1898,9 @@ code40(int op, int r, int s, INT bsiz)
         if (movp != NULL
           && (addp->Ptype & ~PTF_SKIPPED) == PTV_IMMED
           && addp->Pop == P_ADD && addp->Preg == s
+          /* A PCODE immediate may be a full-word literal, not an
+          ** encodable 18-bit indexed displacement. */
+          && addp->Pvalue >= -0777777L && addp->Pvalue <= 0777777L
           && !prevskips(addp)
           && (movp->Ptype & ~PTF_SKIPPED) == PTA_REGIS
           && movp->Pop == P_MOVE && movp->Preg == s
@@ -3974,10 +3977,12 @@ foldxref(struct pcode * p)
 		**	  OP     R,offset(S)
 		*/
 		    case P_SUB:
-			q->Pvalue = - q->Pvalue;
-		    /* FALLTHROUGH */
 		    case P_ADD:
-			p->Poffset = q->Pvalue;		/* Set offset to added val */
+			/* Retain full-word address arithmetic when the offset
+			** cannot be encoded in the indexed instruction. */
+			if (q->Pvalue < -0777777L || q->Pvalue > 0777777L)
+			    return;
+			p->Poffset = q->Pop == P_SUB ? -q->Pvalue : q->Pvalue;		/* Set offset to added val */
 			q->Pop = P_NOP;			/* Then drop the ADDI/SUBI */
 			q = before(q);		/* Back up to previous good instr */
 					/* for the foldidx coming up. */
