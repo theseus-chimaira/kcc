@@ -278,7 +278,7 @@ static void gdimemstore(VREG *, VREG *);
 static int gdimodirectstore(VREG *, NODE *);
 static void gdimove(VREG *, VREG *);
 static VREG *gdimode_from_int(VREG *, TYPE *, TYPE *, NODE *);
-static VREG *gdimode_pdp6_floatcast(VREG *, TYPE *, int);
+static VREG *gdimode_pair_floatcast(VREG *, TYPE *, int);
 static VREG *gdimode_fixsf_call(VREG *, TYPE *);
 static VREG *gint_pdp6_floatcast(VREG *, TYPE *, int, int);
 static VREG *gint_pdp6_fixcast(VREG *, TYPE *, int, int);
@@ -1706,26 +1706,36 @@ gdimodehelper(VREG *r1, VREG *r2, int ts, int wantmod)
     return res;
 }
 
-/* PDP-6 software D-format conversion for signed 71-bit integers.
+/* Pair-valued conversion for signed 71-bit integers.
 ** The PDP-6 native floating-point format is not the later PDP-10
 ** D-format.  The freestanding helpers below explicitly construct the
 ** established portable KCC/GCC two-word D-format using integer
-** instructions only; native PDP-6 FP must use a separate backend.
+** instructions only. Later CPUs use the existing shared libgcc
+** entries, including direct SF rounding with all 71 input bits.
 **
-** The helpers receive and return a two-word value in AC1:AC2.
+** The helpers receive a two-word value in AC1:AC2 and return a
+** pair there, or a single-precision result in AC1.
 ** Keep the operand pair together until both words have been saved:
 ** the allocator's ordinary one-word widening is not applicable.
 */
 static VREG *
-gdimode_pdp6_floatcast(VREG *r, TYPE *tto, int to_float)
+gdimode_pair_floatcast(VREG *r, TYPE *tto, int to_float)
 {
     VREG *res;
     SYMBOL *s;
     int hi, lo;
-    const char *name = to_float ? "__kcc_floatdidf" : "__kcc_fixdfdi";
+    int single_result = to_float && tto->Tspec == TS_FLOAT;
+    const char *name;
+
+    if (tgcpu == TGCPU_PDP6)
+        name = to_float ? "__kcc_floatdidf" : "__kcc_fixdfdi";
+    else if (to_float)
+        name = single_result ? "__floatdisf" : "__floatdidf";
+    else
+        name = "__fixdfdi";
 
     if (!r || !vrispair(r)) {
-        int_error("PDP-6 software D-format conversion needs a register pair");
+        int_error("Wide floating conversion needs a register pair");
         return (VREG *)-1;
     }
     vrspillothers(r, (VREG *)NULL);
@@ -1752,9 +1762,10 @@ gdimode_pdp6_floatcast(VREG *r, TYPE *tto, int to_float)
     code8(P_ADJSP, VR_SP, -2);
     stackoffset -= 2;
 
-    res = vrretdget();
+    res = single_result ? vrretget() : vrretdget();
     res->Vrtype = tto;
-    VR2(res)->Vrtype = tto;
+    if (!single_result)
+        VR2(res)->Vrtype = tto;
     if (!to_float)
         code8(P_TLZ, VR2(res), 0400000L);
     return res;
@@ -5922,10 +5933,9 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	    if (tgcpu == TGCPU_PDP6 && !tisdimode(tto))
 		return gint_pdp6_fixcast(r, tto,
 		    tfrom->Tspec != TS_FLOAT, tisunsign(tto));
-	    if (tgcpu == TGCPU_PDP6 && tisdimode(tto) &&
-	        !tisunsign(tto) &&
+	    if (tisdimode(tto) && !tisunsign(tto) &&
 	        (tfrom->Tspec == TS_DOUBLE || tfrom->Tspec == TS_LNGDBL))
-		return gdimode_pdp6_floatcast(r, tto, 0);
+		return gdimode_pair_floatcast(r, tto, 0);
 	    if (tgcpu == TGCPU_PDP6 && tisdimode(tto) &&
 	        !tisunsign(tto) && tfrom->Tspec == TS_FLOAT) {
 		/* A single PDP-6 float is the high word of the portable
@@ -5933,7 +5943,7 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 		** before running the full-width integer conversion. */
 		vrlowiden(r);
 		code5(P_SETZ, VR2(r));
-		return gdimode_pdp6_floatcast(r, tto, 0);
+		return gdimode_pair_floatcast(r, tto, 0);
 	    }
 	    switch (tfrom->Tspec)
 		{
@@ -5977,16 +5987,15 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	case CAST_IT_FP:
 	    if (!r)
 		return (VREG *)-1;	/* Stop if just checking. */
-	    if (tgcpu == TGCPU_PDP6 && tisdimode(tfrom) &&
-	        !tisunsign(tfrom) &&
-	        (tto->Tspec == TS_DOUBLE || tto->Tspec == TS_LNGDBL))
-		return gdimode_pdp6_floatcast(r, tto, 1);
+	    if (tisdimode(tfrom) && !tisunsign(tfrom) &&
+	        (tgcpu != TGCPU_PDP6 || tto->Tspec != TS_FLOAT))
+		return gdimode_pair_floatcast(r, tto, 1);
 	    if (tgcpu == TGCPU_PDP6 && tisdimode(tfrom) &&
 	        !tisunsign(tfrom) && tto->Tspec == TS_FLOAT) {
 		/* FLTR takes one 36-bit integer, not a signed 71-bit
 		** register pair.  Convert both words to the software D-format
 		** first, then narrow and round to the PDP-6 single format. */
-		r = gdimode_pdp6_floatcast(r, dbltype, 1);
+		r = gdimode_pair_floatcast(r, dbltype, 1);
 		code0(P_DSNGL, r, r);
 		if (vrispair(r))
 		    vrnarrow(r);

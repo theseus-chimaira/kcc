@@ -586,7 +586,8 @@ tntdef(void)
 /* Numeric conversions may lower to ABI calls even without N_FNCALL.
 ** Keep the incoming volatile argument ACs live across those conversions
 ** by routing them through the same preservation analysis as real calls.
-** Match the helper cases in gcastr(), including non-PDP6 SF-to-DImode. */
+** Match the helper cases in gcastr(), including signed DImode casts
+** on the later CPUs. */
 static int
 fn_abi_cast_call(NODE *n)
 {
@@ -601,8 +602,8 @@ fn_abi_cast_call(NODE *n)
         if (n->Ncast == CAST_IT_FP)
             return !tisdimode(from) || !tisunsign(from);
     }
-    return n->Ncast == CAST_FP_IT && tisdimode(to)
-        && !tisunsign(to) && from->Tspec == TS_FLOAT;
+    return (n->Ncast == CAST_FP_IT && tisdimode(to) && !tisunsign(to))
+        || (n->Ncast == CAST_IT_FP && tisdimode(from) && !tisunsign(from));
 }
 
 /* FN_ABI_LEAF - Conservatively recognize a call-free function body.
