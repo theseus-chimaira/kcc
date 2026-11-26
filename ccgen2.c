@@ -6223,8 +6223,9 @@ gincdec(NODE *n, int inc, int pre)
     if (Register_Id(n))
 	{
 	void codr1(int, int, INT);
-	if (pre)	/* r->Vrloc = n->Nid->Sreg, if preserve reg */
-	    r_preserve = n->Nid->Sreg;
+	/* The updated object remains live in its assigned register.
+	** Return a separate expression value: subsequent arithmetic
+	** may destructively reuse that value, even without optimization. */
 
 	switch(n->Ntype->Tspec)
 	    {
@@ -6245,7 +6246,6 @@ gincdec(NODE *n, int inc, int pre)
 		if (!pre)
 		    {
 		    code00(P_DMOVE, r->Vrloc, n->Nid->Sreg);
-		    r_preserve = n->Nid->Sreg;
 		    ra = vrdget();
 		    ra->Vrtype = n->Ntype;/* Set C type of object in reg */
 		    code9(P_DFAD, ra, ((inc > 0)? 1.0 : -1.0), 1);
