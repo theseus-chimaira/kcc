@@ -5995,16 +5995,22 @@ d_line(void)
 	    return error("Bad #line syntax"), PPR_CHECKEOL;
 	}
     /* Complete winnage, process stuff. */
-    fline = atoi(pint->pt_val.cp);	/* Set up number */
+    /* getlinetl has already read the first character of the next line.
+    ** If that character is a newline, nextch has counted the blank line
+    ** already; retain that increment when resetting the logical number.
+    */
+    fline = atoi(pint->pt_val.cp) + (ch == '\n');
 
-    if (*pstr->pt_val.cp == 'L')
+    /* A filename is optional, including after macro expansion. */
+    if (pstr)
 	{
-	error("#line directive string literal cannot be wide char");
+	if (*pstr->pt_val.cp == 'L')
+	    {
+	    error("#line directive string literal cannot be wide char");
 	    pstr->pt_val.cp++;
-	}
-
-    if (pstr)				/* Copy filename w/o quotemarks */
+	    }
 	(void) sltostr(pstr, inpfname, FNAMESIZE-1);
+	}
 
     return PPR_CHECKEOL;
 }
