@@ -642,13 +642,14 @@ outdecl (void)
 		if (!(s->Sflags & SF_ASMREF))
 		    continue;
 #endif
-		/* Calls to the compiler-owned alloca expression are emitted
-		** directly in the caller's frame; no external symbol exists.
-		** A spurious EXTERN would cause the freestanding linker to
-		** demand a nonexistent ordinary function provider.
-		*/
+#if !HOST_UNIX
+		/* Native legacy output has no emitted-reference tracking.
+		** Suppress its provisional alloca builtin declaration.
+		** Host output above instead keeps actual relocations, such
+		** as taking the address of an explicitly declared function. */
 		if (s->Sflags & SF_ALLOCA)
 		    continue;
+#endif
 	    /* Symbol not defined.  Ask for it if needed */
 #if !HOST_UNIX
 		if (s->Srefs == 0)	/* If never used, don't ask. */

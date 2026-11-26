@@ -312,6 +312,8 @@ tokdef(N_ERROR,	0,	TKTY_NULL, 0)	/* Error placeholder (stmt or expr) */
 tokdef(T_GNU_ALIGNOF,"__alignof__",TKTY_RWOP,RWF_KCC+14)
 tokdef(T_GNU_ALIGNOF2,"__alignof",TKTY_RWOP,RWF_KCC+14)
 
+tokdef(N_RETADDR,0,TKTY_PRIMARY,16) /* Current function return PC */
+
 #ifndef TOKDEF_DEFINED		/* If doing enum defs, wrap up. */
 	NTOKDEFS		/* # of tokens defined */
 };

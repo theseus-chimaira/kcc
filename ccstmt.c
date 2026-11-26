@@ -80,6 +80,7 @@ static NODE *bin_muuo(void);
 static int cmpatype(TYPE *, TYPE *);
 static SYMBOL *gnu_builtin_memlib_v13(SYMBOL *);
 static SYMBOL *gnu_builtin_alloca_v31(SYMBOL *);
+static int gnu_alloca_decl_v59q(SYMBOL *);
 extern void kcc_alloca_markfn_v31(void);
 static int stmtpackedagg(INT);
 static void stmtintname(char *, char *, unsigned int);
@@ -2767,8 +2768,10 @@ posttail(NODE *n)
 
 	    /* Parse argument list if any */
 		n->Nright = parglist(sy, tp);	/* Get arglist (may be NULL) */
-		if (sy != NULL && (sy->Sflags & SF_ALLOCA))
+		if (sy != NULL && gnu_alloca_decl_v59q(sy)) {
+		    sy->Sflags |= SF_ALLOCA;
 		    kcc_alloca_markfn_v31();
+		}
 		break;			/* Results aren't checked further. */
 
 	    case T_LBRACK:
@@ -3173,6 +3176,57 @@ gnu_builtin_alloca_v31(SYMBOL *s)
     return s;
 }
 
+/* A compatible external declaration is the standard GNU alloca
+** interface. A static or already defined user function is not a builtin.
+*/
+static int
+gnu_alloca_decl_v59q(SYMBOL *s)
+{
+    TYPE *p;
+    if (s->Sclass != SC_EXTREF && s->Sclass != SC_XEXTREF)
+        return 0;
+    if (s->Sflags & SF_ALLOCA)
+        return 1;
+    if (strcmp(s->Sname, "alloca") && strcmp(s->Sname, "__builtin_alloca"))
+        return 0;
+    if (s->Stype->Tspec != TS_FUNCT || !cmputype(s->Stype->Tsubt, voidptrtype))
+        return 0;
+    p = s->Stype->Tproto;
+    return p && p->Tspec == TS_PARAM && !p->Tproto
+        && cmputype(p->Tsubt, siztype);
+}
+
+/* The ABI has no caller-frame chain. As with GCC's unsupported-frame
+** contract, a nonzero level is diagnosed and produces a null pointer.
+** Level zero always reads the actual return PC, including dynamic frames.
+*/
+static NODE *
+gnu_return_address_v59q(void)
+{
+    NODE *level;
+    nextoken();
+    if (token == T_RPAREN) {
+        error("__builtin_return_address requires a frame level");
+        level = ndeficonst(0);
+    } else
+        level = evalexpr(asgnexpr());
+    expect(T_RPAREN);
+    if (level->Nop != N_ICONST || !tisinteg(level->Ntype)
+      || (level->Nflag & NF_WIDE) || level->Niconst < 0) {
+        error("__builtin_return_address requires a nonnegative integer constant");
+        return convcast(voidptrtype, ndeficonst(0));
+    }
+    if (level->Niconst != 0) {
+        warn("Unsupported __builtin_return_address frame level");
+        return convcast(voidptrtype, ndeficonst(0));
+    }
+    if (!curfn) {
+        error("__builtin_return_address outside function");
+        return convcast(voidptrtype, ndeficonst(0));
+    }
+    return ndeft(N_RETADDR, voidptrtype);
+}
+
 /* GNU prefetch is an address hint, not an external function.  The
 ** supported PDP-10 CPUs have no data-prefetch instruction.  Retain
 ** evaluation of the address expression (including volatile accesses
@@ -3246,6 +3300,10 @@ primary(void)
 			    freesym(s);		/* Flush losing symbol */
 			    return ndeft(N_UNDEF, deftype);
 			    /* Return special undef node to continue parsing. */
+		    }
+		    if (strcmp(s->Sname, "__builtin_return_address") == 0) {
+		        freesym(s);
+		        return gnu_return_address_v59q();
 		    }
 		    if (strcmp(s->Sname, "__builtin_prefetch") == 0) {
 		        freesym(s);

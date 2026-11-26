@@ -478,6 +478,7 @@ fn_dimode_divmod_count(NODE *root)
             case N_PCONST:
             case N_ECONST:
             case N_VCONST:
+            case N_RETADDR:
             case N_FCONST:
             case N_SCONST:
             case Q_BREAK:
@@ -647,6 +648,7 @@ fn_needs_scrreg(NODE *root)
 	    case N_PCONST:
 	    case N_ECONST:
 	    case N_VCONST:
+	    case N_RETADDR:
 	    case N_CAST:
 	    case N_ADDR:
 	    case N_PREINC:

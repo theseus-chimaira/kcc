@@ -8122,6 +8122,18 @@ gprimary(NODE *n)
             code10(P_MOVE, r, n->Nsclab, elembsize(n->Ntype), 0);
 	    return r;
 
+        case N_RETADDR:
+            r = vrget();
+            r->Vrtype = n->Ntype;
+            /* PUSHJ saves flags in LH and the return PC in RH. The
+            ** argument shim relocates that word before stackoffset is
+            ** counted. AC14 anchors the fixed frame after dynamic growth. */
+            codemdx(P_HRRZ, vrtoreal(r), (SYMBOL *)NULL,
+                fnvla_v11 ? -fnframesave - maxauto : -stackoffset,
+                frameindex_v11());
+            pitopc(r, TGSIZ_CHAR, 0, 1);
+            return r;
+
 	case N_ACONST:		/* GNU label address (&&label) */
 	    r = vrget();
 	    r->Vrtype = n->Ntype;
@@ -8927,7 +8939,9 @@ gcall (NODE* n)
     indirect_target_saved = 0;
 
     if (n->Nleft != NULL && n->Nleft->Nop == Q_IDENT
-      && (n->Nleft->Nid->Sflags & SF_ALLOCA))
+      && (n->Nleft->Nid->Sflags & SF_ALLOCA)
+      && (n->Nleft->Nid->Sclass == SC_EXTREF
+          || n->Nleft->Nid->Sclass == SC_XEXTREF))
         return galloca_v31(n);
 
     /* Inline the smallest freestanding memcpy before the generic call path
