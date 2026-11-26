@@ -194,6 +194,9 @@ static int contlevel,		/* Current nesting depth for continue (loop) */
 	constexpr,		/* flag for parsing constant expression */
 	stmt_number;		/* used by external debugger/profiler */
 
+/* A constant query parses its operand for type checking, not execution. */
+static int constprobe_depth;
+
 /* VLA scope tracking.  Each storage-allocating VLA declaration owns a
 ** saved-SP mark so a backward jump can discard only later VLAs while keeping
 ** earlier declarations in the same block alive.  Region nodes also enforce
@@ -2770,7 +2773,8 @@ posttail(NODE *n)
 		n->Nright = parglist(sy, tp);	/* Get arglist (may be NULL) */
 		if (sy != NULL && gnu_alloca_decl_v59q(sy)) {
 		    sy->Sflags |= SF_ALLOCA;
-		    kcc_alloca_markfn_v31();
+		    if (!constprobe_depth)
+		        kcc_alloca_markfn_v31();
 		}
 		break;			/* Results aren't checked further. */
 
@@ -3268,6 +3272,43 @@ gnu_prefetch_v59p(void)
     return addr;
 }
 
+/* GNU constant query: always fold the operand, even at -n, and return
+** an int literal. A relocatable object address is not a numeric constant.
+** A result of zero is conservative when the front end cannot prove
+** constancy; no operand code or reference is emitted. */
+static NODE *
+gnu_constant_p_v59t(void)
+{
+    NODE *arg;
+    int saved_const = constexpr, saved_refs = stackrefs;
+    char saved_ra = ra_expr;
+    int known = 0;
+
+    ++constprobe_depth;
+    constexpr = 0;
+    nextoken();
+    if (token == T_RPAREN) {
+        error("__builtin_constant_p requires one operand");
+    } else {
+        arg = evalexpr(convarrfn(asgnexpr()));
+        known = arg->Nop == N_ICONST || arg->Nop == N_FCONST
+             || arg->Nop == N_PCONST || arg->Nop == N_SCONST;
+        if (token == T_COMMA) {
+            error("__builtin_constant_p requires one operand");
+            while (token == T_COMMA) {
+                nextoken();
+                (void)asgnexpr();
+            }
+        }
+    }
+    expect(T_RPAREN);
+    --constprobe_depth;
+    constexpr = saved_const;
+    stackrefs = saved_refs;
+    ra_expr = saved_ra;
+    return ndeficonst(known);
+}
+
 static NODE *
 primary(void)
 {
@@ -3301,7 +3342,11 @@ primary(void)
 			    return ndeft(N_UNDEF, deftype);
 			    /* Return special undef node to continue parsing. */
 		    }
-		    if (strcmp(s->Sname, "__builtin_return_address") == 0) {
+	    if (strcmp(s->Sname, "__builtin_constant_p") == 0) {
+	        freesym(s);
+	        return gnu_constant_p_v59t();
+	    }
+	    if (strcmp(s->Sname, "__builtin_return_address") == 0) {
 		        freesym(s);
 		        return gnu_return_address_v59q();
 		    }
