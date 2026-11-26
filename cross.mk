@@ -65,6 +65,10 @@ FREESTANDING_FP36_SOURCE = runtime/libc/kcc-libc-fp36-pdp6-v1.s
 FREESTANDING_FP36_ARCHIVE = $(HOST_BUILD_DIR)/libp10fp36-pdp6-v1.a
 FREESTANDING_SIGNED_DF_SOURCE = runtime/libc/kcc-libc-fp36-signed-df-pdp6-v1.s
 FREESTANDING_SIGNED_DF_ARCHIVE = $(HOST_BUILD_DIR)/libp10fp36-signed-df-pdp6-v1.a
+# Same portable source as GCC, separately compiled for KCC's va_list ABI.
+FREESTANDING_STDIO_SOURCE = runtime/libc/p10stdio-format-v2.c
+FREESTANDING_STDIO_ASM = $(HOST_BUILD_DIR)/p10stdio-format-v2.s
+FREESTANDING_STDIO_ARCHIVE = $(HOST_BUILD_DIR)/libp10stdio-v2.a
 GCC_FREESTANDING_CTYPE_DIR = $(PDP10_PREFIX)/lib/gcc-lib/pdp10-dec-none/3.2/freestanding
 
 $(FREESTANDING_LIBC_STRING): runtime/libc/kcc-libc-string-v1.c $(KCC)
@@ -113,7 +117,16 @@ $(FREESTANDING_SIGNED_DF_ARCHIVE): $(FREESTANDING_SIGNED_DF_SOURCE)
 
 freestanding-signed-df: $(FREESTANDING_SIGNED_DF_ARCHIVE)
 
-install-freestanding-libc: freestanding-libc freestanding-ctype freestanding-fp36 freestanding-signed-df
+$(FREESTANDING_STDIO_ASM): $(FREESTANDING_STDIO_SOURCE) $(KCC) self/include/stdarg.h self/include/stddef.h self/include/limits.h
+	$(KCC) -S -v=nostats -x=pdp6 -m=gas -Iself/include/ -o $@ $<
+
+$(FREESTANDING_STDIO_ARCHIVE): $(FREESTANDING_STDIO_ASM)
+	$(PDP10_DAS) -F -C -O $(HOST_BUILD_DIR)/p10stdio-format-v2.dobj $(FREESTANDING_STDIO_ASM)
+	$(PDP10_DARC) -o $@ $(HOST_BUILD_DIR)/p10stdio-format-v2.dobj
+
+freestanding-stdio: $(FREESTANDING_STDIO_ARCHIVE)
+
+install-freestanding-libc: freestanding-libc freestanding-ctype freestanding-fp36 freestanding-signed-df freestanding-stdio
 	$(INSTALL) -d $(DESTDIR)$(FREESTANDING_LIBC_DIR)
 	$(INSTALL) -m 644 runtime/libc/kcc-libc-*.s runtime/libc/p10bytes-v2.s \
 		$(FREESTANDING_LIBC_STRING) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
@@ -121,6 +134,8 @@ install-freestanding-libc: freestanding-libc freestanding-ctype freestanding-fp3
 	$(INSTALL) -m 644 $(FREESTANDING_CTYPE_SOURCE) $(FREESTANDING_CTYPE_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 	$(INSTALL) -m 644 $(FREESTANDING_FP36_SOURCE) $(FREESTANDING_FP36_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 	$(INSTALL) -m 644 $(FREESTANDING_SIGNED_DF_SOURCE) $(FREESTANDING_SIGNED_DF_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
+
+	$(INSTALL) -m 644 $(FREESTANDING_STDIO_ASM) $(FREESTANDING_STDIO_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 
 # GCC and KCC use the same PDP-10 C ABI for these two freestanding
 # entry points.  Install the exact same assembly/objects for GCC, not
@@ -168,6 +183,8 @@ uninstall:
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-memcmp-v1.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-memcmp-v2.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/p10bytes-v2.s
+	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/p10stdio-format-v2.s
+	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10stdio-v2.a
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10c-v2.a
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-ctype-c-locale-v1.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10ctype-c-locale-v1.a
@@ -190,5 +207,5 @@ clean:
 	$(RM) -r $(HOST_BUILD_DIR) $(NATIVE_BUILD_DIR)
 
 .PHONY: all cross native depend runtime install install-native \
-	install-runtime install-headers freestanding-libc freestanding-ctype freestanding-fp36 freestanding-signed-df install-gcc-freestanding-ctype install-gcc-freestanding-fp36 install-gcc-freestanding-signed-df install-kcc-freestanding-signed-df \
+	install-runtime install-headers freestanding-libc freestanding-ctype freestanding-fp36 freestanding-signed-df freestanding-stdio install-gcc-freestanding-ctype install-gcc-freestanding-fp36 install-gcc-freestanding-signed-df install-kcc-freestanding-signed-df \
 	install-freestanding-libc uninstall clean
