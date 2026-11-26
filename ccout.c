@@ -2227,8 +2227,10 @@ outdmovn (int r)
 {
     if (tgmachuse.dmovx)
 	fprintf(out, "\tDMOVN\t%o,%o\n", r, r);
-    else if (tgcpu == TGCPU_PDP6) {
-	/* PDP-6 has no hardware doubleword negate.  D-format uses a
+    else {
+	/* PDP-6 and KA10 lack DMOVN.  The historical KA10 DFN
+	** operates on a different double-float representation.
+	** The portable C D-format instead uses a
 	** 35-bit continuation fraction whose high bit duplicates the
 	** overall sign.  Two independent MOVNS instructions would drop
 	** that sign bit and miss the borrow when low35 is nonzero.
@@ -2242,8 +2244,7 @@ outdmovn (int r)
 	fprintf(out, "\t SUBI\t%o,1\n", r);
 	fprintf(out, "\tTLNE\t%o,0400000\n", r);
 	fprintf(out, "\t TLO\t%o,0400000\n", r + 1);
-    } else
-	fprintf(out, "\tDFN\t%o,%o\n", r, r + 1);
+    }
 }
 
 static void
@@ -2391,10 +2392,9 @@ simdfop (PCODE *p)
 **	ASH	16,-11		;Get just exponent (9 bits)
 **	JUMPGE	16,.+3		;Positive?
 **	  DMOVN	R,R		;No, negate, orig sign still in 1B0[A]
-**				; For KA-10 format this is DFN R,R+1.
+**				; Expand portable D-format negation without DMOVN.
 **	  TRC	16,777777	;Watch for diff between twos and ones comp
 **	TLZ	R,777000	;Bash exponent and sign ... now positive
-**				; For KA-10 format, LSH R+1,10 goes here.
 **	ASHC	R,-233(16)	;Make an integer (may overflow)
 **	CAIGE	16,		;Original negative?  Check its sign.
 **	 MOVN	R,R		;Yup, negate result.
@@ -2416,7 +2416,8 @@ simdfix (PCODE *p)
 	fprintf (out, "\tMOVNS\t%o\n", r);
 	fprintf (out, "\tMOVNS\t%o\n", r + 1);
     } else {
-	fprintf (out, "\tJUMPGE\t16,.+3\n");
+	/* Skip the complete negate expansion and exponent complement. */
+	fprintf (out, "\tJUMPGE\t16,.+%o\n", tgmachuse.dmovx ? 3 : 9);
 	outdmovn(r);
     }
     outstr ("\tTRC\t16,-01\n");
@@ -2456,7 +2457,7 @@ simdsngl (PCODE *p)
 	p->Pop = P_DMOVE;		/* Make DMOVE R,M to get double */
 	outinstr (p);
 	}
-    if (tgcpu == TGCPU_PDP6) {
+    if (!tgmachuse.dmovx) {
 	/* The low word contains 35 fraction bits, not an independent
 	** signed integer.  Use the correct 71-bit negation expansion
 	** (seven instructions), then round magnitude to 27 bits.
