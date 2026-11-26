@@ -1543,7 +1543,10 @@ gizptr(NODE *n)
 
 	case N_ACONST:
 	    pv.pv_id = n->Nxfsym;
-	    pv.pv_off = pv.pv_bsize = 0;
+	    /* GNU label values have type void *.  Use the same C-byte
+	    ** coordinates as void-pointer arithmetic, also in static tables. */
+	    pv.pv_off = 0;
+	    pv.pv_bsize = TGSIZ_CHAR;
 	    return CT_ADDR;
 
 	case Q_IDENT:

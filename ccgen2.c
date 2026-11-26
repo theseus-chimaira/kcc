@@ -8125,7 +8125,10 @@ gprimary(NODE *n)
 	case N_ACONST:		/* GNU label address (&&label) */
 	    r = vrget();
 	    r->Vrtype = n->Ntype;
-	    code3(P_MOVE, r, n->Nxfsym);
+	    /* Match static label initializers and GNU void * arithmetic.
+	    ** A label denotes the first C byte of its instruction word;
+	    ** local indexed JRST uses the right-half word address. */
+	    code10(P_MOVE, r, n->Nxfsym, TGSIZ_CHAR, 0);
 	    return r;
 
 	case N_VCONST:		/* Void "constant" */
