@@ -1362,6 +1362,19 @@ gizconst(NODE *e)
 	case N_CAST:
 	    if (e->Ncast == CAST_NONE)
 		return gizconst(e->Nleft); /*Most trivial cast just pass on */
+	    /* Qualification of an absolute word pointer does not change its
+	    ** representation. Preserve the constant instead of generating a
+	    ** .LINK constructor (not supported by the GAS/DAS startup ABI).
+	    ** Do not fold byte, packed or representation-polymorphic casts.
+	    */
+	    if (e->Ncast == CAST_PT_PT && e->Nleft->Nop == N_PCONST
+	      && !tisbytepointer(e->Ntype) && !tisbytepointer(e->Nleft->Ntype)
+	      && !tispackedptr(e->Ntype) && !tispackedptr(e->Nleft->Ntype)
+	      && !tismaybitptr(e->Ntype) && !tismaybitptr(e->Nleft->Ntype)
+	      && !tisbitptr(e->Ntype) && !tisbitptr(e->Nleft->Ntype)
+	      && e->Ntype->Tsubt->Tspec != TS_VOID
+	      && e->Nleft->Ntype->Tsubt->Tspec != TS_VOID)
+		return gizconst(e->Nleft);
 	    else if (e->Ncast != CAST_PT_PT && e->Ncast != CAST_IT_PT)
 		return CT_NOTCON;	/* Not a constant */
 	    /* Drop through to check for ptr (most likely cast) */
