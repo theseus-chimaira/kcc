@@ -5166,7 +5166,13 @@ gmaybitadjust(VREG *ptr, VREG *count, TYPE *t, int neg)
     codemdx(P_MOVE, vrtoreal(c), (SYMBOL *)NULL, 0, R_SP);
     if (neg)
         code0(P_MOVN, c, c);
-    code0(P_ADJBP, c, p);
+    if (tisbytepointer(t))
+        code0(P_ADJBP, c, p);
+    else {
+        if (sizetype(t->Tsubt) != 1)
+            code1(P_IMUL, c, sizetype(t->Tsubt));
+        code0(P_ADD, c, p);
+    }
     codemdx(P_MOVEM, vrtoreal(c), (SYMBOL *)NULL, -1, R_SP);
     vrfree(p);
     vrfree(c);
@@ -5249,11 +5255,21 @@ gmaybitsub(VREG *left, VREG *right, TYPE *t)
     r = vrget();
     codemdx(P_MOVE, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
     codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, R_SP);
-    vrlowiden(l);
-    code0(P_SUBBP, l, r);
-    if (previous && previous->Pop == P_SUBBP)
-        previous->Pbsize = nsize;
-    vrnarrow(l = VR2(l));
+    if (tisbytepointer(t)) {
+        vrlowiden(l);
+        code0(P_SUBBP, l, r);
+        if (previous && previous->Pop == P_SUBBP)
+            previous->Pbsize = nsize;
+        vrnarrow(l = VR2(l));
+    } else {
+        code0(P_SUB, l, r);
+        if (sizetype(t->Tsubt) > 1) {
+            vrlowiden(l);
+            code1(P_IDIV, l, sizetype(t->Tsubt));
+            vrnarrow(l);
+            folddiv(l);
+        }
+    }
     codemdx(P_MOVEM, vrtoreal(l), (SYMBOL *)NULL, -1, R_SP);
     vrfree(l);
     vrfree(r);
@@ -5664,6 +5680,20 @@ static VREG *
 gcastptr(VREG *r, TYPE *tfrom, TYPE *tto)
 {
     int fsiz, tsiz;
+
+    /* A byte-aligned packed array uses native 9-bit coordinates during
+    ** direct access.  The polymorphic ABI needs the logical S=1 form
+    ** to distinguish it from the ordinary native element representation.
+    */
+    if (tispackedptr(tfrom) && tismaybitptr(tto)) {
+        if (tisbitptr(tfrom))
+            return r;
+        if (!r)
+            return (VREG *)-1;
+        code10(P_PTRCNV, r, (SYMBOL *)NULL, 1, -TGSIZ_CHAR);
+        r->Vrtype = tto;
+        return r;
+    }
 
     /* A void * is a representation-preserving carrier for an object
     ** pointer, including native 9/18-bit and packed S=1 pointers.
@@ -6673,12 +6703,12 @@ gincdec(NODE *n, int inc, int pre)
                 r = gcastr(CAST_IT_IT, r, optype, n->Ntype, n);
             if (saved)
                 {
-                (void) gmaybitstoredepth(r, n, pdepth);
+                r = gmaybitstoredepth(r, n, pdepth);
                 code8(P_ADJSP, VR_SP, -1);
                 --stackoffset;
                 }
             else
-                (void) gmaybitstore(r, n);
+                r = gmaybitstore(r, n);
             if (!pre)
                 {
                 vrfree(r);
@@ -6999,7 +7029,12 @@ gmaybitloaddepth(NODE *n, int depth)
     p = vrget();
     off = depth - stackoffset;
     codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, off, R_SP);
-    code0(P_LDB, r, p);
+    if (tisbyte(n->Ntype))
+        code0(P_LDB, r, p);
+    else {
+        codemdx(P_MOVE, vrtoreal(r), (SYMBOL *)NULL, 0, vrtoreal(p));
+        vrfree(p);
+    }
     code6(P_JRST, (VREG *)NULL, done);
     flushcode();
 
@@ -7090,7 +7125,10 @@ gmaybitstoredepth(VREG *reg, NODE *n, int depth)
     off = depth - stackoffset;
     codemdx(P_MOVE, vrtoreal(p), (SYMBOL *)NULL, off, R_SP);
     codemdx(P_MOVE, vrtoreal(v), (SYMBOL *)NULL, 0, R_SP);
-    code0(P_DPB, v, p);
+    if (tisbyte(n->Ntype))
+        code0(P_DPB, v, p);
+    else
+        codemdx(P_MOVEM, vrtoreal(v), (SYMBOL *)NULL, 0, vrtoreal(p));
     vrfree(p);
     vrfree(v);
     code6(P_JRST, (VREG *)NULL, done);

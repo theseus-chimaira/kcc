@@ -1457,6 +1457,20 @@ gizptr(NODE *n)
 		    if (i != 2)		/* Only normal addrs allowed now */
 			return CT_NOTCON;
 
+		    /* A packed pointer entering a representation-polymorphic
+		    ** object uses the existing S=1 logical address, not the
+		    ** native element-size byte pointer.  Its offset is in bits.
+		    */
+		    if (tispackedptr(n->Nleft->Ntype) && tismaybitptr(n->Ntype)) {
+			if (pv.pv_bsize == TGSIZ_CHAR) {
+			    pv.pv_off *= TGSIZ_CHAR;
+			    pv.pv_bsize = 1;
+			}
+			return CT_ADDR;
+		    }
+		    if (tismaybitptr(n->Ntype) && pv.pv_bsize == 1)
+			return CT_ADDR;
+
 		    /* First see whether a conversion is actually needed */
 		    i = elembsize(n->Ntype);	/* Desired bytesize of ptr */
 		    if (i == 0) {		/* Casting to (void *)? */
@@ -1467,7 +1481,8 @@ gizptr(NODE *n)
 			if (tischarpointer(n->Ntype))	      /* to (char*)?*/
 			    return CT_ADDR;	/* Yes, no change */
 		    }
-		    if (i >= TGSIZ_WORD) i = 0;
+		    if (i >= TGSIZ_WORD || (n->Ntype->Tsubt->Tspec != TS_VOID
+		      && !tisbytepointer(n->Ntype))) i = 0;
 		    if (i == pv.pv_bsize)	/* If already OK, */
 			return CT_ADDR;		/* just return success */
 
@@ -1589,21 +1604,35 @@ gizptr(NODE *n)
 		      || gizptr(n->Nleft->Nleft) != CT_ADDR)
 			return CT_NOTCON;
 		dostruct:
-		    /* If struct addr is OK, then we're OK.  P=074,S=0 is
-		    ** KCC's exact-bit marker for a nested packed aggregate.
-		    ** A static address of such an object is representable as a
-		    ** standard one-bit PDP-10 byte pointer: convert the base word
-		    ** displacement to bits and add the exact member displacement.
+		    /* Decode packed layout markers before ordinary hardware P/S
+		    ** fields.  074/075 encode bit offsets, while 077 encodes
+		    ** C-byte offsets.  Their zero S field is not a byte size.
 		    */
 		    off = n->Nleft->Nxoff;
-		    if (off < 0
-		      && (((unsigned INT)(-off)) & 07777L) == 07400L) {
-			if (pv.pv_bsize)
-			    return CT_NOTCON;
-			pv.pv_off = pv.pv_off * TGSIZ_WORD
-			          + ((unsigned INT)(-off) >> 12);
-			pv.pv_bsize = 1;
-			return CT_ADDR;
+		    if (off < 0) {
+			unsigned INT code = (unsigned INT)(-off);
+			int marker = (int)(code & 07777L);
+			if (marker == 07400L || marker == 07500L || marker == 07700L) {
+			    INT bit = (INT)(code >> 12);
+			    if (marker == 07700L)
+				bit *= TGSIZ_CHAR;
+			    /* A packed aggregate base is either a word address,
+			    ** a native 9-bit address or an exact S=1 address.
+			    */
+			    if (pv.pv_bsize != 0 && pv.pv_bsize != TGSIZ_CHAR
+			      && pv.pv_bsize != 1)
+				return CT_NOTCON;
+			    bit += pv.pv_off * (pv.pv_bsize ? pv.pv_bsize : TGSIZ_WORD);
+			    if (marker == 07400L || tisbitptr(n->Ntype)
+			      || tismaybitptr(n->Ntype) || bit % TGSIZ_CHAR) {
+				pv.pv_bsize = 1;
+				pv.pv_off = bit;
+			    } else {
+				pv.pv_bsize = TGSIZ_CHAR;
+				pv.pv_off = bit / TGSIZ_CHAR;
+			    }
+			    return CT_ADDR;
+			}
 		    }
 		    if (pv.pv_bsize)	/* Structaddr never a byteptr */
 			return CT_NOTCON;
@@ -1660,23 +1689,18 @@ gizptr(NODE *n)
 		    t = n->Nleft->Ntype;
 	    } else return CT_NOTCON;
 
-	    /* See comments for sizeptobj in CCSYM.  Only reason code is
-	    ** duplicated here is to handle funny byte sizes right.  Puke!
+	    /* Use the same element stride as runtime pointer arithmetic.
+	    ** A polymorphic constant already has a known representation.
 	    */
 	doadd:
-#if 1
-	    if (tisbytepointer(t)) {
-		if (!pv.pv_bsize) pv.pv_bsize = elembsize(t);
-		addoff *= sizearray(t->Tsubt);	/* Mult by # bytes in obj */
+	    if (pv.pv_bsize == 1 && (tisbitptr(t) || tismaybitptr(t))) {
+		if (tispacked(t->Tsubt))
+		    addoff *= t->Tsubt->Tbytes * TGSIZ_CHAR;
+		else
+		    addoff *= ((tbitsize(t->Tsubt) + TGSIZ_CHAR - 1)
+			       / TGSIZ_CHAR) * TGSIZ_CHAR;
 	    } else
-		 addoff *= sizetype(t->Tsubt);	/* Mult by obj size in wds */
-#else /* Old buggy code */
-	    addoff *= sizetype(t->Tsubt);	/* Mult by obj size in wds */
-	    if (tisbytepointer(t) && !tisbyte(t->Tsubt)) {
-		if (!pv.pv_bsize) pv.pv_bsize = elembsize(t);
-		addoff *= (TGSIZ_WORD / pv.pv_bsize);
-	    }
-#endif
+		addoff *= sizeptobj(t);
 	    pv.pv_off += addoff;
 	    return CT_ADDR;
 

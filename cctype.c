@@ -639,6 +639,12 @@ convasgn(struct type * lt, struct node * n)
 	if (tismaybitptr(lt) && lt->Tsubt != NULL && rt->Tsubt != NULL
 	  && cmputype(lt->Tsubt, rt->Tsubt))
 	    {
+	    /* Packed array decay uses a 9-bit address until it crosses
+	    ** into the self-describing pointer ABI.  Preserve the source
+	    ** type for its arithmetic, then convert the representation.
+	    */
+	    if (tispackedptr(rt) && !tisbitptr(rt))
+		return ndefcast(CAST_PT_PT, lt, n);
 	    n->Ntype = lt;
 	    return n;
 	    }

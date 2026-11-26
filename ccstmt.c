@@ -2269,12 +2269,15 @@ unary(void)
 
             {
             TYPE *at = n->Ntype;
+            TYPE *pt = n->Nop == N_PTR ? n->Nleft->Ntype : NULL;
             int bitaddr = (n->Nop == Q_MEMBER || n->Nop == Q_DOT)
                        && stmtpackedagg(n->Nxoff)
                        && (stmtpackedbit(n->Nxoff) % TGSIZ_CHAR) != 0;
 
             n = ndef(N_ADDR, at, 0, n, (NODE*)NULL);
-            n->Ntype = bitaddr
+            /* &*p preserves p's representation as well as its address.
+            ** Rebuilding an ordinary pointer type loses packed stride. */
+            n->Ntype = pt ? pt : bitaddr
                 ? findctype(TS_PTR, typbsiztab[TS_PTR] | TF_PACKEDPTR | TF_BITPTR,
                             typsiztab[TS_PTR], at)
                 : findtype(TS_PTR, at);
