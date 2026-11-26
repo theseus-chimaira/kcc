@@ -1159,31 +1159,6 @@ gdimode_try_saved_ac(int avoid[], int navoid)
     return gdimode_try_ac_upto(avoid, navoid, R_MAXREG);
 }
 
-/* Return the high AC of a free adjacent pair outside the avoid set. */
-static int
-gdimode_try_pair(int avoid[], int navoid)
-{
-    int r, i, conflict;
-
-    for (r = r_minnopreserve; r + 1 <= r_maxnopreserve; r++)
-	{
-	if (!rfree(r) || !rfree(r + 1)
-	  || (fnargkeepmask & (1 << r))
-	  || (fnargkeepmask & (1 << (r + 1))))
-	    continue;
-	conflict = 0;
-	for (i = 0; i < navoid; i++)
-	    if (avoid[i] == r || avoid[i] == r + 1)
-		{
-		conflict = 1;
-		break;
-		}
-	if (!conflict)
-	    return r;
-	}
-    return 0;
-}
-
 /* Pick a free physical AC not listed in avoid[0..navoid-1]. */
 static int
 gdimode_pick_ac(int avoid[], int navoid)
@@ -1597,117 +1572,77 @@ gdimodesub(VREG *r1, VREG *r2)
     return gdimode_addsub(r1, r2, 1);
 }
 
-/* 71-bit DImode multiply: r1 *= r2, release r2 (muldi3_71_no_dmul). */
+/* 71-bit DImode multiply: r1 *= r2, release r2.
+** With radix B = 2^35, the result modulo B*2^36 is
+**   alo*blo + B*(ahi*blo + bhi*alo + B*ahi*bhi).
+** Store ahi's parity in the unused sign bit of alo.  Multiplying this
+** augmented word by bhi incorporates the last term modulo 2^36.
+** Use full MUL for the cross products: IMUL retains the sign of the
+** mathematical product on overflow, not its modular bit 35.  Recover
+** bit 35 from the low bit of each full product's high word.
+** Reuse the dying input pairs for all three products.  Only the saved
+** augmented low word is live outside those pairs; use a free volatile
+** AC when available, otherwise one balanced transient stack word.
+*/
 static VREG *
 gdimodemul(VREG *r1, VREG *r2)
 {
-    int r1hi, r1lo, r2hi, r2lo;
-    int ahi, alo, bhi, blo;
-    int scrlo, prodhi, prodlo;
-    int avoid[9], navoid;
-    char buf[512];
+    int ahi, alo, bhi, blo, scratch;
+    int avoid[4];
+    char saved[24], buf[512];
     int n;
 
-    (void) vrstoreal(r1, VR2(r1));
-    (void) vrstoreal(r2, VR2(r2));
-    (void) vrstoreal(r2, r1);
+    (void) vrstoreal(r1, r2);
+    ahi = avoid[0] = vrreal(r1);
+    alo = avoid[1] = vrreal(VR2(r1));
+    bhi = avoid[2] = vrreal(r2);
+    blo = avoid[3] = vrreal(VR2(r2));
+    scratch = gdimode_try_ac(avoid, 4);
 
-    ahi = r1hi = vrreal(r1);
-    alo = r1lo = vrreal(VR2(r1));
-    bhi = r2hi = vrreal(r2);
-    blo = r2lo = vrreal(VR2(r2));
-
-    navoid = 0;
-    avoid[navoid++] = r1hi;
-    avoid[navoid++] = r1lo;
-    avoid[navoid++] = r2hi;
-    avoid[navoid++] = r2lo;
-    /* MUL writes both its high AC and the *next* AC.  Reserve the
-    ** adjacent output pair before choosing the single-word scratch:
-    ** selecting the scratch first can fragment the three available
-    ** temporaries, leaving only a pair straddling AC7/AC10.  AC10 is
-    ** callee-preserved and can hold a live register variable.
-    **
-    ** When the current VREG layout offers no adjacent free pair,
-    ** spill and reload both operands through the normal allocator.
-    ** This path is only needed under register pressure and must not
-    ** turn a preserved register into an untracked scratch operand. */
-    prodhi = gdimode_try_pair(avoid, navoid);
-    if (prodhi == 0)
-	{
-	vrallspill();
-	(void) vrstoreal(r1, VR2(r1));
-	(void) vrstoreal(r2, VR2(r2));
-	(void) vrstoreal(r2, r1);
-	ahi = r1hi = vrreal(r1);
-	alo = r1lo = vrreal(VR2(r1));
-	bhi = r2hi = vrreal(r2);
-	blo = r2lo = vrreal(VR2(r2));
-	navoid = 0;
-	avoid[navoid++] = r1hi;
-	avoid[navoid++] = r1lo;
-	avoid[navoid++] = r2hi;
-	avoid[navoid++] = r2lo;
-	prodhi = gdimode_try_pair(avoid, navoid);
-	if (prodhi == 0)
-	    int_error("gdimodemul: no product AC pair after spilling");
-	}
-    prodlo = prodhi + 1;
-    avoid[navoid++] = prodhi;
-    avoid[navoid++] = prodlo;
-    scrlo = gdimode_pick_ac(avoid, navoid);
-
-    /* ACs are addressable as memory locations 0-17.  The operand
-    ** snapshots can therefore feed MUL/IMUL directly; do not round-trip
-    ** them through the stack merely to obtain a memory operand. */
     n = kccfmt(buf, sizeof(buf),
-	"\tMOVE\t%o,0%o\n"
-	"\tMUL\t%o,0%o\n"
-	"\tAND\t%o,[0377777777777]\n",
-	prodhi, alo,
-	prodhi, blo,
-	prodlo);
-    codestr(buf, n);
-
-    /* Cross terms: ahi*blo and alo*bhi. */
-    n = kccfmt(buf, sizeof(buf),
-	"\tMOVE\t%o,0%o\n"
-	"\tIMUL\t%o,0%o\n"
-	"\tADD\t%o,0%o\n"
-	"\tMOVE\t%o,0%o\n"
-	"\tIMUL\t%o,0%o\n"
-	"\tADD\t%o,0%o\n",
-	scrlo, ahi, scrlo, blo, prodhi, scrlo,
-	scrlo, bhi, scrlo, alo, prodhi, scrlo);
-    codestr(buf, n);
-
-    /* With radix 2^35, ahi*bhi contributes at bit 70, which is
-    ** still inside a 71-bit result.  Only the parity of each high
-    ** word matters; XOR that contribution into the high sign bit. */
-    n = kccfmt(buf, sizeof(buf),
-        "\tMOVE\t%o,0%o\n"
-        "\tAND\t%o,0%o\n"
         "\tTRNE\t%o,1\n"
-        "\t TLC\t%o,0400000\n",
-        scrlo, ahi, scrlo, bhi, scrlo, prodhi);
+        "\t TLO\t%o,0400000\n", ahi, alo);
+    codestr(buf, n);
+    if (scratch) {
+        kccfmt(saved, sizeof(saved), "0%o", scratch);
+        n = kccfmt(buf, sizeof(buf), "\tMOVE\t%o,0%o\n", scratch, alo);
+    } else {
+        kccfmt(saved, sizeof(saved), "0(17)");
+        n = kccfmt(buf, sizeof(buf), "\tPUSH\t17,%o\n", alo);
+    }
     codestr(buf, n);
 
-    /* The result is computed modulo 2^71 for either signedness. */
+    /* First cross product in r1; keep the original blo in ahi after
+    ** extracting the modular low word.  Second cross product in r2. */
     n = kccfmt(buf, sizeof(buf),
-	"\tAND\t%o,[0377777777777]\n",
-	prodlo);
+        "\tMUL\t%o,0%o\n"
+        "\tTLZ\t%o,0400000\n"
+        "\tTRNE\t%o,1\n"
+        "\t TLO\t%o,0400000\n"
+        "\tMOVE\t%o,0%o\n"
+        "\tMUL\t%o,%s\n"
+        "\tTLZ\t%o,0400000\n"
+        "\tTRNE\t%o,1\n"
+        "\t TLO\t%o,0400000\n"
+        "\tADD\t%o,0%o\n",
+        ahi, blo, alo, ahi, alo, ahi, blo,
+        bhi, saved, blo, bhi, blo, alo, blo);
     codestr(buf, n);
 
-    r1hi = vrreal(r1);
-    r1lo = vrreal(VR2(r1));
-    /* prodhi/prodlo were allocated with both destination words in the
-    ** avoid set, so the final copy has no overlap and needs no snapshots. */
+    /* Restore the canonical alo, multiply the two original low words,
+    ** add the cross sum to the high result, and return a canonical pair. */
     n = kccfmt(buf, sizeof(buf),
-	"\tMOVE\t%o,0%o\n"
-	"\tMOVE\t%o,0%o\n",
-	r1hi, prodhi, r1lo, prodlo);
+        "\tMOVE\t%o,%s\n"
+        "\tTLZ\t%o,0400000\n"
+        "\tMUL\t%o,0%o\n"
+        "\tADD\t%o,0%o\n"
+        "\tMOVE\t%o,0%o\n"
+        "\tMOVE\t%o,0%o\n"
+        "\tTLZ\t%o,0400000\n",
+        bhi, saved, bhi, bhi, ahi, bhi, alo, ahi, bhi, alo, blo, alo);
     codestr(buf, n);
-
+    if (!scratch)
+        codestr("\tSUB\t17,[1,,1]\n", sizeof("\tSUB\t17,[1,,1]\n") - 1);
     vrfree(r2);
     return r1;
 }
