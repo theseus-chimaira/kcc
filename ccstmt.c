@@ -3173,6 +3173,47 @@ gnu_builtin_alloca_v31(SYMBOL *s)
     return s;
 }
 
+/* GNU prefetch is an address hint, not an external function.  The
+** supported PDP-10 CPUs have no data-prefetch instruction.  Retain
+** evaluation of the address expression (including volatile accesses
+** and calls), but never access the memory denoted by its value.
+** The two optional control operands must be integral constants.
+*/
+static NODE *
+gnu_prefetch_v59p(void)
+{
+    NODE *addr, *arg;
+    int i;
+
+    ra_expr = 1;
+    nextoken();                 /* opening parenthesis */
+    if (token == T_RPAREN) {
+        error("__builtin_prefetch requires an address");
+        addr = ndeficonst(0);
+    } else {
+        addr = convarrfn(asgnexpr());
+        if (addr->Ntype->Tspec != TS_PTR)
+            error("__builtin_prefetch requires a pointer");
+        for (i = 1; token == T_COMMA; ++i) {
+            nextoken();
+            arg = evalexpr(asgnexpr());
+            if (i > 2)
+                error("Too many arguments to __builtin_prefetch");
+            else if (arg->Nop != N_ICONST || !tisinteg(arg->Ntype))
+                error("__builtin_prefetch control must be an integral constant");
+            else if (arg->Niconst < 0 || arg->Niconst > (i == 1 ? 1 : 3))
+                warn("Invalid __builtin_prefetch control value");
+        }
+    }
+    expect(T_RPAREN);
+    /* A void cast is exactly the required discarded-value expression.
+    ** The usual discard analysis preserves effects and removes only
+    ** computations whose value and effects are both unneeded. */
+    addr = convcast(voidtype, addr);
+    addr->Nflag |= NF_USERCAST;
+    return addr;
+}
+
 static NODE *
 primary(void)
 {
@@ -3205,7 +3246,11 @@ primary(void)
 			    freesym(s);		/* Flush losing symbol */
 			    return ndeft(N_UNDEF, deftype);
 			    /* Return special undef node to continue parsing. */
-			}
+		    }
+		    if (strcmp(s->Sname, "__builtin_prefetch") == 0) {
+		        freesym(s);
+		        return gnu_prefetch_v59p();
+		    }
 		    s = gnu_builtin_memlib_v13(s);
 		    if (s->Sclass == SC_UNDEF)
 		        s = gnu_builtin_alloca_v31(s);
