@@ -51,6 +51,26 @@ p10stdio_emit_v2(struct p10stdio_sink_v2 *out, int ch)
 static void
 p10stdio_repeat_v2(struct p10stdio_sink_v2 *out, int ch, int count)
 {
+#ifdef P10STDIO_FLOAT_V3
+    /* Bounded buffers need not loop over the discarded part of a large
+     * precision or width. Callback sinks still emit each actual byte. */
+    if (!out->failed && count > 0 && !out->emit) {
+        size_t end, n;
+        if (out->count > (size_t)INT_MAX ||
+            (size_t)count > (size_t)INT_MAX - out->count) {
+            out->failed = 1;
+            return;
+        }
+        end = out->count + (size_t)count;
+        if (out->capacity != 0 && out->count < out->capacity - 1) {
+            n = end < out->capacity ? end : out->capacity - 1;
+            while (out->count < n)
+                out->buffer[out->count++] = (char)ch;
+        }
+        out->count = end;
+        return;
+    }
+#endif
     while (count-- > 0 && !out->failed)
         p10stdio_emit_v2(out, ch);
 }
@@ -121,6 +141,10 @@ p10stdio_number_v2(struct p10stdio_sink_v2 *out, unsigned long value,
     if (left)
         p10stdio_repeat_v2(out, ' ', padding);
 }
+
+#ifdef P10STDIO_FLOAT_V3
+#include "p10stdio-float-v3.h"
+#endif
 
 static int
 p10stdio_decimal_v2(const char **format, int *result)
@@ -262,6 +286,18 @@ p10stdio_render_v2(struct p10stdio_sink_v2 *out,
                                0, 0, 1, width, precision);
             continue;
         }
+#ifdef P10STDIO_FLOAT_V3
+        if (c == 'f' || c == 'F' || c == 'g' || c == 'G' ||
+            c == 'e' || c == 'E') {
+            if (length < 0)
+                return -1;
+            if (p10stdio_float_v3(out, va_arg(args, double), c, width,
+                                 precision, left, zero, plus, space,
+                                 alternate) != 0)
+                return -1;
+            continue;
+        }
+#endif
         if (c != 'd' && c != 'i' && c != 'u' && c != 'o' &&
             c != 'x' && c != 'X')
             return -1;
