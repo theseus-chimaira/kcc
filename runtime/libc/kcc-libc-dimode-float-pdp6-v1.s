@@ -5,7 +5,8 @@
 ;
 ; __kcc_floatdidf: AC1 high36, AC2 low35 with sign duplicated in bit35.
 ; __kcc_fixdfdi:   AC1/AC2 are a software D-format double.
-; Results returned in AC1/AC2; other ACs may be clobbered, no stack.
+; Results returned in AC1/AC2; AC3..AC7 volatile, AC10..AC16 preserved.
+; Use only caller-saved scratch, no stack.
 ; D-format: sign/exponent/fraction27, signcopy/fraction35.
 ; The exponent is excess-128 and fraction is 62-bit two's-complement.
 ; Integer->double uses round-to-nearest, ties-to-even.
@@ -18,12 +19,12 @@ __kcc_floatdidf:
 	move	3,1
 	ior	3,2
 	jumpe	3,kdf_v1_zero
-	setz	10,
+	setz	7,
 	tlne	1,0400000
 	jrst	kdf_v1_abs
 	jrst	kdf_v1_unsigned
 kdf_v1_abs:
-	movei	10,1
+	movei	7,1
 	setca	1,
 	setca	2,
 	and	2,[0377777777777]
@@ -82,7 +83,7 @@ kdf_v1_pack:
 	ior	4,3
 	move	1,4
 	move	2,5
-	jumpe	10,kdf_v1_return
+	jumpe	7,kdf_v1_return
 	; Form negative 71-bit two's-complement D-format.
 	setca	1,
 	setca	2,
@@ -103,12 +104,12 @@ __kcc_fixdfdi:
 	move	3,1
 	ior	3,2
 	jumpe	3,kdf_v1_zero
-	setz	10,
+	setz	7,
 	tlne	1,0400000
 	jrst	kdf_v1_fix_abs
 	jrst	kdf_v1_fix_positive
 kdf_v1_fix_abs:
-	movei	10,1
+	movei	7,1
 	setca	1,
 	setca	2,
 	and	2,[0377777777777]
@@ -139,7 +140,7 @@ kdf_v1_fix_positive:
 	subi	6,0107
 	lshc	1,0(6)
 	lsh	2,-1
-	jumpe	10,kdf_v1_fix_positive_return
+	jumpe	7,kdf_v1_fix_positive_return
 	; Negate 71-bit magnitude; duplicate sign in low word for the ABI.
 	setca	1,
 	setca	2,
