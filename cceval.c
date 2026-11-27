@@ -523,6 +523,26 @@ dimode_hrsh(DIMODE_HACC *r, const DIMODE_HACC *a, int n, int signext)
     }
 }
 
+/* Fold a product modulo 2^71 without a host integer wider than 36
+** bits. Shift the multiplier down until exhausted; the duplicated
+** low-word sign bit is reconstructed only by dimode_hput. */
+static void
+dimode_hmul(DIMODE_HACC *r, const DIMODE_HACC *a, const DIMODE_HACC *b)
+{
+    DIMODE_HACC x = *a, y = *b, tmp;
+    r->hi = r->lo = 0;
+    while (y.hi || y.lo) {
+        if (y.lo & 1) {
+            dimode_hadd(&tmp, r, &x);
+            *r = tmp;
+        }
+        dimode_hrsh(&tmp, &y, 1, 0);
+        y = tmp;
+        dimode_hlsh(&tmp, &x, 1);
+        x = tmp;
+    }
+}
+
 static void
 dimode_hneg(DIMODE_HACC *r, const DIMODE_HACC *a)
 {
@@ -842,7 +862,9 @@ evalbinop(NODE *e)
 	    dimode_iconst_put(eleft, (INT)(acc >> 35), (INT)acc);
 	    break;
 	case Q_MPLY:
-	    return e;		/* runtime gdimodemul handles sign-copy lo */
+	    acc = dimode_to_acc(hi1, lo1) * dimode_to_acc(hi2, lo2);
+	    dimode_iconst_put(eleft, (INT)(acc >> 35), (INT)acc);
+	    break;
 	case Q_ANDT:
 	    acc = dimode_to_acc(hi1, lo1) & dimode_to_acc(hi2, lo2);
 	    dimode_iconst_put(eleft, (INT)(acc >> 35), (INT)acc);
@@ -933,7 +955,9 @@ evalbinop(NODE *e)
 	    dimode_hput(eleft, &acc);
 	    break;
 	case Q_MPLY:
-	    return e;		/* runtime gdimodemul handles sign-copy lo */
+	    dimode_hmul(&acc, &a1, &a2);
+	    dimode_hput(eleft, &acc);
+	    break;
 	case Q_ANDT:
 	    dimode_hand(&acc, &a1, &a2);
 	    dimode_hput(eleft, &acc);
