@@ -665,6 +665,8 @@ ppinit(void)
     /* Enter special macro pre-definitions into symbol table. */
     mdefstr("__COMPILER_KCC__", MACF_KCC, NULL);
     mdefstr("__PDP10__", MACF_ATOM, "1");
+    /* Match the common PDP-10 target spelling used by portable GCC sources. */
+    mdefstr("__pdp10__", MACF_ATOM, "1");
     /* sizeof and object allocation sizes use the 36-bit unsigned int
      * type in the native PDP-10 ABI (nine-bit C characters).  Expose
      * the type spelling expected by imported GCC-compatible sources. */

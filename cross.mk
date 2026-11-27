@@ -72,6 +72,10 @@ FREESTANDING_STDIO_ARCHIVE = $(HOST_BUILD_DIR)/libp10stdio-v2.a
 FREESTANDING_STDIO_V3_SOURCE = runtime/libc/p10stdio-format-v3.c
 FREESTANDING_STDIO_V3_ASM = $(HOST_BUILD_DIR)/p10stdio-format-v3.s
 FREESTANDING_STDIO_V3_ARCHIVE = $(HOST_BUILD_DIR)/libp10stdio-v3.a
+# Explicitly initialized arena backend; never part of the default libc.
+FREESTANDING_HEAP_SOURCE = runtime/libc/p10heap-arena-v1.c
+FREESTANDING_HEAP_ASM = $(HOST_BUILD_DIR)/p10heap-arena-v1.s
+FREESTANDING_HEAP_ARCHIVE = $(HOST_BUILD_DIR)/libp10heap-arena-v1.a
 GCC_FREESTANDING_CTYPE_DIR = $(PDP10_PREFIX)/lib/gcc-lib/pdp10-dec-none/3.2/freestanding
 
 $(FREESTANDING_LIBC_STRING): runtime/libc/kcc-libc-string-v1.c $(KCC)
@@ -138,7 +142,16 @@ $(FREESTANDING_STDIO_V3_ARCHIVE): $(FREESTANDING_STDIO_V3_ASM)
 
 freestanding-stdio-v3: $(FREESTANDING_STDIO_V3_ARCHIVE)
 
-install-freestanding-libc: freestanding-libc freestanding-ctype freestanding-fp36 freestanding-signed-df freestanding-stdio freestanding-stdio-v3
+$(FREESTANDING_HEAP_ASM): $(FREESTANDING_HEAP_SOURCE) $(KCC) self/include/stddef.h
+	$(KCC) -S -v=nostats -x=pdp6 -m=gas -Iself/include/ -o $@ $<
+
+$(FREESTANDING_HEAP_ARCHIVE): $(FREESTANDING_HEAP_ASM)
+	$(PDP10_DAS) -F -C -O $(HOST_BUILD_DIR)/p10heap-arena-v1.dobj $(FREESTANDING_HEAP_ASM)
+	$(PDP10_DARC) -o $@ $(HOST_BUILD_DIR)/p10heap-arena-v1.dobj
+
+freestanding-heap: $(FREESTANDING_HEAP_ARCHIVE)
+
+install-freestanding-libc: freestanding-libc freestanding-ctype freestanding-fp36 freestanding-signed-df freestanding-stdio freestanding-stdio-v3 freestanding-heap
 	$(INSTALL) -d $(DESTDIR)$(FREESTANDING_LIBC_DIR)
 	$(INSTALL) -m 644 runtime/libc/kcc-libc-*.s runtime/libc/p10bytes-v2.s \
 		$(FREESTANDING_LIBC_STRING) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
@@ -148,6 +161,7 @@ install-freestanding-libc: freestanding-libc freestanding-ctype freestanding-fp3
 	$(INSTALL) -m 644 $(FREESTANDING_SIGNED_DF_SOURCE) $(FREESTANDING_SIGNED_DF_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 
 	$(INSTALL) -m 644 $(FREESTANDING_STDIO_ASM) $(FREESTANDING_STDIO_ARCHIVE) $(FREESTANDING_STDIO_V3_ASM) $(FREESTANDING_STDIO_V3_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
+	$(INSTALL) -m 644 $(FREESTANDING_HEAP_ASM) $(FREESTANDING_HEAP_ARCHIVE) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/
 
 # GCC and KCC use the same PDP-10 C ABI for these two freestanding
 # entry points.  Install the exact same assembly/objects for GCC, not
@@ -199,6 +213,8 @@ uninstall:
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10stdio-v2.a
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/p10stdio-format-v3.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10stdio-v3.a
+	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/p10heap-arena-v1.s
+	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10heap-arena-v1.a
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10c-v2.a
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/kcc-libc-ctype-c-locale-v1.s
 	$(RM) $(DESTDIR)$(FREESTANDING_LIBC_DIR)/libp10ctype-c-locale-v1.a
@@ -221,5 +237,5 @@ clean:
 	$(RM) -r $(HOST_BUILD_DIR) $(NATIVE_BUILD_DIR)
 
 .PHONY: all cross native depend runtime install install-native \
-	install-runtime install-headers freestanding-libc freestanding-ctype freestanding-fp36 freestanding-signed-df freestanding-stdio freestanding-stdio-v3 install-gcc-freestanding-ctype install-gcc-freestanding-fp36 install-gcc-freestanding-signed-df install-kcc-freestanding-signed-df \
+	install-runtime install-headers freestanding-libc freestanding-ctype freestanding-fp36 freestanding-signed-df freestanding-stdio freestanding-stdio-v3 freestanding-heap install-gcc-freestanding-ctype install-gcc-freestanding-fp36 install-gcc-freestanding-signed-df install-kcc-freestanding-signed-df \
 	install-freestanding-libc uninstall clean
