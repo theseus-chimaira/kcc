@@ -51,6 +51,7 @@ extern NODE *convasgn(TYPE *, NODE *);          /* CCTYPE */
 extern NODE *convarrfn(NODE *);                    /* CCTYPE */
 extern TYPE *convfparam(TYPE *);                /* CCTYPE */
 extern int nextoken(void);                      /* CCLEX */
+extern void tokpush(int, SYMBOL *);             /* CCLEX */
 extern long lex_take_gnuattrs(void);              /* CCLEX */
 extern int expect (int);                        /* CCERR */
 
@@ -6045,6 +6046,12 @@ pizstruct(TYPE *t, int lev, int isunion)
                 return root;
             if (nextoken() == T_RBRACE)
                 return root;
+            /* A designator belongs to the nearest explicit brace pair,
+            ** not to this implicitly initialized subobject. */
+            if (token == Q_DOT || token == T_LBRACK) {
+                tokpush(T_COMMA, (SYMBOL *)NULL);
+                return root;
+            }
             slot = slot->Nright = ndefl(N_IZLIST, piztype(smem->Stype, 1));
         }
         if (token != T_RBRACE)
@@ -6232,10 +6239,16 @@ pizarray(TYPE *t, int lev)
                     maxidx = idx;
             }
             ++idx;
-            if (token != T_COMMA)
+            /* With omitted braces the enclosing list owns the comma
+            ** after the last element of this array subobject. */
+            if (token != T_COMMA || (!braces && idx >= limit))
                 break;
             if (nextoken() == T_RBRACE)
                 break;
+            if (!braces && (token == Q_DOT || token == T_LBRACK)) {
+                tokpush(T_COMMA, (SYMBOL *)NULL);
+                break;
+            }
         }
         cnt = maxidx + 1;
         if (root == NULL)
