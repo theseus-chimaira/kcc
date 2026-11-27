@@ -629,6 +629,29 @@ zerotok(void)
     return token = T_ICONST;
 }
 
+/* Keep literal encodings immutable until the next pool reset.
+** An equal byte sequence can share storage even across encoding kinds:
+** the consuming node retains its own length and encoding flags.
+** Search only committed bytes, not the current literal. No index
+** table, larger pool, or per-literal metadata is needed. */
+static char *
+slcshare(char *start)
+{
+    char *p;
+    int i, len = slcptr + 1 - start;
+
+    for (p = slcpool + 1; start - p >= len; ++p) {
+        for (i = 0; i < len && p[i] == start[i]; ++i)
+            ;
+        if (i == len) {
+            slcptr = start - 1;
+            slcleft += len;
+            return p;
+        }
+    }
+    return start;
+}
+
 static int
 strctok(char * s)
 {
@@ -644,6 +667,7 @@ strctok(char * s)
 	error("Too many string literal chars, internal overflow");
 	return szerotok();
 	}
+    constant.csptr = slcshare(constant.csptr);
     return token = T_SCONST;
 }
 
@@ -1354,7 +1378,7 @@ trstrcon(void)
     slcptr += stride;
     slcleft -= stride;
     constant.cslen = count + 1;
-    constant.csptr = start;
+    constant.csptr = slcshare(start);
     constant.cwide = flags;
     constant.ctype = (flags & NF_STRWIDE)
         ? findctype(TS_ARRAY, typbsiztab[TS_ARRAY], count + 1, inttype)
