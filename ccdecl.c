@@ -6010,7 +6010,8 @@ pizstruct(TYPE *t, int lev, int isunion)
     SYMBOL *first, *smem, *found, *promoted;
     NODE *e, *root, *slot;
     INT curidx, desidx;
-    int braces, haveitem, designated;
+    int braces, haveitem, designated, old_designator;
+    SYMBOL *member_name;
 
     if (clevel < CLEV_ANSI && izautof)
         error("Initialization of auto struct/union not allowed");
@@ -6066,20 +6067,36 @@ pizstruct(TYPE *t, int lev, int isunion)
     haveitem = 0;
 
     while (token != T_RBRACE && token != T_EOF) {
-        designated = 0;
-        if (token == Q_DOT) {
-            if (!CSTD_HAS(CSTD_C99))
-                error("Designated initializers require C99");
-            if (nextoken() != Q_IDENT) {
-                error("Member name required after . in initializer");
-                pizflush(1);
-                break;
+        designated = old_designator = 0;
+        member_name = NULL;
+        /* GNU's historical member: value spelling is recognized only
+        ** in extension mode. An ordinary identifier expression must
+        ** retain its token and symbol for the normal initializer parser. */
+        if (clevkcc && token == Q_IDENT) {
+            member_name = csymbol;
+            if (nextoken() == T_COLON)
+                old_designator = 1;
+            else {
+                tokpush(Q_IDENT, member_name);
+                member_name = NULL;
+            }
+        }
+        if (token == Q_DOT || old_designator) {
+            if (!old_designator) {
+                if (!CSTD_HAS(CSTD_C99))
+                    error("Designated initializers require C99");
+                if (nextoken() != Q_IDENT) {
+                    error("Member name required after . in initializer");
+                    pizflush(1);
+                    break;
+                }
+                member_name = csymbol;
             }
             desidx = 0;
             promoted = NULL;
-            found = izmember(t, csymbol, &desidx, &promoted);
-            if (csymbol->Sclass == SC_UNDEF)
-                freesym(csymbol);
+            found = izmember(t, member_name, &desidx, &promoted);
+            if (member_name->Sclass == SC_UNDEF)
+                freesym(member_name);
             if (found == NULL) {
                 error("Unknown struct/union member in initializer");
                 pizflush(1);
@@ -6087,12 +6104,19 @@ pizstruct(TYPE *t, int lev, int isunion)
             }
             smem = found;
             curidx = desidx;
-            nextoken();
+            if (old_designator) {
+                /* Normalize the colon to the existing designator
+                ** separator, including anonymous-member paths. */
+                token = Q_ASGN;
+                csymbol = NULL;
+            } else
+                nextoken();
             designated = 1;
         }
 
         if (smem == NULL) {
-            error("Too many members in initializer list");
+            error(isunion ? "Too many members in union initializer list"
+                          : "Too many members in initializer list");
             pizflush(1);
             break;
         }
@@ -6126,14 +6150,9 @@ pizstruct(TYPE *t, int lev, int isunion)
             break;
         if (nextoken() == T_RBRACE)
             break;
-        if (isunion) {
-            if (token != Q_DOT) {
-                error("Too many members in union initializer list");
-                pizflush(1);
-                break;
-            }
-            smem = first;       /* The designator will select the member. */
-        }
+        /* A union permits another explicitly designated member, but
+        ** never a second positional member. Leave smem NULL until a
+        ** designator actually selects one. */
     }
 
     if (!haveitem) {
