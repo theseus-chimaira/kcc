@@ -5830,6 +5830,13 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	    break;
 
 	case CAST_IT_PT:
+            /* A pointer is one raw unsigned target word. */
+            if (tisdimode(tfrom)) {
+                r = gcastr(CAST_IT_IT, r, tfrom, uinttype, ln);
+                if (r && r != (VREG *)-1)
+                    r->Vrtype = tto;
+                return r;
+            }
 	    if (!r)					/* Just checking? */
 		return gintwiden(r, tfrom, uinttype, ln);
 	    else
@@ -5914,9 +5921,12 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 		r = gintwiden(r, tfrom, tto, ln); /*Widen integer if needed */
 	    break;
 
+        case CAST_PT_IT:
+            /* Use the integer conversion machinery for the raw word,
+            ** including 71-bit widening and narrow integer truncation. */
+            return gcastr(CAST_IT_IT, r, uinttype, tto, ln);
 	case CAST_EN_EN:
 	case CAST_EN_IT:
-	case CAST_PT_IT:			/* No representation change needed */
 	    break;
 
 	case CAST_PT_PT:			/* General ptr to ptr conversion */
