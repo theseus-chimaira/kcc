@@ -1182,12 +1182,14 @@ returnstmt(void)
 	else
 	    {
 	    NODE *side = expression();
-	    if (!clevkcc || side->Ntype->Tspec != TS_VOID)
+	    if (!clevkcc)
 	        error("Return expression illegal in function returning void");
 	    else {
-	        /* GNU permits returning a void expression. Execute its side
-	        ** effects before the ordinary void return; no value register. */
-	        e = ediscifok(evalifok(side));
+	        /* GNU compatibility: a value expression in a void return
+	        ** is diagnosed but evaluated only for its side effects. */
+	        if (side->Ntype->Tspec != TS_VOID)
+	            warn("Return value discarded in void function");
+	        e = ediscifok(evalifok(convcast(voidtype, side)));
 	        expect(T_SCOLON);
 	        nreg = ndefop(Q_RETURN);
 	        nreg->Nreg = _reg_count;
