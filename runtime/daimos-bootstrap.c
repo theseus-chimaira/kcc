@@ -521,7 +521,7 @@ fmt_uint(FILE *fp, char **dst, unsigned long value, unsigned int base,
 }
 
 static int
-fmt_core(FILE *fp, char **dst, char *fmt, va_list *app)
+fmt_core(FILE *fp, char **dst, const char *fmt, va_list *app)
 {
         int count;
         int width;
@@ -635,7 +635,7 @@ printf(char *fmt, ...)
 }
 
 int
-sprintf(char *dst, char *fmt, ...)
+sprintf(char *dst, const char *fmt, ...)
 {
         va_list ap;
         char *p;
