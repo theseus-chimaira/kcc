@@ -6161,7 +6161,8 @@ pizstruct(TYPE *t, int lev, int isunion)
     }
 
     if (!haveitem) {
-        error("Null initializer");
+        if (!clevkcc)
+            error("Null initializer");
         if (root == NULL)
             root = ndeftl(N_IZLIST, t, NULL);
     }
@@ -6275,8 +6276,11 @@ pizarray(TYPE *t, int lev)
             }
         }
         cnt = maxidx + 1;
-        if (root == NULL)
+        if (root == NULL) {
+            if (!clevkcc || !braces)
+                error("Null initializer");
             root = ndeftl(N_IZLIST, t, NULL);
+        }
     }
 
     if (t->Tsize == 0)
@@ -6320,12 +6324,14 @@ pexizer(int lev)                /* 0 if outermost level */
     /* We have a list of some sort.  This is only legal if at outermost
     ** level AND there is only one thing in the list.
     */
-    if (lev)
-        error("Inner initializer for this object cannot be a list");
     n = pizlist();              /* Parse the list, always returns N_IZLIST */
     if (n->Nright && lev == 0)  /* More than one thing in list? */
                                 /* Complain unless already complained above */
         error("Initializer cannot be a list of more than one element");
+    if (clevkcc && n->Nleft == NULL && n->Nright == NULL)
+        return ndeficonst(0);
+    if (lev)
+        error("Inner initializer for this object cannot be a list");
     if ((n = n->Nleft) == NULL)
         {
         error("Null initializer");
@@ -6354,6 +6360,10 @@ pizlist(void)
         return asgnexpr();      /* Don't need to waste time optimizing */
 
     nextoken();                         /* Skip open brace */
+    if (token == T_RBRACE) {
+        nextoken();
+        return ndefl(N_IZLIST, NULL);
+    }
     root = n = ndefl(N_IZLIST, pizlist());
     while (token == T_COMMA)
         {
