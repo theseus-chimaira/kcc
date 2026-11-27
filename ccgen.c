@@ -1864,8 +1864,10 @@ gizlist(NODE *n, TYPE *t, SYMBOL *s)	/* N_IZLIST to initialize from */
 	    gizbytes(n, t, s, 0);	/* Yep, go handle top-lev bytearray */
 	    return;			/* Nothing left */
 	}
-        if (n->Nleft && n->Nleft->Nop == N_SCONST
-          && (n->Nleft->Nflag & NF_STRWIDE)) {
+        /* Only a wide character array consumes the literal's contents.
+        ** A pointer array instead needs relocatable literal addresses. */
+        if (t->Tsubt->Tspec == TS_INT && n->Nleft
+          && n->Nleft->Nop == N_SCONST && (n->Nleft->Nflag & NF_STRWIDE)) {
             INT i;
             NODE *str = n->Nleft;
             for (i = 0; i < (INT)t->Tsize && i < str->Nsclen; ++i)
@@ -2126,8 +2128,8 @@ gizpacked(NODE *n, TYPE *t, SYMBOL *s)
             outzbs(gizpackedbytes(t));
             return;
         }
-        if (q && q->Nleft && q->Nleft->Nop == N_SCONST
-          && (q->Nleft->Nflag & NF_STRWIDE)) {
+        if (et->Tspec == TS_INT && q && q->Nleft
+          && q->Nleft->Nop == N_SCONST && (q->Nleft->Nflag & NF_STRWIDE)) {
             NODE *str = q->Nleft;
             for (i = 0; i < nelts; ++i)
                 gizpackedputbits(i < str->Nsclen
