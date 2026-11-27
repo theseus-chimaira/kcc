@@ -2019,6 +2019,43 @@ compoundliteral_v60g(TYPE *t)
     return posttail(n);
 }
 
+/* GNU union casts select a compatible member without a conversion
+** to an unrelated member type.  Use the ordinary aggregate initializer
+** at file scope, and an assignment plus a comma expression in a function.
+** In particular, discarding the cast must not discard operand effects. */
+static NODE *
+unioncast_v60t(TYPE *t, NODE *n)
+{
+    SYMBOL *m, *tmp;
+    NODE *id, *iz, *seq;
+    static unsigned int serial;
+    char name[24];
+
+    for (m = t->Tsmtag->Ssmnext; m; m = m->Ssmnext)
+        if (cmputype(m->Stype, n->Ntype))
+            break;
+    if (m == NULL) {
+        error("Union cast has no compatible member");
+        return n;
+    }
+    t = findutype(t);
+    stmtintname(name, "ucast", ++serial);
+    if (lsymhead == NULL || constexpr) {
+        tmp = defstatic(name, t);
+        iz = ndeftl(N_IZLIST, m->Stype, evalexpr(n));
+        iz->Nizmem = m;
+        return ndef(N_COMPLIT, t, 0, iz, ndefident(tmp));
+    }
+    tmp = defauto(name, t);
+    id = ndefident(tmp);
+    id->Nflag |= NF_LVALUE;
+    iz = ndef(Q_DOT, m->Stype, NF_LVALUE, id, NULL);
+    iz->Nxoff = m->Ssmoff;
+    iz = ndef(Q_ASGN, m->Stype, NF_DISCARD, iz, n);
+    seq = ndef(N_EXPRLIST, m->Stype, NF_DISCARD, NULL, iz);
+    return ndef(N_EXPRLIST, t, 0, seq, ndefident(tmp));
+}
+
 static NODE *
 castexpr(void)
 {
@@ -2041,8 +2078,11 @@ castexpr(void)
 	if (token == T_LBRACE)
 	    return compoundliteral_v60g(t);
 
-	n = convcast(t, convarrfn(castexpr()));
-					/* Get expression, apply cast */
+        n = convarrfn(castexpr());
+        if (clevkcc && t->Tspec == TS_UNION && tisscalar(n->Ntype))
+            n = unioncast_v60t(t, n);
+        else
+            n = convcast(t, n);
 	n->Nflag |= NF_USERCAST;	/* Say this was explicit user cast */
 	return n;
 	}

@@ -6031,6 +6031,25 @@ pizstruct(TYPE *t, int lev, int isunion)
     braces = (token == T_LBRACE);
     if (!braces && lev == 0) {
         if (!izautof) {
+            /* A GNU union cast already carries a selected-member
+            ** initializer. Validate its scalar value just as for braces. */
+            if (clevkcc && isunion) {
+                e = pexizer(lev);
+                if (e && e->Nop == N_COMPLIT && (e->Nflag & NF_USERCAST)
+                  && cmputype(t, e->Ntype)) {
+                    NODE *v = e->Nleft;
+                    TYPE *mt = v->Nizmem->Stype;
+                    if (mt->Tspec == TS_PTR) {
+                        if (!nisconst(v->Nleft))
+                            error("Pointer initializer not constant");
+                    } else
+                        v->Nleft = chkarith(mt, v->Nleft,
+                            tisarith(mt) && tisinteg(mt) ? N_ICONST : N_FCONST);
+                    return v;
+                }
+                error("Static union initializer requires braces or a union cast");
+                return e;
+            }
             error("Static struct/union initializer must be enclosed in braces");
             return pizlist();
         }
