@@ -1656,16 +1656,46 @@ condexpr(void)
 
     /* Conditional expression, have the conditional.  Check it. */
     nextoken();
+    if (clevkcc && token == T_COLON)
+        c = convunary(c);
     if (!tisscalar(c->Ntype))
 	{
 	error("First operand of (?:) must have scalar type");
 	c = ndeficonst(0);
 	}
 
-    /* Get "true" expression */
-    n = expression();
-    if (n->Nop == N_EXPRLIST && !(n->Nflag & NF_INPARENS))
-	advise("Comma inside (?:) has lower precedence -- use parentheses");
+    /* GNU a ?: b uses the value of a, evaluated just once. Reuse
+    ** the ordinary conditional machinery; keep the saved value in an
+    ** automatic object only when it is not already a literal constant.
+    ** The assignment itself supplies the controlling expression. */
+    if (clevkcc && token == T_COLON) {
+        if (optpar || constexpr || constprobe_depth)
+            c = evalexpr(c);
+        if (c->Nop == N_ICONST || c->Nop == N_FCONST
+          || c->Nop == N_PCONST || c->Nop == N_ACONST) {
+            n = ndeft(c->Nop, c->Ntype);
+            *n = *c;
+        } else if (lsymhead != NULL) {
+            static unsigned int serial;
+            char name[24];
+            SYMBOL *tmp;
+            NODE *id;
+
+            stmtintname(name, "query", ++serial);
+            tmp = defauto(name, c->Ntype);
+            id = ndefident(tmp);
+            id->Nflag |= NF_LVALUE;
+            c = ndef(Q_ASGN, c->Ntype, 0, id, c);
+            n = ndefident(tmp);
+        } else {
+            error("Nonconstant omitted conditional operand at file scope");
+            n = ndeficonst(0);
+        }
+    } else {
+        n = expression();
+        if (n->Nop == N_EXPRLIST && !(n->Nflag & NF_INPARENS))
+            advise("Comma inside (?:) has lower precedence -- use parentheses");
+    }
     expect(T_COLON);
 
     /* Now get "false" expression, bind together */
