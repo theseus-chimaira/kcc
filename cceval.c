@@ -1809,8 +1809,18 @@ evalcast(NODE *e)
 	    cn->Niconst = tolong(tto, (INT) cn->Nfconst);
 	    cn->Nop = N_ICONST;
 	    break;
+        case CAST_PT_IT:       /* Pointer type to integer type */
+            if (tisdimode(tto)) {
+                /* Match runtime conversion of the raw unsigned word. */
+                if (cn->Nop != N_PCONST)
+                    return e;
+                dimode_iconst_put(cn,
+                    ((unsigned INT)cn->Niconst >> 35) & 1, cn->Niconst);
+                cn->Nop = N_ICONST;
+                break;
+            }
+            /* FALLTHROUGH */
 	case CAST_EN_IT:	/* Enumeration type to integer type */
-	case CAST_PT_IT:	/* Pointer type to integer type */
 	    cn->Niconst = tolong(tto, (INT) cn->Niconst);
 	    cn->Nop = N_ICONST;
 	    break;
@@ -1896,6 +1906,10 @@ evalcast(NODE *e)
 	** produce different results, so we have to do it at run time.
 	*/
 	case CAST_PT_PT:	/* Pointer type to pointer type */
+            /* Top-level qualification alone never changes a raw pointer. */
+            if (cn->Nop == N_PCONST && tfrom->Tsubt == tto->Tsubt
+              && ((tfrom->Tflag ^ tto->Tflag) & ~TF_QUALS) == 0)
+                break;
 	    if (tisbytepointer(tfrom) && !tisbytepointer(tto)) {
 #ifdef __COMPILER_KCC__
 		    cn->Niconst = (INT)(INT *)(char *)(cn->Niconst);
@@ -1910,6 +1924,14 @@ evalcast(NODE *e)
 	    return e;
 
 	case CAST_IT_PT:	/* Integer type to pointer type */
+            if (tisdimode(tfrom)) {
+                INT hi, lo;
+                /* The independent low word has 35 bits, not 36. */
+                dimode_iconst_words(cn, &hi, &lo);
+                cn->Niconst = (INT)(((unsigned INT)(hi & 1) << 35)
+                                    | (unsigned INT)lo);
+                cn->Nflag &= ~NF_WIDE;
+            }
 	    cn->Nop = N_PCONST;
 	    break;
 
