@@ -767,8 +767,10 @@ genautoiz(NODE *base, NODE *iz, TYPE *t)
 
     switch (t->Tspec) {
     case TS_ARRAY:
-        if (iz->Nleft && iz->Nleft->Nop == N_SCONST
-          && (iz->Nleft->Nflag & NF_STRWIDE)) {
+        /* Only wide character arrays consume the literal's contents.
+        ** Pointer array elements require the ordinary assignment path. */
+        if (t->Tsubt->Tspec == TS_INT && iz->Nleft
+          && iz->Nleft->Nop == N_SCONST && (iz->Nleft->Nflag & NF_STRWIDE)) {
             NODE *str = iz->Nleft;
             for (idx = 0; idx < (INT)t->Tsize && idx < str->Nsclen; ++idx) {
                 dst = genizindex(base, t->Tsubt, idx);
