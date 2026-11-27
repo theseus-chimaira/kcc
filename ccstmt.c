@@ -71,7 +71,8 @@ static NODE *expression(void),
 	*castexpr(void), *postexpr(void), *posttail(NODE *), *sizeexpr(void),
 	*alignexpr_v1(void), *genericexpr_v4(void),
 	*pincdec(NODE *, int);
-static NODE *ptrapply(NODE *), *chkadd(int, NODE *),
+static NODE *ptrapply(NODE *), *addrapply(NODE *), *querylvalue(NODE *),
+            *chkadd(int, NODE *),
 	    *parglist(SYMBOL *, TYPE *);
 static NODE *bin_asm(void), *bin_offsetof(void), *bin_jffo(void);
 #if SYS_CSI
@@ -1452,6 +1453,8 @@ asgnexpr(void)
 	if (constexpr)
 	    error("Assignment op in constant expression");
 
+        if (clevkcc && (b->Nop != Q_QUERY || (b->Nflag & NF_INPARENS)))
+            b = querylvalue(b);
 	/* See if left operand is a modifiable lvalue */
 	if (!(b->Nflag & NF_LVALUE))	/* make sure can asgn to left side */
 	    /* Nope, check for common mistake of (c ? t : f = x) */
@@ -1645,10 +1648,15 @@ asgnexpr(void)
 **	One is a pointer and the other is a ptr to {un}qualified (void).
 */
 
+/* Parser-only marker on the N_NODE pair of an omitted conditional.
+** The existing saved-value assignment retains the original operand. */
+#define QUERY_OMITTED_V60U 0100
+
 static NODE *
 condexpr(void)
 {
     NODE *c, *n;
+    int omitted = 0;
 
     c = binary(1);		/* Should check out this precedence */
     if (token != Q_QUERY)
@@ -1687,6 +1695,7 @@ condexpr(void)
             id->Nflag |= NF_LVALUE;
             c = ndef(Q_ASGN, c->Ntype, 0, id, c);
             n = ndefident(tmp);
+            omitted = QUERY_OMITTED_V60U;
         } else {
             error("Nonconstant omitted conditional operand at file scope");
             n = ndeficonst(0);
@@ -1700,6 +1709,7 @@ condexpr(void)
 
     /* Now get "false" expression, bind together */
     n = ndeflr(N_NODE, n, condexpr());
+    n->Nflag |= omitted;
 
     /* Now fix up types.  Things are REAL hairy for this operator.
     */
@@ -2295,7 +2305,21 @@ unary(void)
 	    return ndef(op, n->Ntype, 0, n, (NODE*)NULL);	/* Result has cvted type */
 
 
-	case N_ADDR:		/* &() Address of */
+	case N_ADDR:
+            return addrapply(clevkcc ? querylvalue(n) : n);
+
+	case N_PTR:			/* *() Indirection */
+	    return ptrapply(n);	/* Use common routine */
+	default:
+	    ;	/* do nothing */
+	}
+    return n;
+}
+
+/* Form the address of an already parsed lvalue. */
+static NODE *
+addrapply(NODE *n)
+{
 	/* No unary conversions apply here.  Only check for lvalue.
 	** Application to functions and arrays is tricky.
 	**	Level	&(fun of T)		&(array of T)
@@ -2364,14 +2388,78 @@ unary(void)
 		stackrefs++;		/* then count it as a */
 		n->Nflag |= NF_STKREF;	/* stack reference */
 		}
-	    break;
-
-	case N_PTR:			/* *() Indirection */
-	    return ptrapply(n);	/* Use common routine */
-	default:
-	    ;	/* do nothing */
-	}
     return n;
+}
+
+/* Recover a potential GNU conditional lvalue only when an enclosing
+** operator actually requires one. Ordinary conditional reads retain
+** their usual promotions and do not force variables onto the stack. */
+static NODE *
+querylvalue(NODE *n)
+{
+    NODE *p, *l, *r, *c;
+    TYPE *t;
+    int omitted;
+
+    if (n->Nflag & NF_LVALUE)
+        return n;
+    if (n->Nop == Q_DOT) {
+        l = querylvalue(n->Nleft);
+        if (l->Nflag & NF_LVALUE) {
+            n->Nleft = l;
+            n->Nflag |= NF_LVALUE;
+            if (tisqualif(l->Ntype))
+                n->Ntype = findqtype(n->Ntype, l->Ntype->Tflag & TF_QUALS);
+        }
+        return n;
+    }
+    if (n->Nop != Q_QUERY || (n->Nflag & NF_USERCAST))
+        return n;
+    p = n->Nright;
+    c = n->Nleft;
+    omitted = p->Nflag & QUERY_OMITTED_V60U;
+    l = omitted ? c->Nright : p->Nleft;
+    r = p->Nright;
+
+    /* Undo only implicit value conversions. The selected object must
+    ** have the same type in both branches, not merely a common promoted
+    ** arithmetic type. Explicit casts are never lvalues here. */
+    while (l->Nop == N_CAST && !(l->Nflag & NF_USERCAST))
+        l = l->Nleft;
+    while (r->Nop == N_CAST && !(r->Nflag & NF_USERCAST))
+        r = r->Nleft;
+    l = querylvalue(l);
+    r = querylvalue(r);
+    t = l->Ntype;
+    if (!(l->Nflag & r->Nflag & NF_LVALUE)
+      || ((l->Nflag | r->Nflag) & NF_USERCAST)
+      || t != r->Ntype || t->Tspec == TS_ARRAY || tisbitf(t))
+        return n;
+
+    l = addrapply(l);
+    r = addrapply(r);
+    if (l->Ntype != r->Ntype) {
+        error("Conditional lvalue addresses have incompatible representations");
+        return n;
+    }
+
+    /* Omitted middle operand: retain the original object's address,
+    ** then test its value. Reuse the saved-value slot from condexpr;
+    ** every scalar object occupies at least one word of frame space. */
+    if (omitted) {
+        NODE *id = c->Nleft;
+        id->Nid->Stype = id->Ntype = c->Ntype = l->Ntype;
+        c->Nright = l;
+        l = ndefident(id->Nid);
+        c = ptrapply(c);
+    }
+    p->Nleft = l;
+    p->Nright = r;
+    p->Ntype = n->Ntype = l->Ntype;
+    p->Nflag = 0;
+    n->Nleft = c;
+    n->Nflag &= ~NF_LVALUE;
+    return ptrapply(n);
 }
 
 /* PTRAPPLY - Apply "*" operator to an expression.
@@ -3131,6 +3219,8 @@ pincdec(struct node * n, int op)
     if (constexpr)
 	error("++ or -- in constant expression");
 
+    if (clevkcc)
+        n = querylvalue(n);
     if (!(n->Nflag&NF_LVALUE))
 	error("Operand of ++ or -- must be lvalue");
     else if (!tisscalar(n->Ntype))
