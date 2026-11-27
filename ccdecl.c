@@ -2637,7 +2637,12 @@ datadef(SYMBOL *base, SYMBOL *s, SYMBOL *syment)
             defbase.Sclass = s->Sclass;         /* Copy whatever default was */
             if (defbase.Stype == NULL)
                 {
-                error("Declaration without storage class or type-spec");
+                /* Historical implicit-int declarations in extension mode.
+                ** The default is the base type, not the derived type of
+                ** the first declarator (which may be a function or array). */
+                if (!clevkcc)
+                    error("Declaration without storage class or type-spec");
+                defbase.Stype = deftype;
                 }
             break;
         case SC_EXTREF:         /* "extern" */
@@ -2650,7 +2655,7 @@ datadef(SYMBOL *base, SYMBOL *s, SYMBOL *syment)
             break;
         }
     if (defbase.Stype == NULL)
-        defbase.Stype = s->Stype;       /* Copy whatever default was */
+        defbase.Stype = deftype;        /* Default base type: int */
 
     decllist(base, &defbase, s, syment, &root, &tail);
 
