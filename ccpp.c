@@ -71,7 +71,7 @@ static
 int d_define(void), d_undef(void), d_asm(void), d_endasm(void),
 	d_ifdef(int), d_if(void), d_else(void), d_elif(void), d_elifdef(int), d_endif(void),
 	d_include(void), d_include_next(void), d_line(void), d_error(void), d_warning(void),
-	d_pragma(void);
+	d_pragma(void), d_ident(void);
 static
 int iftest(void);
 static
@@ -443,6 +443,10 @@ static tlist_t tlmakei(int, INT);
 /* Raw Tokenizer variables - nextrawpp() */
 static
 int rawpp;		/* Current raw token type from nextrawpp() */
+/* Source line at the beginning of a raw token, before scanner lookahead.
+** Object-like macro replacement inherits the invocation's line. */
+static int raw_token_line_v60i;
+static int object_macro_line_v60i;
 static
 union pptokval rawval;	/* Current raw token value */
 static
@@ -595,7 +599,7 @@ SYMBOL *mdefstr(char *, int, char *),
 	     *mdefsym(char *, struct macframe
 *);
 static
-int     mexptop(SYMBOL *, int), margs(tlist_t *, int, int, int);
+int     mexptop(SYMBOL *, int, int), margs(tlist_t *, int, int, int);
 static
 tlist_t mexpand(tlist_t, int), mexplim(tlist_t, int),
 	      mexpsym(SYMBOL *, int), msubst(struct macframe
@@ -646,6 +650,7 @@ ppinit(void)
     eof = 0;
     tline = 0;
     fline = page = line = 1;
+    raw_token_line_v60i = object_macro_line_v60i = 0;
 
     /* Set variables local to preprocessor */
     ppcreset();
@@ -986,7 +991,7 @@ pass_ident (FILE* fp)
     register
     char*	cp;
     size_t	off;
-
+    int ident_line = fline;
 
     off = ppcbegoff ();
 
@@ -998,7 +1003,7 @@ pass_ident (FILE* fp)
     cp = ppcatoff (off);
 
     if (((sym = findmacsym (cp)) == NULL)	/* If not a macro, */
-	    || !mexptop (sym, 0))	/* or can't expand it, */
+	    || !mexptop (sym, 0, ident_line))	/* or can't expand it, */
 	{
 	cp = ppcatoff (off);
 	fputs (cp, fp);		/* just output the identifier. */
@@ -1869,6 +1874,7 @@ nextrawpp (void)
     size_t  rawoff = 0;
 
 
+    raw_token_line_v60i = fline;
     rawval.i = 0;
     
     switch (ch)
@@ -2770,7 +2776,7 @@ findident(void)
     cursym = symfind(cp, 1);	/* Find sym or create global symbol! */
     if (cursym->Sclass == SC_MACRO)
 	{
-	if (!curptr && mexptop(cursym, 0))	/* Is macro! OK to expand? */
+	if (!curptr && mexptop(cursym, 0, raw_token_line_v60i))	/* Is macro! OK to expand? */
 	    return nextpp();		/* Yes, return cooked tokens!*/
 	    
 	/* Sym is macro, but not being expanded, so search again to find
@@ -3243,9 +3249,10 @@ tkerr(char * rtn, int i)
 */
 static
 int
-mexptop(struct symbol * sym, int hs)
+mexptop(struct symbol * sym, int hs, int ident_line)
 {
     tlist_t tl;
+    int saved_line = object_macro_line_v60i;
 
     /* Special check.  If fn-like macro, there must be a '('
     ** as next token or we mustn't expand it.  Gross hack needed here.
@@ -3259,7 +3266,12 @@ mexptop(struct symbol * sym, int hs)
     if (curtl.tl_head || mactl.tl_head)
 	int_error("mexptop: not toplev");
 
+    /* Do not rewind the physical input line counter: lookahead may have
+    ** crossed a splice or newline. A function-like invocation retains
+    ** the existing closing-parenthesis line convention. */
+    object_macro_line_v60i = sym->Smacnpar < 0 ? ident_line : 0;
     tl = mexpsym(sym, hs);	/* Expand macro! */
+    object_macro_line_v60i = saved_line;
     if (tl.tl_head)		/* May expand to empty list... */
 	{
 	if (curtl.tl_head)
@@ -3305,6 +3317,7 @@ mexpsym(struct symbol * sym, int hs)
 #endif
     struct macframe mf;		/* Current macro frame */
     int i, parens, fixed;
+    int saved_line = object_macro_line_v60i;
 #if !HOST_DAIMOS
     int symv;
     char *cp1, *cp2;
@@ -3353,7 +3366,7 @@ mexpsym(struct symbol * sym, int hs)
 		    return tlmakecp(T_SCONST, ver_str);
 		    }
 	    case MACF_LINE:	/* __LINE__ */
-		return tlimake(fline, 10);	/* Return a T_ICONST list */
+		return tlimake(object_macro_line_v60i ? object_macro_line_v60i : fline, 10);
 
 	    case MACF_FILE:	/* __FILE__ */
 		    {
@@ -3476,6 +3489,13 @@ else
 	    }
 	}
 
+    /* A function-like replacement is attributed to the closing
+    ** parenthesis. In particular, an object-like alias may have
+    ** expanded to a function macro and consumed more source lines. */
+    if (mf.mf_nargs >= 0)
+        object_macro_line_v60i = rawptr
+            ? (saved_line ? saved_line : fline) : raw_token_line_v60i;
+
     /* Have body and args, now turn it into a tokenlist */
     maclevel++;			/* Is this really necessary? */
     mf.mf_sym = sym;
@@ -3485,6 +3505,7 @@ else
     tl = tlhide(tl, hspush(sym, hs));	/* Apply hideset to all tokens */
 #endif
     --maclevel;
+    object_macro_line_v60i = saved_line;
     return tl;
 }
 
@@ -4251,6 +4272,8 @@ break;
 	res = flushing ? PPR_FLUSH : d_undef();
     else if (!strcmp(rawval.cp,"error"))
 	res = flushing ? PPR_FLUSH : d_error();
+    else if (!strcmp(rawval.cp,"ident") && clevkcc)
+	res = flushing ? PPR_FLUSH : d_ident();
     break;
     case 6:
 	if (!strcmp(rawval.cp,"ifndef")) res = d_ifdef(0);
@@ -4931,6 +4954,7 @@ for (;;)
 		    register char *cp;
 		    tlist_t strtl;
 		    size_t idoff;
+                    int ident_line = fline;
 
 		    ppcput(ch);			/* Store first char of ident */
 		    idoff = (size_t)(ppcptr - ppcpool);
@@ -4940,7 +4964,7 @@ for (;;)
 		    cp = ppcatoff(idoff);
 
 		    if ((sym = findmacsym(cp)) == NULL	/* If not a macro, */
-			|| !mexptop(sym, 0))		/* or can't expand it, */
+			|| !mexptop(sym, 0, ident_line))		/* or can't expand it, */
 			{
 		        (void)ppcbackup();		/* just undo the ppcend() */
 			continue;			/* and carry on! */
@@ -6019,6 +6043,23 @@ d_line(void)
     return PPR_CHECKEOL;
 }
 
+/* GNU #ident is optional object identification metadata. PDP-10 object
+** formats used by KCC have no identification section; validate the syntax
+** without reserving target memory or adding a loadable string. */
+static int
+d_ident(void)
+{
+    if (tskipwsp() != T_SCONST || rawval.cp[0] == 'L') {
+        error("#ident requires a narrow string literal");
+        return PPR_FLUSH;
+    }
+    if (tskipwsp() != T_EOL && rawpp != T_EOF) {
+        error("Unexpected tokens after #ident string");
+        return PPR_FLUSH;
+    }
+    return PPR_ATEOL;
+}
+
 /* D_ERROR() - Process #error directive
 */
 static
