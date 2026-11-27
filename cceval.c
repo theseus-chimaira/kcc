@@ -31,6 +31,8 @@ int sideffp(NODE *n);				/* Used here and CCGEN2 */
 INT istrue(NODE *test, NODE *bindings);		/* CCGEN1's gfor() */
 
 /* Imported functions */
+extern INT sizeptobj(TYPE *);
+extern int elembsize(TYPE *);
 extern INT sizetype(TYPE *);					/* CCSYM */
 extern NODE *ndef(int op, TYPE *t, int f, NODE *l, NODE *r);	/* CCSTMT */
 extern NODE *convbinary(NODE *), *convnullcomb(NODE *);	/* CCTYPE */
@@ -80,6 +82,183 @@ evalexpr(struct node * e)
 {
     ecanon(e = eval(e));
     return e;
+}
+
+/* Constant pointer differences do not need a relocation when both
+** operands refer to the same static object.  Use physical bit coordinates
+** from the high end of its first word; never subtract encoded P/S words.
+** Keep this GNU extension limited to the native, evenly dividing byte
+** sizes and word addresses.  Packed and representation-polymorphic
+** pointers need their own coordinate rules.
+*/
+#define COORD_LIMIT (01000000L * TGSIZ_WORD)
+
+static INT
+coord_unit(TYPE *t)
+{
+    TYPE *p;
+    int b;
+
+    if (t->Tspec != TS_PTR || tispackedptr(t) || tisbitptr(t)
+      || tismaybitptr(t))
+        return 0;
+    p = t->Tsubt;
+    while (p->Tspec == TS_ARRAY) {
+        if (tisvla(p) || tispacked(p))
+            return 0;
+        p = p->Tsubt;
+    }
+    if (tispacked(p) || p->Tspec == TS_VOID || p->Tspec == TS_FUNCT)
+        return 0;
+    if (!tisbytepointer(t))
+        return TGSIZ_WORD;
+    b = elembsize(t);
+    return (b > 0 && TGSIZ_WORD % b == 0) ? b : 0;
+}
+
+static int
+ptrcoord(NODE *n, int address, SYMBOL **base, INT *bit, int *member)
+{
+    NODE *p, *i;
+    INT unit, stride, count, off, pos, width;
+
+    if (address) {
+        switch (n->Nop) {
+        case N_PTR:
+            return ptrcoord(n->Nleft, 0, base, bit, member);
+        case Q_PLUS:
+            /* Array subscripting retains the addition as an array
+            ** lvalue instead of introducing a redundant dereference. */
+            if (n->Ntype->Tspec == TS_ARRAY)
+                goto arithmetic;
+            return 0;
+        case Q_IDENT:
+            if (!(n->Nflag & NF_GLOBAL) || tispacked(n->Ntype))
+                return 0;
+            *base = n->Nid;
+            *bit = tisbyte(n->Ntype)
+                 ? TGSIZ_WORD - tbitsize(n->Ntype) : 0;
+            return 1;
+        case Q_DOT:
+        case Q_MEMBER:
+            if (tisbitf(n->Ntype) || tispacked(n->Ntype)
+              || !ptrcoord(n->Nleft, n->Nop == Q_DOT, base, bit, member))
+                return 0;
+            off = n->Nxoff;
+            if (off >= 0) {
+                if (off > COORD_LIMIT / TGSIZ_WORD)
+                    return 0;
+                off *= TGSIZ_WORD;
+            } else {
+                /* Native member offset: word, hardware P, hardware S.
+                ** S=0 is an exact/packed marker, not a native byte.
+                */
+                off = -off;
+                width = off & 077;
+                pos = (off >> 6) & 077;
+                if (!width || pos + width > TGSIZ_WORD
+                  || TGSIZ_WORD % width != 0
+                  || (TGSIZ_WORD - pos - width) % width != 0
+                  || (off >> 12) > COORD_LIMIT / TGSIZ_WORD)
+                    return 0;
+                off = (off >> 12) * TGSIZ_WORD
+                    + TGSIZ_WORD - pos - width;
+            }
+            if (*bit < 0 || off > COORD_LIMIT - *bit)
+                return 0;
+            *bit += off;
+            *member = 1;
+            return 1;
+        default:
+            return 0;
+        }
+    }
+
+    unit = coord_unit(n->Ntype);
+    if (!unit)
+        return 0;
+    switch (n->Nop) {
+    case N_PCONST:
+        /* GNU offsetof idiom: a null structure base, never a raw
+        ** nonzero machine pointer. No actual storage is accessed.
+        */
+        if (n->Niconst != 0)
+            return 0;
+        *base = NULL;
+        *bit = 0;
+        return 1;
+    case N_ADDR:
+        return ptrcoord(n->Nleft, 1, base, bit, member);
+    case Q_IDENT:
+        /* A decayed static array, not the value of a pointer object. */
+        if (!(n->Nflag & NF_GLOBAL)
+          || n->Nid->Stype->Tspec != TS_ARRAY
+          || tispacked(n->Nid->Stype))
+            return 0;
+        *base = n->Nid;
+        *bit = 0;
+        return 1;
+    case N_CAST:
+        if ((n->Ncast != CAST_NONE && n->Ncast != CAST_PT_PT)
+          || !ptrcoord(n->Nleft, 0, base, bit, member))
+            return 0;
+        /* Only exact coordinate-preserving conversions. */
+        return *bit % unit == 0;
+    case Q_PLUS:
+    case Q_MINUS:
+    arithmetic:
+        p = n->Nleft;
+        i = n->Nright;
+        if (n->Nop == Q_PLUS && p->Nop == N_ICONST) {
+            p = n->Nright;
+            i = n->Nleft;
+        }
+        unit = coord_unit(p->Ntype);
+        if (!unit || i->Nop != N_ICONST || (i->Nflag & NF_WIDE)
+          || !ptrcoord(p, 0, base, bit, member))
+            return 0;
+        stride = sizeptobj(p->Ntype);
+        if (stride <= 0 || stride > COORD_LIMIT / unit)
+            return 0;
+        stride *= unit;
+        count = i->Niconst;
+        if (count < -COORD_LIMIT / stride
+          || count > COORD_LIMIT / stride)
+            return 0;
+        if (n->Nop == Q_MINUS)
+            count = -count;
+        off = count * stride;
+        if (off < -*bit || off > COORD_LIMIT - *bit)
+            return 0;
+        *bit += off;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int
+foldptrdiff(NODE *e)
+{
+    SYMBOL *a, *b;
+    INT left, right, unit, stride;
+    int amember = 0, bmember = 0;
+
+    unit = coord_unit(e->Nleft->Ntype);
+    if (!unit || unit != coord_unit(e->Nright->Ntype)
+      || !ptrcoord(e->Nleft, 0, &a, &left, &amember)
+      || !ptrcoord(e->Nright, 0, &b, &right, &bmember) || a != b
+      || (!a && !amember && !bmember))
+        return 0;
+    stride = sizeptobj(e->Nleft->Ntype);
+    if (stride <= 0 || stride > COORD_LIMIT / unit)
+        return 0;
+    stride *= unit;
+    if ((left - right) % stride != 0)
+        return 0;
+    e->Nop = N_ICONST;
+    e->Niconst = (left - right) / stride;
+    return 1;
 }
 
 static NODE *
@@ -140,6 +319,11 @@ eval(NODE *e)
     case TKTY_BINOP:			/* Ordinary binary ops */
 	e->Nleft  = eval(e->Nleft);	/* First fold operands */
 	e->Nright = eval(e->Nright);
+        if (e->Nop == Q_MINUS && clevkcc
+          && e->Nleft->Ntype->Tspec == TS_PTR
+          && e->Nright->Ntype->Tspec == TS_PTR
+          && e->Ntype->Tspec != TS_PTR && foldptrdiff(e))
+            return e;
 	if (eisconst(e->Nleft)) {
 	    if (eisconst(e->Nright))
 		return evalbinop(e);	/* Do binary op on two constants */
