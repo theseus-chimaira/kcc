@@ -1959,15 +1959,11 @@ tolong(TYPE *t, INT val)
 	case TS_ULONGLONG:	return (unsigned INT) val;
 
 	case TS_BITF:
-	case TS_CHAR:  /* return (char) val;          */
-	    if (val & (1 << (tbitsize(t)-1)))	/* If sign bit set */
-		return val | (INT)~(((unsigned INT)1 << tbitsize(t)) - 1);
-	    /* Else drop through to handle like unsigned */
-
-	/* FALLTHROUGH */
+	case TS_CHAR:
+	    return targetint(tbitsize(t), 0, val);
 	case TS_UBITF:
-	case TS_UCHAR: /* return (unsigned char) val; */
-	    return val & ((1<<tbitsize(t))-1);	/* Mask off */
+	case TS_UCHAR:
+	    return targetint(tbitsize(t), 1, val);
 
 	default:
 	    int_error("tolong: bad type");
