@@ -4161,20 +4161,14 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                 if (tag->Stype->Tspec == TS_UNION
                   && clevel < CLEV_ANSI)
                     error("Bit-field not allowed in union");
-                switch (tempsym.Stype->Tspec)
-                    {
-                    case TS_INT:
-                        ts = TS_BITF;
-                        break;
-                    default:
-                        error("Bit-field must be int, unsigned int, or _Bool");
-                    /* FALLTHROUGH */
-                    case TS_UINT:               /* Above error drops thru */
-                        ts = TS_UBITF;
-                        break;
-                    }
-                if (tisbool(tempsym.Stype))
-                    ts = TS_UBITF;
+                /* Integral types up to one machine word share the
+                ** existing signed/unsigned bit-field representation.
+                ** Preserve the declared value width before replacing
+                ** the type with its field-width representation. */
+                if (!tisinteg(tempsym.Stype) || tisdimode(tempsym.Stype))
+                    error("Bit-field requires a one-word integral type");
+                ts = (tisunsign(tempsym.Stype) || tisbool(tempsym.Stype))
+                   ? TS_UBITF : TS_BITF;
                 /* If not on word boundary and previous member was not a
                 ** bitfield, force alignment.  There can be non-bitfield
                 ** objects smaller than a word (eg chars).
@@ -4188,6 +4182,12 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
 
                 nextoken();                     /* move over colon */
                 bsiz = bitfieldwidth(pconst(), 1); /* Parse and validate */
+                if (tisinteg(tempsym.Stype)
+                  && bsiz > (tisbool(tempsym.Stype) ? 1 : tbitsize(tempsym.Stype)))
+                    {
+                    error("Bit-field width exceeds declared type");
+                    bsiz = 1;
+                    }
                 offcode = fldsize((int)bsiz, offset, boffset);  /* Handle it */
                 tempsym.Stype = findctype(ts,           /* Make bitfld type */
                         bsiz | (tempsym.Stype->Tflag&(TF_QUALS|TF_BOOL)),
