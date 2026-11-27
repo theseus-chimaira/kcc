@@ -5708,7 +5708,13 @@ chkarith(TYPE *t, NODE *e, int noptyp)
 {
     NODE *n;
 
-    if (!tisarith(e->Ntype))
+    /* GNU automatic integer initialization uses the same diagnosed
+    ** pointer conversion as assignment. Static address relocations
+    ** still require the existing constant-expression checks. */
+    if (clevkcc && izautof && tisinteg(t))
+        e = convarrfn(e);
+    if (!tisarith(e->Ntype)
+      && !(clevkcc && izautof && tisinteg(t) && e->Ntype->Tspec == TS_PTR))
         {
         error("Initializer must be of arithmetic type");
         return e;
