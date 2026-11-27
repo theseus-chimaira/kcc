@@ -17,6 +17,8 @@ extern TYPE *findtype(int, TYPE *), *findctype(int, INT, unsigned INT, TYPE *),
 	 *findutype(TYPE *), *findqtype(TYPE *, INT);			/* CCSYM */
 extern TYPE *tcomposite(TYPE *, TYPE *);		/* CCSYM */
 extern int cmputype(TYPE *, TYPE *);			/* CCSYM */
+extern SYMBOL *defauto(char *, TYPE *);          /* CCDECL */
+extern SYMBOL *lsymhead;                         /* CCSYM */
 
 /* Exported functions */
 NODE *convcast(TYPE *, NODE *), *convbinary(NODE *), 
@@ -715,9 +717,40 @@ convarrfn(struct node * n)
 	default: break;		/* Not array or function */
 
 	case TS_ARRAY:		/* Convert "array of T" to "pointer to T" */
-	    if (!(n->Nflag & NF_LVALUE)) {	/* Can only convert lvalues */
+	    if (!(n->Nflag & NF_LVALUE)) {
+                /* C99 permits decay of an array member of a non-lvalue
+                ** aggregate. Materialize the aggregate value in ordinary
+                ** automatic storage before taking the member address.
+                ** A comma-expression preserves evaluation (including
+                ** discarded results), and the source is evaluated once.
+                ** Do not turn the source expression itself into an lvalue.
+                */
+                if (CSTD_HAS(CSTD_C99) && lsymhead != NULL
+                  && n->Nop == Q_DOT && n->Nleft != NULL
+                  && (n->Nleft->Ntype->Tspec == TS_STRUCT
+                      || n->Nleft->Ntype->Tspec == TS_UNION)) {
+                    static unsigned int serial;
+                    char name[24];
+                    SYMBOL *tmp;
+                    NODE *id, *assign, *seq, *ptr;
+                    TYPE *t = findutype(n->Nleft->Ntype);
+
+                    sprintf(name, "%carr%u", SPC_IAUTO, ++serial);
+                    tmp = defauto(name, t);
+                    id = ndefident(tmp);
+                    id->Nflag |= NF_LVALUE;
+                    assign = ndef(Q_ASGN, t, NF_DISCARD, id, n->Nleft);
+                    seq = ndef(N_EXPRLIST, t, NF_DISCARD, NULL, assign);
+                    n->Nleft = ndefident(tmp);
+                    n->Nleft->Nflag |= NF_LVALUE;
+                    n->Nflag &= ~(NF_GLOBAL | NF_STKREF);
+                    n->Nflag |= NF_LVALUE;
+                    ptr = convarrfn(n);
+                    return ndef(N_EXPRLIST, ptr->Ntype, ptr->Nflag,
+                                seq, ptr);
+                }
 		error("Array ref must be lvalue");
-	    }				/* Do it anyway after complaint */
+	    }
 
 	    if (!(n->Nflag & NF_GLOBAL)) { /* If obj has local extent */
 		stackrefs++;		/* then count it as a */
