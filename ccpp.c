@@ -671,6 +671,8 @@ ppinit(void)
      * type in the native PDP-10 ABI (nine-bit C characters).  Expose
      * the type spelling expected by imported GCC-compatible sources. */
     mdefstr("__SIZE_TYPE__", MACF_ATOM, "unsigned int");
+    /* Matches the installed stddef.h and native pointer subtraction. */
+    mdefstr("__PTRDIFF_TYPE__", MACF_ATOM, "int");
     mdefstr("__LONG_LONG_71BIT__", MACF_ATOM, "1");
     mdefstr("__LINE__",		MACF_LINE, NULL);
     mdefstr("__FILE__",		MACF_FILE, NULL);

@@ -1332,10 +1332,11 @@ NODE *
 exprconst(void)
 {
     NODE *e;
+    int saved = constexpr;
 
     constexpr = 1;
     e = evalexpr(condexpr());	/* Get fully optimized expression */
-    constexpr = 0;
+    constexpr = saved;
     return e;
 }
 
@@ -1956,6 +1957,38 @@ binary(int prec)
 **	Postfix inc/dec: ++ --	scalar	bin	=	no
 */
 
+/* Parse a compound literal after its type and closing parenthesis.
+** Both cast-expr and sizeof's postfix-expression path use this parser. */
+static NODE *
+compoundliteral_v60g(TYPE *t)
+{
+    NODE *n;
+    static int clcntr = 0;
+    char temp[24];
+    SYMBOL *s;
+    NODE *iz, *id, *data;
+    INT oldsz, newsz;
+
+    stmtintname(temp, "clit", (unsigned int)++clcntr);
+    oldsz = sizetype(t);
+    if (lsymhead == NULL)
+	s = defstatic(temp, t);
+    else
+	s = defauto(temp, t);
+    iz = pizer(s);
+    newsz = sizetype(s->Stype);
+    if (lsymhead != NULL && newsz > oldsz)
+	maxauto += newsz - oldsz;
+    id = ndefident(s);
+    id->Nflag |= NF_LVALUE;
+    if (lsymhead == NULL)
+	data = iz;
+    else
+	data = ndeflr(N_DATA, ndeflr(N_IZ, ndefident(s), iz), NULL);
+    n = ndef(N_COMPLIT, s->Stype, NF_LVALUE, data, id);
+    return posttail(n);
+}
+
 static NODE *
 castexpr(void)
 {
@@ -1967,46 +2000,16 @@ castexpr(void)
     nextoken();			/* Peek at next token */
     if (token == T_LBRACE)
 	return stmtexpr();	/* GNU statement expression */
-    if (csymbol && (tok[token].tktype == TKTY_RWTYPE
+    /* __extension__ may introduce an expression, not a type-name. */
+    if (token != T_EXTENSION && csymbol
+        && (tok[token].tktype == TKTY_RWTYPE
 			|| csymbol->Sclass == SC_TYPEDEF))
 	{
 	t = typename();		/* Parse the type-name */
 	expect(T_RPAREN);
 
-	/* C99 compound literal: (type-name) { initializer-list }.
-	** At block scope the unnamed object has automatic storage duration.
-	** Represent it as an ordinary hidden automatic declaration attached to
-	** an expression node; code generation performs the initialization at
-	** the point where the expression is evaluated and then yields the
-	** hidden object as an lvalue.
-	*/
 	if (token == T_LBRACE)
-	    {
-	    static int clcntr = 0;
-	    char temp[24];
-	    SYMBOL *s;
-	    NODE *iz, *id, *data;
-	    INT oldsz, newsz;
-
-	    stmtintname(temp, "clit", (unsigned int)++clcntr);
-	    oldsz = sizetype(t);
-	    if (lsymhead == NULL)
-		s = defstatic(temp, t);
-	    else
-		s = defauto(temp, t);
-	    iz = pizer(s);
-	    newsz = sizetype(s->Stype);
-	    if (lsymhead != NULL && newsz > oldsz)
-		maxauto += newsz - oldsz;
-	    id = ndefident(s);
-	    id->Nflag |= NF_LVALUE;
-	    if (lsymhead == NULL)
-		data = iz;
-	    else
-		data = ndeflr(N_DATA, ndeflr(N_IZ, ndefident(s), iz), NULL);
-	    n = ndef(N_COMPLIT, s->Stype, NF_LVALUE, data, id);
-	    return posttail(n);
-	    }
+	    return compoundliteral_v60g(t);
 
 	n = convcast(t, convarrfn(castexpr()));
 					/* Get expression, apply cast */
@@ -2119,7 +2122,7 @@ unary(void)
 
 	case T_EXTENSION:
 	    nextoken();
-	    return unary();
+	    return castexpr();
 
 	case T_INC:
 	    nextoken();		/* ++() Prefix increment */
@@ -2549,11 +2552,19 @@ sizeexpr(void)
     if (nextoken() == T_LPAREN)	/* Check for possible type-name */
 	{
 	nextoken();
-	if(csymbol && (tok[token].tktype == TKTY_RWTYPE
+	if(token != T_EXTENSION && csymbol
+            && (tok[token].tktype == TKTY_RWTYPE
 		|| csymbol->Sclass == SC_TYPEDEF))
 	    {
 	    t = typename();
 	    expect(T_RPAREN);
+            /* sizeof (T){...} is sizeof of a postfix expression.
+            ** Its initializer is parsed but never executed. */
+            if (token == T_LBRACE)
+                {
+                e = compoundliteral_v60g(t);
+                t = e->Ntype;
+                }
 	    }
 	else	/* Not a reserved-word type or typedef, push paren back. */
 	    tokpush(T_LPAREN, (SYMBOL *)NULL);

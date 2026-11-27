@@ -548,6 +548,13 @@ tntdef(void)
                 continue;
             case SC_EXLINK:
                 s->Sclass = SC_EXTDEF;  /* Always do it if external linkage */
+                /* C99 6.9.2: an otherwise incomplete external tentative
+                ** array definition has one element at translation-unit end.
+                ** A later complete declaration has already updated Stype. */
+                if (s->Stype->Tspec == TS_ARRAY && s->Stype->Tsize == 0
+                  && !tisvla(s->Stype))
+                    s->Stype = findctype(TS_ARRAY, s->Stype->Tflag, 1,
+                                         s->Stype->Tsubt);
                 break;
             }
         /* Set up a Q_IDENT and a null izer definition for it */

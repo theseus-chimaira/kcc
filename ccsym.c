@@ -584,6 +584,21 @@ syminit(void)
 	s->Stoken = i;
 	s->Skey = tok[i].tktype;
 	}
+    /* GNU qualifier spellings are reserved aliases of the same tokens.
+    ** No new token numbers or split-phase representation are needed. */
+    if (clevkcc) {
+        static struct { char *name; int token; } aliases[] = {
+            { "__const", T_CONST }, { "__const__", T_CONST },
+            { "__volatile", T_VOLATILE }, { "__volatile__", T_VOLATILE },
+            { "__signed", T_SIGNED }, { "__signed__", T_SIGNED }
+        };
+        for (i = 0; i < sizeof(aliases) / sizeof(aliases[0]); ++i) {
+            s = symgcreat(aliases[i].name);
+            s->Sclass = SC_RW;
+            s->Stoken = aliases[i].token;
+            s->Skey = tok[s->Stoken].tktype;
+        }
+    }
 #endif
     minsym = symtail;
 
