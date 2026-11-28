@@ -4075,8 +4075,9 @@ foldxref(struct pcode * p)
 
 			    q->Pop = P_MOVE;		/* fold: Q to MOVEI */
 			    q->Pindex = s;		/* of (S) */
-			    foldidx(q);			/* Try to optimize index reg */
-			    s = q->Pindex;		/* Remember it */
+			    foldidx(q);			/* Optimize input index */
+			    /* S is the result AC, not the rewritten
+			    ** input index of this address calculation. */
 			    dropinstr(p);		/* Flush the OP we added */
 			    if (o)
 				code00(P_ADD, q->Preg, o);	/* followed by P_ADD */
