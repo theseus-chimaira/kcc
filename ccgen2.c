@@ -5299,6 +5299,12 @@ gunary(NODE *n)
 	    return gaddress(n->Nleft);
 
 	case N_PTR:
+	    /* GNU void indirection evaluates the pointer but reads no
+	    ** object. This also applies without parser optimization. */
+	    if (n->Ntype->Tspec == TS_VOID) {
+		genxrelease(n->Nleft);
+		return NULL;
+	    }
 	/* See comments at gprimary() about volatile objects. */
 	    if ((volat = tisvolatile(n->Ntype)) != 0)
 		flushcode();		/* Obj is volatile, avoid optimiz */

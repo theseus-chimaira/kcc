@@ -2271,7 +2271,8 @@ unary(void)
 	}
     nextoken();			/* Have a prefix op, move on to next token */
     n = castexpr();		/* and parse cast-expr following the op */
-    if (n->Ntype->Tspec == TS_VOID)
+    if (n->Ntype->Tspec == TS_VOID
+      && !(op == N_ADDR && n->Nop == N_PTR))
 	error("Unary operand cannot have void type");
 
     switch (op)
@@ -2489,11 +2490,10 @@ ptrapply(struct node * n)
 	error("Operand of * must have pointer type");
 	n->Ntype = findtype(TS_PTR, n->Ntype);	/* patch up */
 	}
-    if (n->Ntype->Tsubt->Tspec == TS_VOID)
-	{
+    if (!clevkcc && n->Ntype->Tsubt->Tspec == TS_VOID)
+        /* Preserve the typed lvalue after diagnosis. In particular,
+        ** &*p must not feed an integer dummy into address folding. */
 	error("Operand of * cannot be ptr to void");
-	return ndeficonst(0);
-	}
     n = ndef(N_PTR, n->Ntype->Tsubt, 0, n, (NODE*)NULL);
 
     if (debcsi == KCC_DBG_NULL)
@@ -2764,7 +2764,10 @@ sizeexpr(void)
     switch (t->Tspec)
 	{
 	case TS_VOID:
-	    warn("Operand of sizeof has void type");
+	    if (clevkcc)
+		n->Niconst = 1; /* GNU void size is one C address unit. */
+	    else
+		warn("Operand of sizeof has void type");
 	    break;
 
 	case TS_FUNCT:

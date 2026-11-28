@@ -2437,6 +2437,10 @@ edisc(NODE *n)
 		    break;
 
 		case N_PTR:			/* Always lvalue, so check */
+		    /* A GNU void dereference has no object value to load,
+		    ** even when qualified volatile. Keep pointer side effects. */
+		    if (n->Ntype->Tspec == TS_VOID)
+			return edisc(n->Nleft);
 		    if (tisvolatile(n->Ntype))	/* Check, note type will  */
 			return n;		/* never be struct/union */
 		    break;		/* so needn't use tisanyvolat */
