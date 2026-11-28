@@ -6956,6 +6956,34 @@ gmaybitstoredepth(VREG *reg, NODE *n, int depth)
 ** is partial, its value bits occupy the high part and its low bits are
 ** padding.  Assemble at most four fragments into one 36-bit accumulator.
 */
+/* Ordinary crossing fields have a known word phase, unlike a logical
+** S=1 pointer supplied by an arbitrary packed aggregate. Change only
+** the P/S bits of the internal pointer and advance one word between
+** fragments. TLC preserves the address and is available on PDP-6.
+** The caller starts with an S=1 pointer to the first field bit.
+*/
+static int
+gfieldfragment_v61h(VREG *p, int phase, int bits, int done)
+{
+    int take, oldps, newps;
+
+    if (phase < 0)
+        return 1;
+    if (done == 0) {
+        take = TGSIZ_WORD - phase;
+        if (take > bits) take = bits;
+        oldps = ((TGSIZ_WORD - phase - 1) << 6) | 1;
+        newps = ((TGSIZ_WORD - phase - take) << 6) | take;
+    } else {
+        take = bits - done;
+        oldps = done;
+        newps = ((TGSIZ_WORD - take) << 6) | take;
+        code1(P_ADD, p, 1);
+    }
+    code8(P_TLC, p, (oldps ^ newps) << 6);
+    return take;
+}
+
 static VREG *
 gpackedload(NODE *n)
 {
@@ -6971,7 +6999,7 @@ gpackedloadat(NODE *n, VREG *savedbase)
     bits = tbitsize(n->Ntype);
     if (bitptrderef(n) || bitptrmember(n) || crossbit(n->Nxoff))
         {
-        int done, bflags;
+        int done, phase, take;
         VREG *acc;
 
         if (savedbase != NULL)
@@ -6982,31 +7010,30 @@ gpackedloadat(NODE *n, VREG *savedbase)
             }
         else
             base = gaddress(n);
-        bflags = base->Vrflags;
-        base->Vrflags |= VRF_LOCK;
-        p = vrget();
-        codek0(P_MOVE, p, base);
+        p = base;
         flushcode();
         saveflags = p->Vrflags;
         p->Vrflags |= VRF_LOCK;
-        acc = vrget();
-        acc->Vrtype = uinttype;
-        code5(P_SETZ, acc);
-        for (done = 0; done < bits; ++done)
+        acc = NULL;
+        phase = crossbit(n->Nxoff) && !bitptrmember(n)
+                && !bitptrderef(n) ? crossbitoff(n->Nxoff) % TGSIZ_WORD : -1;
+        for (done = 0; done < bits; done += take)
             {
+            take = gfieldfragment_v61h(p, phase, bits, done);
             q = vrget();
             q->Vrtype = uinttype;
             code00(P_LDB, vrtoreal(q), vrtoreal(p));
-            if (done != 0)
-                code8(P_LSH, acc, 1);
-            code0(P_IOR, acc, q);
-            if (done + 1 < bits)
+            if (acc == NULL)
+                acc = q;
+            else {
+                code8(P_LSH, acc, take);
+                code0(P_IOR, acc, q);
+            }
+            if (phase < 0 && done + take < bits)
                 code00(P_IBP, 0, vrtoreal(p));
             }
         p->Vrflags = saveflags;
         vrfree(p);
-        base->Vrflags = bflags;
-        vrfree(base);
         return gcastr(CAST_IT_IT, acc, uinttype, n->Ntype, (NODE *)NULL);
         }
     if (packedbit(n->Nxoff) || packedbitscalar(n->Nxoff))
@@ -7126,7 +7153,7 @@ gpackedstoreat(VREG *reg, NODE *n, VREG *savedbase)
     bits = tbitsize(n->Ntype);
     if (bitptrderef(n) || bitptrmember(n) || crossbit(n->Nxoff))
         {
-        int done, bflags, rflags, shift;
+        int done, rflags, shift, phase, take;
 
         if (savedbase != NULL)
             {
@@ -7136,34 +7163,34 @@ gpackedstoreat(VREG *reg, NODE *n, VREG *savedbase)
             }
         else
             base = gaddress(n);
-        bflags = base->Vrflags;
         rflags = reg->Vrflags;
-        base->Vrflags |= VRF_LOCK;
         reg->Vrflags |= VRF_LOCK;
-        p = vrget();
-        codek0(P_MOVE, p, base);
+        p = base;
         flushcode();
         pflags = p->Vrflags;
         p->Vrflags |= VRF_LOCK;
-        for (done = 0; done < bits; ++done)
+        phase = crossbit(n->Nxoff) && !bitptrmember(n)
+                && !bitptrderef(n) ? crossbitoff(n->Nxoff) % TGSIZ_WORD : -1;
+        for (done = 0; done < bits; done += take)
             {
-            q = vrget();
-            q->Vrtype = uinttype;
-            codek0(P_MOVE, q, reg);
-            shift = bits - done - 1;
-            if (shift != 0)
+            take = gfieldfragment_v61h(p, phase, bits, done);
+            shift = bits - done - take;
+            /* DPB consumes exactly the low S bits of its source. */
+            if (shift != 0) {
+                q = vrget();
+                q->Vrtype = uinttype;
+                codek0(P_MOVE, q, reg);
                 code8(P_LSH, q, -shift);
-            code1(P_AND, q, 1);
-            code00(P_DPB, vrtoreal(q), vrtoreal(p));
-            vrfree(q);
-            if (done + 1 < bits)
+                code00(P_DPB, vrtoreal(q), vrtoreal(p));
+                vrfree(q);
+            } else
+                code00(P_DPB, vrtoreal(reg), vrtoreal(p));
+            if (phase < 0 && done + take < bits)
                 code00(P_IBP, 0, vrtoreal(p));
             }
         p->Vrflags = pflags;
         vrfree(p);
         reg->Vrflags = rflags;
-        base->Vrflags = bflags;
-        vrfree(base);
         return reg;
         }
     if (packedbit(n->Nxoff) || packedbitscalar(n->Nxoff))
@@ -9651,8 +9678,8 @@ gaddress(NODE *n)
 
         /* A normal cross-word bit-field uses an exact S=1 internal bit
         ** pointer.  Its offset is measured from the aggregate's first bit,
-        ** so first advance the word address, convert it to a one-bit byte
-        ** pointer, and then advance within that word.  Such pointers never
+        ** so advance the word address and encode the known bit phase
+        ** directly in the one-bit byte pointer. Such pointers never
         ** escape because C forbids taking a bit-field address.
         */
         if (crossbit(offset))
@@ -9662,15 +9689,7 @@ gaddress(NODE *n)
             INT phase = bit % TGSIZ_WORD;
             if (word != 0)
                 code1(P_ADD, r, word);
-            pitopc(r, 1, 0, 0);
-            if (phase != 0)
-                {
-                p = vrget();
-                code1(P_MOVE, p, phase);
-                code0(P_ADJBP, p, r);
-                vrfree(r);
-                r = p;
-                }
+            pitopc(r, 1, phase, 0);
             return r;
             }
 
