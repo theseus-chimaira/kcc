@@ -38,7 +38,7 @@ NODE {
 	union n_v n_v1;		/* Ordinary var 1 */
       } n_v01;
       INT n_long;		/* or integer/pointer constant value */
-      double n_double;		/* or double (float) constant value (2 wds) */
+      INT n_fpwords[2]; /* canonical target floating image */
       struct {			/* or string constant (2 wds) */
 	char *n_sptr;		/*	(pointer to string in char pool) */
 	int n_slen;		/*	(length of string including null) */
@@ -123,10 +123,19 @@ NODE {
 */
 #define Niconst n_vu.n_long	/* Integer constant value */
 
-/* N_FCONST - Nfconst
-**	Nfconst contains the (double) value for a floating-point constant node.
-*/
-#define Nfconst n_vu.n_double	/* Floating-point constant value */
+/* N_FCONST: exact target words, using the existing two-word union. */
+#define Nfpwords n_vu.n_fpwords
+struct fp_parts_v62c {
+    unsigned long long frac;
+    int exp, neg;
+};
+extern void fp_unpack_v62c(const INT *, struct fp_parts_v62c *);
+extern void fp_pack_v62c(INT *, unsigned long long, int, int, int, int, int);
+extern void fp_neg_v62c(INT *, int);
+extern int fp_cmp_v62c(const INT *, const INT *);
+extern void fp_from_int_v62c(INT *, unsigned long long, int, int);
+extern void fp_cast_v62c(INT *, int);
+extern void fp_bin_v62c(INT *, const INT *, int, int, int);
 
 /* N_SCONST - Nsconst, Nsclen, Nsclab, Nscnext
 **	Nsconst, Nsclen - Describe a string literal.

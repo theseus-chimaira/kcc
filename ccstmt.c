@@ -3704,21 +3704,8 @@ primary(void)
 
 	case T_FCONST:		/* Handle floating-point constant */
 	    n = ndeft(N_FCONST, constant.ctype);
-	    switch (constant.ctype->Tspec)
-		{
-		case TS_FLOAT:
-		    n->Nfconst = constant.Cdouble;
-		    break;
-		case TS_DOUBLE:
-		    n->Nfconst = constant.Cdouble;
-		    break;
-		case TS_LNGDBL:
-		    n->Nfconst = constant.Clngdbl;
-		    break;
-		default:
-		    int_error ("primary: invalide float const %d",
-			    constant.ctype->Tspec);
-		}
+	    n->Nfpwords[0] = constant.Cfpwords[0];
+	    n->Nfpwords[1] = constant.Cfpwords[1];
 	    nextoken();
 	    break;
 

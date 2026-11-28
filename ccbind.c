@@ -2,7 +2,7 @@
  *
  * The split native compiler serializes the fully typed tree after KPARSE.
  * Keep straight-line constant binding and the associated dead-single-store
- * elimination on that side of KIR1 so KGEN does not need the full expression
+ * elimination on that side of KIR2 so KGEN does not need the full expression
  * evaluator merely to repeat parser-level tree folding.
  */
 #include "cc.h"

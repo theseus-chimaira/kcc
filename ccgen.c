@@ -1397,20 +1397,7 @@ gizconst(NODE *e)
 	    return CT_CON;		/* Say simple constant generated */
 
 	case N_FCONST:			/* Invoke rtn from CCOUT */
-#ifdef __COMPILER_KCC__
-            locctr += outflt(e->Ntype->Tspec, (INT *)&e->Nfconst, 0);
-#else
-            {
-                INT words[2];
-                if (e->Ntype->Tspec == TS_FLOAT) {
-                    words[0] = host_pdp10_float_word_v1(e->Nfconst);
-                    words[1] = 0;
-                } else
-                    host_pdp10_double_words(e->Nfconst,
-                        (unsigned INT *)&words[0], (unsigned INT *)&words[1]);
-                locctr += outflt(e->Ntype->Tspec, words, 0);
-            }
-#endif
+            locctr += outflt(e->Ntype->Tspec, e->Nfpwords, 0);
 	    return CT_CON;		/* Say simple constant generated */
 
 

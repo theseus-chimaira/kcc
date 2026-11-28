@@ -26,8 +26,6 @@ extern unsigned long host_u32_from_bytes(unsigned char *);
 extern void host_double_bits(double, unsigned long *, unsigned long *);
 extern unsigned INT host_pdp10_float_word_v1(double);
 extern void host_pdp10_double_words(double, unsigned INT *, unsigned INT *);
-extern double pdp10_host_round_single_v1(long double);
-extern double pdp10_host_round_single_arith_pdp6_v1(long double);
 #endif
 
 extern char fnargregs;	/* GCC-ABI arg words shimmed for current fn */
@@ -388,6 +386,7 @@ extern void code4(int, VREG *, VREG *), code40(int, int, int, INT);
 extern void code4s(int, VREG *, VREG *, int, INT);
 extern void code5(int, VREG *), code6(int, VREG *, SYMBOL *);
 extern void code8(int, VREG *, INT), code9(int, VREG *, double, int);
+extern void code9words(int, VREG *, const INT *, int);
 extern void code10(int, VREG *, SYMBOL *, INT, INT);
 extern void code12(int, VREG *, INT), code13(int, VREG *, INT);
 extern void code14(int, VREG *, int), code15(int, SYMBOL *, INT, VREG *);

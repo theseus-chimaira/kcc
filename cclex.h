@@ -55,7 +55,7 @@ EXT struct {
     union {
 	INT cint;		/* integer value */
 	float cflt;		/* float value */
-	double cdbl;		/* double value */
+	INT fpwords[2];	/* exact target floating image */
 /*	long double cldbl;	*/
 	struct {		/* string constant */
 	    char *csp;		/*   char pointer */
@@ -79,5 +79,4 @@ EXT struct {
 /*	or flttype */
 /*	or lngdbltype */
 #define Cfloat cvar.cflt	/* floating-point value */
-#define Cdouble cvar.cdbl
-#define Clngdbl cvar.cdbl	/* Not used yet for anything different. */
+#define Cfpwords cvar.fpwords

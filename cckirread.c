@@ -1,4 +1,4 @@
-/* CCKIRREAD.C - KIR1 typed graph reader. */
+/* CCKIRREAD.C - KIR2 typed graph reader. */
 
 #include "cckir.h"
 #include "ccvla.h"
@@ -24,6 +24,8 @@ static SYMBOL **local_syms; static unsigned local_ns;
 static NODE **last_nodes; static unsigned last_nn;
 static int last_mainf;
 static SYMBOL root_symbol;
+extern void kir_backend_root_v62c(SYMBOL *);
+extern void kir_backend_release_v62c(SYMBOL *);
 
 extern int labmax(void);
 extern void labset(int), labrename(SYMBOL *, unsigned int);
@@ -148,7 +150,7 @@ kir_read_header(FILE *fp)
     if (fread(m,1,KIR_MAGIC_BYTES,fp)!=KIR_MAGIC_BYTES || memcmp(m,KIR_MAGIC,KIR_MAGIC_BYTES)!=0) return -1;
     if (get36(fp,&v)||v!=KIR_VERSION) return -1;
     memset(&root_symbol, 0, sizeof(root_symbol));
-    symbol = &root_symbol;
+    kir_backend_root_v62c(&root_symbol);
     return 0;
 }
 
@@ -227,7 +229,10 @@ readgraph(FILE *fp, INT *head, unsigned hn, NODE **root, INT *record)
         nr[id].left=(unsigned)w[j++]; nr[id].right=(unsigned)w[j++]; nr[id].mode=(int)w[j++]; memcpy(nr[id].v0,&w[j],KIR_INT_CHUNKS*sizeof(INT)); j+=KIR_INT_CHUNKS;
         extra=(int)w[j++];
         if(p->Nop==N_ICONST||p->Nop==N_PCONST||p->Nop==N_ECONST){ p->Niconst=unpackint(&w[j]); j+=KIR_INT_CHUNKS; p->n_var1.n_int=unpackint(&w[j]); j+=KIR_INT_CHUNKS; }
-        else if(p->Nop==N_FCONST){ union{double d; unsigned char b[sizeof(double)];}du; memset(&du,0,sizeof(du)); for(k=0;k<(unsigned)extra&&k<sizeof(double);++k)du.b[k]=(unsigned char)w[j++]; p->Nfconst=du.d; }
+        else if(p->Nop==N_FCONST){
+            if (extra!=2 || n!=j+2) goto bad;
+            p->Nfpwords[0]=w[j++]; p->Nfpwords[1]=w[j++];
+        }
         else if(p->Nop==N_SCONST){
             if(extra<=0 || (unsigned)extra > (unsigned)-1 / STRLIT_STRIDE(p->Nflag)) goto bad;
             p->Nsclen=extra;
@@ -357,10 +362,11 @@ clear_module(void)
 {
     unsigned i;
     clear_graph();
+    kir_backend_release_v62c(&root_symbol);
     for(i=1;i<=module_ns;++i) if(module_syms&&module_syms[i]) free(module_syms[i]);
     free(module_syms); module_syms=NULL; module_ns=module_cs=0;
     memset(&root_symbol,0,sizeof(root_symbol));
-    if (symbol == &root_symbol) symbol = NULL;
+
 }
 
 void kir_free_graph(NODE *root){ (void)root; clear_graph(); }

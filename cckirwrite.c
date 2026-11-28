@@ -1,4 +1,4 @@
-/* CCKIRWRITE.C - KIR1 typed graph writer. */
+/* CCKIRWRITE.C - KIR2 typed graph writer. */
 
 #include "cckir.h"
 #include "ccvla.h"
@@ -373,12 +373,11 @@ static int
 writenode(FILE *fp, struct kir_wgraph *g, unsigned id, NODE *p)
 {
     INT w[40]; unsigned n = 0; int mode = 0; INT v0 = 0;
-    union { double d; unsigned char b[sizeof(double)]; } du;
-    unsigned i;
     w[n++] = id; w[n++] = typeid(g, p->Ntype);
     packint(&w[n], (INT)p->Nflag); n += KIR_INT_CHUNKS;
     w[n++] = p->Nop; w[n++] = p->Nreg; w[n++] = p->sfline;
-    w[n++] = nodeid(g, p->Nleft); w[n++] = nodeid(g, p->Nright);
+    if (p->Nop == N_FCONST) { w[n++] = 0; w[n++] = 0; }
+    else { w[n++] = nodeid(g, p->Nleft); w[n++] = nodeid(g, p->Nright); }
     switch (p->Nop) {
     case Q_IDENT: case N_VLA: case N_VLARST: mode = 2; v0 = symid(g, p->Nid); break;
     case N_ACONST: case T_JFFO: case N_LABEL: case Q_GOTO:
@@ -401,8 +400,9 @@ writenode(FILE *fp, struct kir_wgraph *g, unsigned id, NODE *p)
         packint(&w[n], p->Niconst); n += KIR_INT_CHUNKS;
         packint(&w[n], (p->Nflag & NF_WIDE) ? p->n_var1.n_int : 0); n += KIR_INT_CHUNKS;
     } else if (p->Nop == N_FCONST) {
-        du.d = p->Nfconst; w[n++] = sizeof(double);
-        for (i = 0; i < sizeof(double); ++i) w[n++] = du.b[i];
+        w[n++] = 2;
+        w[n++] = p->Nfpwords[0];
+        w[n++] = p->Nfpwords[1];
     } else if (p->Nop == N_SCONST) {
         w[n++] = p->Nsclen;
     } else w[n++] = 0;

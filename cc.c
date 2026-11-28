@@ -1556,7 +1556,7 @@ module_loop:
 
     if (kir_read_header(in) != 0)
 	{
-	jerr("Invalid KIR1 input stream");
+	jerr("Invalid KIR2 input stream");
 	fclose(in);
 	fclose(out);
 	return asmdflg;
@@ -1564,7 +1564,7 @@ module_loop:
     outinit();
     for (;;) {
 	if (kir_read_next(in, &kind, &n) != 0) {
-	    jerr("Invalid or truncated KIR1 input stream");
+	    jerr("Invalid or truncated KIR2 input stream");
 	    break;
 	}
 	if (kind == KIR_REC_EXTDEF) {
@@ -1581,7 +1581,7 @@ module_loop:
 	    outdone(mainflg);
 	    break;
 	}
-	jerr("Unexpected KIR1 record kind %d", kind);
+	jerr("Unexpected KIR2 record kind %d", kind);
 	break;
     }
     kir_free_module();
@@ -1664,7 +1664,7 @@ module_loop:
 	extern void bindopt(NODE *);
 	if (kir_write_header(out) != 0)
 	    {
-	    jerr("Could not write KIR1 header");
+	    jerr("Could not write KIR2 header");
 	    fclose(in);
 	    fclose(out);
 	    return asmdflg;
@@ -1688,7 +1688,7 @@ module_loop:
 		bindopt(n);
 	    if (kir_write_extdef(out, n) != 0)
 		{
-		jerr("Could not write KIR1 external definition");
+		jerr("Could not write KIR2 external definition");
 		break;
 		}
 	    }
@@ -1704,7 +1704,7 @@ module_loop:
 	    {
 	    if (kir_write_tentative(out, n) != 0)
 		{
-		jerr("Could not write KIR1 tentative definition");
+		jerr("Could not write KIR2 tentative definition");
 		break;
 		}
 	    nodeinit();
@@ -1713,9 +1713,9 @@ module_loop:
 	mainflg = mainsymp();
 	if (kir_write_globals(out, symbol) != 0
 	  || kir_write_module_end(out, mainflg) != 0)
-	    jerr("Could not finish KIR1 module");
+	    jerr("Could not finish KIR2 module");
 	if (fclose(out) == EOF)
-	    jerr("Could not flush KIR1 output");
+	    jerr("Could not flush KIR2 output");
 #if HOST_DAIMOS
 	if (daimos_chain_kp1 != NULL && daimos_chain_out != NULL &&
 	    savofnam != NULL) {

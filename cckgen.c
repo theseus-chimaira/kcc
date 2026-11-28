@@ -1,4 +1,4 @@
-/* CCKGEN.C - compact native KIR1 -> KPCODE3 driver. */
+/* CCKGEN.C - compact native KIR2 -> KPCODE3 driver. */
 #include "cckir.h"
 #include <stdlib.h>
 #include <string.h>
@@ -93,7 +93,7 @@ main(int argc, char **argv)
     }
     syminit();
     if (kir_read_header(in) != 0) {
-        fprintf(stderr, "kgen: invalid KIR1 input\n");
+        fprintf(stderr, "kgen: invalid KIR2 input\n");
         fclose(in);
         fclose(out);
 #if HOST_DAIMOS
@@ -107,7 +107,7 @@ main(int argc, char **argv)
     outinit();
     for (;;) {
         if (kir_read_next(in, &kind, &root) != 0) {
-            fprintf(stderr, "kgen: truncated KIR1 input\n");
+            fprintf(stderr, "kgen: truncated KIR2 input\n");
             break;
         }
         if (kind == KIR_REC_EXTDEF) {
@@ -136,7 +136,7 @@ main(int argc, char **argv)
 #endif
             return nerrors == 0 ? 0 : 1;
         }
-        fprintf(stderr, "kgen: unexpected KIR1 record\n");
+        fprintf(stderr, "kgen: unexpected KIR2 record\n");
         break;
     }
     fclose(in);

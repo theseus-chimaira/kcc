@@ -2539,6 +2539,27 @@ codr8(int op, int r, INT val)
 
 void
 code9(int op, VREG *vr, double value, int twowds)
+{
+    INT words[2];
+#ifdef __COMPILER_KCC__
+    union { double d; INT w[2]; } v;
+    v.d=value;
+    words[0]=v.w[0];
+    words[1]=twowds?v.w[1]:0;
+#else
+    if (twowds)
+        host_pdp10_double_words(value,(unsigned INT *)&words[0],
+                                (unsigned INT *)&words[1]);
+    else {
+        words[0]=host_pdp10_float_word_v1(value);
+        words[1]=0;
+    }
+#endif
+    code9words(op,vr,words,twowds);
+}
+
+void
+code9words(int op, VREG *vr, const INT *words, int twowds)
 /* twowds is TRUE if 2 wds (double), else 1-wd float */
 {
     PCODE *p;
@@ -2548,14 +2569,14 @@ code9(int op, VREG *vr, double value, int twowds)
     if (debpho)
 	{
 	shohdr("CODE9", op, r);
-	fprintf(fpho,"[%.20g]\n", value);
+	fprintf(fpho,"[%" INT_OFMT ":%" INT_OFMT "]\n", words[0], words[1]);
 	}
 #endif
 
     /* Optimize a P_MOVE or P_DMOVE of 0.0 since floating point zero is
      * same as integer zero.
      */
-    if (value == 0.0 && optobj)
+    if (!words[0] && !words[1] && optobj)
 	switch (op)
 	    {
 	    case P_DMOVE:	/* Make DMOVE R,[0 ? 0] be SETZB R,R+1 */
@@ -2578,19 +2599,10 @@ code9(int op, VREG *vr, double value, int twowds)
 
     p = newcode((twowds ? PTA_DCONST : PTA_FCONST), op, r);
     if (twowds) {
-#ifdef __COMPILER_KCC__
-        p->p_u.p_dval = value;
-#else
-        host_pdp10_double_words(value, (unsigned INT *)&p->Pdouble1,
-                               (unsigned INT *)&p->Pdouble2);
-#endif
-    }
-    else
-#ifdef __COMPILER_KCC__
-	p->Pfloat = (float) value;
-#else
-	p->Pfloatword = (INT)host_pdp10_float_word_v1 (value);
-#endif
+        p->Pdouble1 = words[0];
+        p->Pdouble2 = words[1];
+    } else
+        p->Pfloatword = words[0];
 
     if (optobj)
 	foldmove(p);	/* see if already have this one */

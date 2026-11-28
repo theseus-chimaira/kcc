@@ -856,7 +856,7 @@ static int
 dzerotok(void)
 {
     constant.ctype = dbltype;
-    constant.Cdouble = 0.0;
+    constant.Cfpwords[0] = constant.Cfpwords[1] = 0;
     return token = T_FCONST;
 }
 
@@ -1096,247 +1096,187 @@ trintcon(void)
 
 /* TRFLTCON() - Transform floating-point PP-number constant
 */
-#ifdef __COMPILER_KCC__
-static long maxdbl[2] = {MAXPOSLONG, MAXPOSLONG};
-#define MAXPOSDOUBLE (*(double *)maxdbl)	/* Native 72-bit double layout. */
-#else
-#include <float.h>
-#include <stdlib.h>
-#include <math.h>
-#define MAXPOSDOUBLE DBL_MAX
-#endif
+/* A fixed decimal grid retains every possible D-format rounding boundary:
+** the smallest relevant midpoint has denominator 2^190. 198 decimal
+** fractional places suffice, with a sticky bit for all remaining digits.
+** Five integer limbs cover the target's 39-digit maximum magnitude.
+** Each base-10^9 limb and twice that limb fit in a native word.
+*/
+#define FPDECBASE 1000000000UL
+#define FPDECFRAC 22
+#define FPDECLIMBS 27
 
+static int
+fp_decimal_nonzero(const unsigned INT *a)
+{
+    int i;
+    for (i=0;i<FPDECLIMBS;++i) if (a[i]) return 1;
+    return 0;
+}
+
+/* Return the integer carry from doubling the fixed decimal grid. */
+static unsigned
+fp_decimal_double(unsigned INT *a)
+{
+    unsigned INT x;
+    unsigned carry=0;
+    int i;
+    for (i=0;i<FPDECLIMBS;++i) {
+        x=a[i]*2+carry;
+        carry=x>=FPDECBASE;
+        a[i]=carry?x-FPDECBASE:x;
+    }
+    return carry;
+}
+
+static int
+fp_decimal_half(unsigned INT *a)
+{
+    unsigned carry=0, next;
+    int i;
+    for (i=FPDECLIMBS-1;i>=0;--i) {
+        next=(unsigned)(a[i]&1);
+        a[i]=(a[i]>>1)+(carry?FPDECBASE/2:0);
+        carry=next;
+    }
+    return carry;
+}
+
+/* Parse a positive literal. Unary minus is evaluated separately.
+** Scan the exponent before converting digits, so very long tokens
+** with compensating exponents need no large temporary allocation.
+*/
 static int
 trfltcon(void)
 {
-    register char *cp;
-    register int c;
-    INT exponent;
-    double divisor, value = 0;		/* accumulated value */
-    int expsign, ovfl = 0;
-
-    /* Internal checks to verify token is correct */
-    if ((cp = curval.cp) == 0 || (!isdigit(c = *cp) && c != '.'))
-	{
-	int_error("trfltcon: bad str");
-	return dzerotok();
-	}
-#ifndef __COMPILER_KCC__
-    /* Host digit-by-digit accumulation rounds at every decimal digit.
-    ** Convert once instead, so exactly representable values agree with
-    ** their arithmetic equivalents. Native KCC retains its own parser. */
-    if (!(c == '0' && (cp[1] == 'x' || cp[1] == 'X'))) {
-        char *end;
-        value = strtod(cp, &end);
-        if (end == cp) {
-            error("Bad floating constant");
+    char *start=curval.cp, *p=start, *end, *q;
+    INT exponent=0, before=0, digits=0, first=-1, position;
+    int hex=0, dot=0, c, negexp=0, single=0, digit, e, i, sticky=0;
+    unsigned long long f=0;
+    unsigned INT a[FPDECLIMBS];
+    if (p[0]=='0' && (p[1]=='x'||p[1]=='X')) {
+        hex=1; p+=2; start=p;
+        if (!CSTD_HAS(CSTD_C99)) {
+            error("Hexadecimal floating constants require C99");
             return dzerotok();
         }
-        if (!isfinite(value)) {
-            error("Floating constant overflow (no PDP-10 nonfinite value)");
-            return dzerotok();
+    }
+    for (;;) {
+        c=*p;
+        if (c=='.' && !dot) { dot=1; ++p; continue; }
+        if (!(hex?isxdigit(c):isdigit(c))) break;
+        digit=hex?toint((char)c):c-'0';
+        if (digit && first<0) first=digits;
+        ++digits;
+        if (!dot) ++before;
+        ++p;
+    }
+    end=p;
+    if (!digits) goto bad;
+    if ((hex && (*p=='p'||*p=='P')) ||
+        (!hex && (*p=='e'||*p=='E'))) {
+        ++p;
+        if (*p=='+'||*p=='-') negexp=*p++=='-';
+        if (!isdigit(*p)) goto bad;
+        while (isdigit(*p)) {
+            /* Saturate beyond any possible source-token compensation.
+            ** The token itself is bounded by the compiler's input arena. */
+            if (exponent<100000000L)
+                exponent=exponent*10+(*p-'0');
+            ++p;
         }
-        cp = end;
-        c = *cp;
-        goto fltdone;
+    } else if (hex) goto bad;
+    if (negexp) exponent=-exponent;
+    constant.ctype=dbltype;
+    if (*p=='f'||*p=='F') { constant.ctype=flttype; single=1; ++p; }
+    else if (*p=='l'||*p=='L') { constant.ctype=lngdbltype; ++p; }
+    if (*p) goto bad;
+    constant.Cfpwords[0]=constant.Cfpwords[1]=0;
+    if (first<0) return token=T_FCONST;
+
+    if (hex) {
+        int nbits=0, guard=0;
+        /* Leading nonzero digit establishes the exact binary exponent.
+        ** Retain 62 bits, the first discarded bit and sticky. */
+        for (q=start;q<end;++q) {
+            if (*q=='.') continue;
+            digit=toint(*q);
+            for (i=3;i>=0;--i) {
+                c=(digit>>i)&1;
+                if (!nbits && !c) continue;
+                if (!nbits) {
+                    position=4*(before-first-1)+i+1+exponent+128;
+                    if (position>255) goto overflow;
+                    if (position<0) return token=T_FCONST;
+                    e=(int)position;
+                }
+                if (nbits<62) f=(f<<1)|c;
+                else if (nbits==62) guard=c;
+                else sticky|=c;
+                if (nbits<63) ++nbits;
+            }
+        }
+        while (nbits<62) { f<<=1; ++nbits; }
+        fp_pack_v62c(constant.Cfpwords,f,e,0,single,
+            guard?(sticky?1:0):(sticky?-1:-2),0);
+        return token=T_FCONST;
     }
-#endif
-	
-    /* C99 hexadecimal floating constants use a binary exponent. */
-    if (c == '0' && (cp[1] == 'x' || cp[1] == 'X'))
-	{
-	if (!CSTD_HAS(CSTD_C99)) {
-	    error("Hexadecimal floating constants require C99");
-	    return dzerotok();
-	}
-	int ndig = 0;
 
-	cp += 2;
-	c = *cp;
-	while (isxdigit(c))
-	    {
-	    value = value * 16.0 + toint((char)c);
-	    ++ndig;
-	    c = *++cp;
-	    }
-	if (c == '.')
-	    {
-	    divisor = 1.0;
-	    while (isxdigit(c = *++cp))
-		{
-		value += toint((char)c) / (divisor *= 16.0);
-		++ndig;
-		}
-	    }
-	if (!ndig)
-	    {
-	    error("Bad hexadecimal floating constant");
-	    return dzerotok();
-	    }
-	if (c != 'p' && c != 'P')
-	    {
-	    error("Hexadecimal floating constant requires binary exponent");
-	    return dzerotok();
-	    }
-	expsign = (c = *++cp);
-	if (c == '-' || c == '+')
-	    c = *++cp;
-	if (!isdigit(c))
-	    {
-	    error("Bad floating constant exponent");
-	    return dzerotok();
-	    }
-	exponent = c - '0';
-	while (isdigit(c = *++cp))
-	    {
-	    if (exponent > 10000)
-		ovfl = 1;
-	    else
-		exponent = exponent * 10 + (c - '0');
-	    }
-	if (value == 0.0)
-	    {
-	    ovfl = 0;
-	    exponent = 0;
-	    }
-	if (!ovfl)
-	    {
-	    double pv;
-	    if (expsign == '-')
-		while (--exponent >= 0)
-		    {
-		    pv = value;
-		    value /= 2.0;
-		    if (pv != 0.0 && value == 0.0)
-			{ ovfl = 1; break; }
-		    }
-	    else
-		while (--exponent >= 0)
-		    {
-		    pv = value;
-		    if (value > MAXPOSDOUBLE / 2.0)
-			{ ovfl = 1; value = 1.0; break; }
-		    value *= 2.0;
-		    if (value != 0.0 && value < pv)
-			{ ovfl = 1; value = 1.0; break; }
-		    }
-	    }
-	else
-	    value = (expsign == '-') ? 0.0 : 1.0;
-	goto fltdone;
-	}
-
-    /* First do whole-number part.  We use floating arithmetic to avoid
-    ** the real possibility of integer overflow.  Slower, but safer.
-    */
-    for (; isdigit(c); c = *++cp)
-	{
-	value = (value*10.0) + (c-'0');
-	if (value && value < 1.0)	/* If exponent wrapped around, */
-	    ovfl++;			/* we overflowed. */
-	}
-
-    /* Now do fractional part if one was specified */
-    if (c == '.')
-	{
-	divisor = 1.0;		/* Place-value for post-. digits */
-	while (isdigit(*++cp))
-	    value += (*cp - '0') / (divisor *= 10.0);
-	c = *cp;
-	}
-    
-    /* Now exponent, if any */
-    if (c == 'E' || c == 'e')
-	{
-	expsign = (c = *++cp);	/* Get possible exponent sign */
-	if (c == '-' || c == '+')
-	    c = *++cp;
-	if (!isdigit(c))
-	    {
-	    error("Bad floating constant exponent");
-	    return dzerotok();
-	    }
-	exponent = c - '0';
-	while (isdigit(c = *++cp))
-	    {
-	    exponent = exponent*10 + (c-'0');
-	    if (exponent >= ((MAXPOSLONG-9)/10))
-		ovfl++, value = (expsign=='-' ? 0.0 : 1.0);
-	    }
-
-	/* EXTREMELY dumb method of scaling value by exponent */
-	/* Fix this up later!! */
-	if (!ovfl)
-	    {
-	    double pv;
-	    if (expsign == '-')
-		while (--exponent >= 0)
-		    {
-		    pv = value;			/* Remember val so can */
-		    if ((value /= 10.0) > pv)	/* check for underflow */
-			{
-			ovfl++;
-			value = 0;
-			break;
-			}
-		    }
-	    else
-		while (--exponent >= 0)
-		    {
-		    pv = value;
-		    if ((value *= 10.0) < pv)	/* Check for overflow */
-			{
-			ovfl++;
-			value = 1.0;
-			break;
-			}
-		    }
-	    }
-	}
-
-fltdone:
-    /* See whether we overflowed or not, and fix up. */
-    if (ovfl)
-	{
-	if (value)
-	    value = MAXPOSDOUBLE;
-	error("Floating constant %sflow", (int) value ? "over" : "under");
-	}
-
-    /* Now check for suffix type specifier */
-    if (c && toupper((char) c) == 'F')	// FW KCC-NT
-	{
-	constant.ctype = flttype;
-	/* A PDP-10 single float has 27 significant mantissa bits, whereas
-	** the usual host IEEE float has only 24.  Retain the parsed host
-	** double until the 36-bit target word is encoded; a host float
-	** cast here would silently round legal PDP-10 literals too early.
-	*/
-	constant.Cdouble = value;
-	c = *++cp;
-	}
-    else if (c && toupper((char) c) == 'L') // FW KCC-NT
-	{
-	constant.ctype = lngdbltype;
-	constant.Clngdbl = value;
-	c = *++cp;
-	}
-    else if (c)
-	{
-	error("Bad floating constant suffix");
-	return dzerotok();
-	}
-    else
-	{
-	constant.ctype = dbltype;	/* Set constant type to double */
-	constant.Cdouble = value;	/* and set constant value */
-	}
-    if (c) {
-        error("Bad floating constant suffix");
-        return dzerotok();
+    /* Decimal position of the first nonzero digit. Reject obviously
+    ** out-of-range values before building the bounded fixed grid. */
+    position=before-first-1+exponent;
+    if (position>38) goto overflow;
+    if (position < -40) return token=T_FCONST;
+    for (i=0;i<FPDECLIMBS;++i) a[i]=0;
+    position=before-1+exponent+9*FPDECFRAC;
+    for (q=start;q<end;++q) {
+        unsigned INT scale;
+        if (*q=='.') continue;
+        digit=*q-'0';
+        if (digit) {
+            if (position<0) sticky=1;
+            else if (position<9*FPDECLIMBS) {
+                i=(int)(position%9);
+                scale=1;
+                while (i--) scale*=10;
+                a[position/9]+=(unsigned INT)digit*scale;
+            }
+        }
+        --position;
     }
-    return token = T_FCONST;
+    e=128;
+    /* Normalize to [0.5,1) without intermediate floating rounding. */
+    for (;;) {
+        for (i=FPDECLIMBS-1;i>=FPDECFRAC && !a[i];--i) ;
+        if (i<FPDECFRAC) break;
+        sticky|=fp_decimal_half(a);
+        ++e;
+    }
+    while (a[FPDECFRAC-1]<FPDECBASE/2) {
+        fp_decimal_double(a);
+        --e;
+    }
+    /* Extract binary fraction by exact doubling and subtraction of 1. */
+    for (i=0;i<62;++i) {
+        fp_decimal_double(a);
+        f=(f<<1)|a[FPDECFRAC];
+        a[FPDECFRAC]=0;
+    }
+    fp_decimal_double(a);
+    c=(int)a[FPDECFRAC]; a[FPDECFRAC]=0;
+    sticky|=fp_decimal_nonzero(a);
+    fp_pack_v62c(constant.Cfpwords,f,e,0,single,
+        c?(sticky?1:0):(sticky?-1:-2),0);
+    return token=T_FCONST;
+overflow:
+    error("Floating constant exponent exceeds PDP-10 %s format",
+          single?"F":"D");
+    return dzerotok();
+bad:
+    error("Bad floating constant or suffix");
+    return dzerotok();
 }
+
 
 /* TRSTRCON() - Transform string constant
 **	The only chars not allowed in a string constant are

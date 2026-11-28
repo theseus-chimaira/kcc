@@ -1247,7 +1247,7 @@ nisnull(struct node ** an)
 
 #if KCC_PHASE_GEN
     /* KGEN only asks the conversion layer about backend-synthesized nodes.
-    ** Source expressions were already converted and fully folded before KIR1.
+    ** Source expressions were already converted and fully folded before KIR2.
     ** Avoid retaining the complete parser evaluator for this one predicate. */
     while (n->Nop == N_EXPRLIST)
         n = n->Nright;

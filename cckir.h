@@ -3,10 +3,10 @@
 
 #include "cc.h"
 
-/* KIR1 - pointer-free typed parse-tree stream between KPARSE and KGEN. */
-#define KIR_MAGIC "KIR1"
+/* KIR2 - pointer-free typed parse-tree stream between KPARSE and KGEN. */
+#define KIR_MAGIC "KIR2"
 #define KIR_MAGIC_BYTES 4
-#define KIR_VERSION 1
+#define KIR_VERSION 2
 #define KIR_INT_CHUNKS 4
 #define KIR_MAX_RECORD_WORDS 512
 #define KIR_LOCAL_ID_FLAG ((unsigned INT)020000000000)

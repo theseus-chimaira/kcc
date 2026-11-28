@@ -8108,13 +8108,13 @@ gprimary(NODE *n)
 		case TS_FLOAT:
 		    r = vrget();
 		    r->Vrtype = n->Ntype;	/* Set C type of object in reg */
-		    code9(P_MOVE, r, n->Nfconst, 0);
+		    code9words(P_MOVE, r, n->Nfpwords, 0);
 		    break;
 		case TS_DOUBLE:
 		case TS_LNGDBL:
 		    r = vrdget();
 		    r->Vrtype = n->Ntype;	/* Set C type of object in reg */
-		    code9(P_DMOVE, r, n->Nfconst, 1);
+		    code9words(P_DMOVE, r, n->Nfpwords, 1);
 		    break;
 		}
 	    return r;

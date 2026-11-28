@@ -356,7 +356,8 @@ int ind;
 
     /* Now handle special cases which never have links */
     case N_FCONST:
-	fprintf(fdeb, ", val = %.20g\n", n->Nfconst);
+	fprintf(fdeb, ", target words = %" INT_OFMT ":%" INT_OFMT "\n",
+            n->Nfpwords[0], n->Nfpwords[1]);
 	return;
     case N_ICONST:
 	fprintf(fdeb, ", val = %ld\n", (INT) n->Niconst);

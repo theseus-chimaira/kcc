@@ -14,15 +14,7 @@
 #define NEW 3	/* temporary to allow shutting advanced optimiz off if buggy */
 
 #include "cc.h"
-#ifndef __COMPILER_KCC__
-#include <float.h>
-/* Host binary32 loses three fraction bits from a PDP-10 36-bit float. */
-/* EVAL has only the front-end cc.h dependency, not ccgen.h.  The
-** definitions live in shared ccoututil.c, linked by every compiler phase.
-*/
-extern double pdp10_host_round_single_v1 (long double);
-extern double pdp10_host_round_single_arith_pdp6_v1 (long double);
-#endif
+
 
 /* Exported functions */
 NODE *evalexpr(NODE *e);
@@ -452,7 +444,7 @@ evalbool(NODE *e)
 		return (hi != 0 || lo != 0);
 	    }
 	    return (e->Niconst != 0);
-	case N_FCONST:	return (e->Nfconst ? 1 : 0);
+	case N_FCONST:	return (e->Nfpwords[0] != 0 || e->Nfpwords[1] != 0);
     }
     return -1;
 }
@@ -813,11 +805,6 @@ evalbinop(NODE *e)
 {
     INT	l, l2;
     unsigned INT ul, ul2;
-    float	f, f2;
-    double	d, d2;
-#ifndef __COMPILER_KCC__
-    long double fwide;
-#endif
     int log = -1;
     NODE *eleft = e->Nleft;
 #if SYS_CSI			/* FEW 2A(40) 29-Jul-92 */
@@ -925,102 +912,37 @@ evalbinop(NODE *e)
 	break;
 
     case TS_FLOAT:
-#ifndef __COMPILER_KCC__
-	/* Round each operand to target precision first.  Compute with a
-	** wide host intermediate (113 bits on the supported host) and
-	** round the resulting expression once to the target's 27 bits.
-	** Binary32 arithmetic here silently erased valid low bits.
-	*/
-	d = pdp10_host_round_single_v1 ((long double)eleft->Nfconst);
-	d2 = pdp10_host_round_single_v1 ((long double)e->Nright->Nfconst);
-#if LDBL_MANT_DIG < 55
-	/* Multiplying two 27-bit fractions can require 54 exact bits;
-	** on hosts without wider intermediates, preserve runtime order
-	** instead of risking a double-rounding error in constant folding.
-	*/
-	if (e->Nop == Q_PLUS || e->Nop == Q_MINUS ||
-	    e->Nop == Q_MPLY || e->Nop == Q_DIV)
-	    return e;
-#endif
-	switch (e->Nop) {
-	case Q_PLUS:  fwide = (long double)d + (long double)d2; break;
-	case Q_MINUS: fwide = (long double)d - (long double)d2; break;
-	case Q_MPLY:  fwide = (long double)d * (long double)d2; break;
-	case Q_DIV:
-	    if (d2 == 0.0)
-		error("divide by zero");
-	    else
-		fwide = (long double)d / (long double)d2;
-	    if (d2 == 0.0)
-		return e;
-	    break;
-	case Q_EQUAL: log = d == d2; break;
-	case Q_NEQ:   log = d != d2; break;
-	case Q_LESS:  log = d < d2;  break;
-	case Q_GREAT: log = d > d2;  break;
-	case Q_LEQ:   log = d <= d2; break;
-	case Q_GEQ:   log = d >= d2; break;
-	default: return e;
-	}
-	if (log >= 0) return setlog(e, log);
-	if (tgcpu == TGCPU_PDP6)
-	    eleft->Nfconst = pdp10_host_round_single_arith_pdp6_v1 (
-		fwide);
-	else
-	    eleft->Nfconst = pdp10_host_round_single_v1 (fwide);
-#else
-	f = (float) eleft->Nfconst;			// FW KCC-NT
-	f2 = (float) e->Nright->Nfconst;	// FW KCC-NT
-	switch (e->Nop) {
-	case Q_PLUS:	f += f2;	break;
-	case Q_MINUS:	f -= f2;	break;
-	case Q_MPLY:	f *= f2;	break;
-	case Q_DIV:	if (f2 == 0)
-			    error("divide by zero");
-			else
-			    f /= f2;
-			break;
-
-	case Q_EQUAL:	log = f == f2;	break;
-	case Q_NEQ:	log = f != f2;	break;
-	case Q_LESS:	log = f  < f2;	break;
-	case Q_GREAT:	log = f  > f2;	break;
-	case Q_LEQ:	log = f <= f2;	break;
-	case Q_GEQ:	log = f >= f2;	break;
-	default:
-	    return e;
-	}
-	if (log >= 0) return setlog(e, log);
-	eleft->Nfconst = f;
-#endif
-	break;
-
     case TS_DOUBLE:
     case TS_LNGDBL:
-	d = eleft->Nfconst;
-	d2 = e->Nright->Nfconst;
-	switch (e->Nop) {
-	case Q_PLUS:	d += d2;	break;
-	case Q_MINUS:	d -= d2;	break;
-	case Q_MPLY:	d *= d2;	break;
-	case Q_DIV:	if (d2 == 0)
-			    error("divide by zero");
-			else
-			    d /= d2;
-			break;
+        {
+            int cmp = fp_cmp_v62c(eleft->Nfpwords,e->Nright->Nfpwords);
+            int single = eleft->Ntype->Tspec == TS_FLOAT;
+            /* Keep PDP-6 single arithmetic's positive-direction ties.
+            ** The portable double helpers round to nearest/even;
+            ** hardware double instructions round magnitude ties upward. */
+            int mode = single ? tgcpu == TGCPU_PDP6 :
+                       (tgcpu != TGCPU_PDP6 && tgcpu != TGCPU_KA ? 3 : 0);
+            /* DEC Processor Reference Manual (1982), 2-23..2-25:
+            ** KI10 DFDV has no rounding bit. */
+            if (!single && tgcpu==TGCPU_KI && e->Nop==Q_DIV)
+                mode=2;
 
-	case Q_EQUAL:	log = d == d2;	break;
-	case Q_NEQ:	log = d != d2;	break;
-	case Q_LESS:	log = d  < d2;	break;
-	case Q_GREAT:	log = d  > d2;	break;
-	case Q_LEQ:	log = d <= d2;	break;
-	case Q_GEQ:	log = d >= d2;	break;
-	default:
-	    return e;
-	}
-	if (log >= 0) return setlog(e, log);
-	eleft->Nfconst = d;
-	break;
+            switch (e->Nop) {
+            case Q_EQUAL: log=cmp==0; break;
+            case Q_NEQ: log=cmp!=0; break;
+            case Q_LESS: log=cmp<0; break;
+            case Q_GREAT: log=cmp>0; break;
+            case Q_LEQ: log=cmp<=0; break;
+            case Q_GEQ: log=cmp>=0; break;
+            case Q_PLUS: case Q_MINUS: case Q_MPLY: case Q_DIV:
+                fp_bin_v62c(eleft->Nfpwords,e->Nright->Nfpwords,
+                            e->Nop,single,mode);
+                break;
+            default: return e;
+            }
+            if (log>=0) return setlog(e,log);
+        }
+        break;
 
     case TS_PTR:
 	/* Operations on constant pointers are tricky because the result
@@ -1341,17 +1263,11 @@ evalunop(NODE *e)
 	case TS_ULONGLONG:
 		dimode_neg_iconst(e->Nleft);
 		break;
-	case TS_FLOAT:
-		/* The target PDP-10 float retains three fraction bits that
-		** host IEEE binary32 lacks.  Unary negation must not round
-		** the value through host float; outflt performs the target
-		** 27-bit rounding when emitting its final representation. */
-		e->Nleft->Nfconst = - e->Nleft->Nfconst;
-		break;
-	case TS_DOUBLE:
-	case TS_LNGDBL:
-		e->Nleft->Nfconst = - (double) e->Nleft->Nfconst;
-		break;
+        case TS_FLOAT:
+        case TS_DOUBLE:
+        case TS_LNGDBL:
+            fp_neg_v62c(e->Nleft->Nfpwords,e->Ntype->Tspec==TS_FLOAT);
+            break;
 	default:
 	    if (tisdimode(e->Ntype))
 		dimode_neg_iconst(e->Nleft);
@@ -1410,6 +1326,21 @@ evalunop(NODE *e)
 */	
 #define ekeepright(e) eseqdisc((e)->Nleft, (e)->Nright)
 #define ekeepleft(e)  eseqdisc((e)->Nright, (e)->Nleft)
+
+/* Return -1/0/1 only for these exact floating constants, 2 otherwise.
+** Ignore the copied low sign for doubles when testing integral units. */
+static int
+fp_unit_v62c(NODE *n)
+{
+    unsigned INT h;
+    if (n->Nop!=N_FCONST ||
+        ((unsigned INT)n->Nfpwords[1]&0377777777777ULL)) return 2;
+    h=(unsigned INT)n->Nfpwords[0]&0777777777777ULL;
+    if (!h) return 0;
+    if (h==0201400000000ULL) return 1;
+    if (h==0576400000000ULL) return -1;
+    return 2;
+}
 
 static NODE *
 evalb1op(NODE *e)
@@ -1563,7 +1494,7 @@ evalb1op(NODE *e)
 	if (e->Ntype->Tspec != TS_LNGDBL)	/* Someday may be different */
 	    switch (e->Nop) {
 	    case Q_DIV:
-		if (eisconst(e->Nleft) && e->Nleft->Nfconst == 0.0)
+		if (eisconst(e->Nleft) && fp_unit_v62c(e->Nleft)==0)
 		    return ekeepleft(e);	/* 0/f => (f,0) */
 
 		/* Drop thru to check for f/0, f/1 and f/(-1) */
@@ -1571,26 +1502,26 @@ evalb1op(NODE *e)
 	    case Q_MPLY:
 		if (!eisconst(e->Nright))
 		    break;
-		if (e->Nright->Nfconst == 0.0) {
+		if (fp_unit_v62c(e->Nright)==0) {
 		    if (e->Nop == Q_DIV) {
 			advise("Division by zero ignored");
 			return e->Nleft;
 		    }
 		    return ekeepright(e);	/* f*0 => (f,0) */
 		}
-		if (e->Nright->Nfconst == 1.0)
+		if (fp_unit_v62c(e->Nright)==1)
 		    return e->Nleft;		/* f*1 or f/1 => f */
-		if (e->Nright->Nfconst == -1.0) {
+		if (fp_unit_v62c(e->Nright)==-1) {
 		    e->Nop = N_NEG;		/* f*(-1) or f/(-1) => -f */
 		    return e;
 		}
 		break;
 	    case Q_PLUS:
-		if (e->Nright->Nop == N_FCONST && e->Nright->Nfconst == 0.0)
+		if (e->Nright->Nop == N_FCONST && fp_unit_v62c(e->Nright)==0)
 		    return e->Nleft;		/* f+0 => f */
 		break;
 	    case Q_MINUS:
-		if (eisconst(e->Nleft) && e->Nleft->Nfconst == 0.0) {
+		if (eisconst(e->Nleft) && fp_unit_v62c(e->Nleft)==0) {
 		    e->Nop = N_NEG;
 		    e->Nleft = e->Nright;
 		    return e;			/* 0-f => -f */
@@ -1823,37 +1754,37 @@ evalasop(NODE *e)
 	}
     } else if (tisfloat(e->Ntype)) {	/* Check floating types */
 	if (e->Ntype->Tspec != TS_LNGDBL) {	/* Someday may be different */
-	    double fcon;
+	    int fcon;
 	    if (e->Nright->Nop != N_FCONST)
 		return e;			/* Just in case */
-	    fcon = e->Nright->Nfconst;
-	    if (fcon == 0.0 || fcon == 1.0 || fcon == -1.0) switch (e->Nop) {
+	    fcon = fp_unit_v62c(e->Nright);
+	    if (fcon != 2) switch (e->Nop) {
 	    case Q_ASMPLY:
-		if (fcon == 0.0) {
+		if (fcon == 0) {
 		    e->Nop = Q_ASGN;		/* f*=0 => f=0 */
 		    break;
 		}
 		/* Drop thru to check for f/0, f/1 and f/(-1) */
 	    /* FALLTHROUGH */
 	    case Q_ASDIV:
-		if (fcon == 0.0) {		/* f/=0 => f */
+		if (fcon == 0) {		/* f/=0 => f */
 		    advise("Division by zero ignored");
 		    return e->Nleft;
-		} else if (fcon > 0.0)
+		} else if (fcon > 0)
 		    return e->Nleft;		/* f*=1 or f/=1 => f */
 		/* Negating an rvalue cannot replace the mandatory lvalue
 		** store. Keep the original compound float assignment.
 		*/
 		break;
 	    case Q_ASPLUS:
-		if (fcon == 0.0)
+		if (fcon == 0)
 		    return e->Nleft;		/* f+=0 => f */
 		return evalincdec(e,
 			(fcon > 0)
 			    ? N_PREINC		/* f+=1    => ++f */
 			    : N_PREDEC);	/* f+=(-1) => --f */
 	    case Q_ASMINUS:
-		if (fcon == 0.0)
+		if (fcon == 0)
 		    return e->Nleft;		/* f-=0 => f */
 		return evalincdec(e,
 			(fcon > 0)
@@ -1960,8 +1891,7 @@ setlog(NODE *e, int res) /* Operator node and Result (either 0 or 1) */
 ** For integers this is "long":
 **	If the type is unsigned, unused bits in Niconst will be 0.
 **	If signed, then sign extension has been done in Niconst.
-** For floating-point this is "double":
-**	If the type is float, precision will have been truncated (2nd word 0).
+** Floating constants use canonical target words, rounded to their type.
 **
 */
 
@@ -2006,7 +1936,7 @@ evalcast(NODE *e)
 
 	case CAST_BOOL:
 	    if (cn->Nop == N_FCONST)
-		cn->Niconst = (cn->Nfconst != 0.0);
+		cn->Niconst = (cn->Nfpwords[0] != 0 || cn->Nfpwords[1] != 0);
 	    else if ((cn->Nflag & NF_WIDE) && tisdimode(tfrom))
 		cn->Niconst = (cn->Niconst != 0 || cn->n_var1.n_int != 0);
 	    else
@@ -2045,17 +1975,18 @@ evalcast(NODE *e)
 	    else
 		cn->Niconst = tolong(tto, cn->Niconst);
 	    break;
-	case CAST_FP_IT:	/* Floating-point type to integer type */
-	    if (tisdimode(tto))
-		return e; /* Full-width conversion needs both integer words. */
-#ifndef __COMPILER_KCC__
-	    if (tfrom->Tspec == TS_FLOAT)
-		cn->Nfconst = pdp10_host_round_single_v1 (
-			(long double)cn->Nfconst);
-#endif
-	    cn->Niconst = tolong(tto, (INT) cn->Nfconst);
-	    cn->Nop = N_ICONST;
-	    break;
+        case CAST_FP_IT:
+            {
+                struct fp_parts_v62c p;
+                unsigned INT v;
+                if (tisdimode(tto)) return e;
+                fp_unpack_v62c(cn->Nfpwords,&p);
+                if (p.exp>164) return e; /* outside one-word range */
+                v=p.exp<=128?0:(unsigned INT)(p.frac>>(190-p.exp));
+                cn->Niconst=tolong(tto,(INT)(p.neg?-v:v));
+                cn->Nop=N_ICONST;
+            }
+            break;
         case CAST_PT_IT:       /* Pointer type to integer type */
             if (tisdimode(tto)) {
                 /* Match runtime conversion of the raw unsigned word. */
@@ -2072,76 +2003,24 @@ evalcast(NODE *e)
 	    cn->Nop = N_ICONST;
 	    break;
 
-	case CAST_FP_FP:	/* Floating-point type to floating-pt type */
-	    switch (castidx(tfrom->Tspec, tto->Tspec)) {
-		case castidx(TS_DOUBLE,TS_FLOAT):
-		case castidx(TS_LNGDBL,TS_FLOAT):
-#ifndef __COMPILER_KCC__
-		    cn->Nfconst = pdp10_host_round_single_v1 (
-			(long double)cn->Nfconst);
-#else
-		    cn->Nfconst = (float) cn->Nfconst;
-#endif
-		    break;
-		case castidx(TS_FLOAT,TS_DOUBLE):
-		case castidx(TS_FLOAT,TS_LNGDBL):
-#ifndef __COMPILER_KCC__
-		    cn->Nfconst = pdp10_host_round_single_v1 (
-			(long double)cn->Nfconst);
-#else
-		    cn->Nfconst = (double)(float) cn->Nfconst;
-#endif
-		    break;
-		case castidx(TS_LNGDBL,TS_DOUBLE):
-		case castidx(TS_DOUBLE,TS_LNGDBL):
-		    break;
-		default:
-		    int_warn("evalcast: bad fp_fp");
-		    break;
-	    }
-	    break;
+        case CAST_FP_FP:
+            if ((tfrom->Tspec==TS_FLOAT)!=(tto->Tspec==TS_FLOAT))
+                fp_cast_v62c(cn->Nfpwords,tto->Tspec==TS_FLOAT);
+            break;
 
-	case CAST_IT_FP:	/* Integer type to floating-point type */
-	    if (tisdimode(tfrom))
-		return e; /* Both words needed: let target cast code handle it. */
-	    /* The constant node may contain a host-width representation
-	    ** after complement and shift folding.  In particular ~0U is
-	    ** the *36-bit* value 0777777777777, not the host 64-bit
-	    ** unsigned maximum.  Normalize to the source TARGET type
-	    ** before conversion; otherwise optimized (float)~0U becomes
-	    ** 2^64 instead of correctly rounded 2^36 on hosted builds.
-	    ** Keep the normalized value local so other source types and
-	    ** the exact target rounding path are unchanged.
-	    */
-	    {
-	    INT val = tolong(tfrom, cn->Niconst);
-	    switch (tto->Tspec) {
-		case TS_FLOAT:
-#ifndef __COMPILER_KCC__
-		    if (tissigned(tfrom))
-			cn->Nfconst = pdp10_host_round_single_v1 (
-				(long double)val);
-		    else
-			cn->Nfconst = pdp10_host_round_single_v1 (
-				(long double)(unsigned INT)val);
-#else
-		    if (tissigned(tfrom))
-			cn->Nfconst = (float) val;
-		    else
-			cn->Nfconst = (float) (unsigned INT)val;
-#endif
-		    break;
-		case TS_DOUBLE:
-		case TS_LNGDBL:
-		    if (tissigned(tfrom))
-			cn->Nfconst = (double)val;
-		    else
-			cn->Nfconst = (double) (unsigned INT)val;
-		    break;
-	    }
-	    }
-	    cn->Nop = N_FCONST;
-	    break;
+        case CAST_IT_FP:
+            {
+                INT v;
+                unsigned long long mag;
+                int neg;
+                if (tisdimode(tfrom)) return e;
+                v=tolong(tfrom,cn->Niconst);
+                neg=tissigned(tfrom)&&v<0;
+                mag=neg?-(unsigned long long)v:(unsigned long long)(unsigned INT)v;
+                fp_from_int_v62c(cn->Nfpwords,mag,neg,tto->Tspec==TS_FLOAT);
+                cn->Nop=N_FCONST;
+            }
+            break;
 
 	case CAST_EN_EN:	/* Enumeration type to enumeration type */
 	case CAST_IT_EN:	/* Integer type to enumeration type */
@@ -2628,3 +2507,200 @@ edisc(NODE *n)
 */
 /* Small evaluator shared with the native KGEN phase. */
 #include "ccevalshared.h"
+
+/* Canonical target floating images. The normalized magnitude always has
+** 62 bits (single precision has its low 35 bits zero). The low storage
+** word repeats the sign only for doubles. Never use host FP arithmetic.
+*/
+#define FPBIT(n) (1ULL << (n))
+#define FPM35 ((unsigned INT)0377777777777ULL)
+#define FPSIGN ((unsigned INT)0400000000000ULL)
+#define FPM36 ((unsigned INT)0777777777777ULL)
+
+void
+fp_unpack_v62c(const INT *w, struct fp_parts_v62c *p)
+{
+    unsigned INT h=(unsigned INT)w[0]&FPM36, l=(unsigned INT)w[1]&FPM35;
+    p->neg=(h&FPSIGN)!=0;
+    if (p->neg) {
+        l=(-l)&FPM35;
+        h=(~h+(l==0))&FPM36;
+    }
+    p->exp=(int)(h>>27);
+    p->frac=((unsigned long long)(h&0777777777UL)<<35)|l;
+}
+
+/* Round a normalized 62-bit fraction and the exact relation of the
+** discarded tail to half an ULP: -2 exact, -1 nonzero below,
+** 0 equal, +1 above. Mode 0 ties-even; 1 positive-direction ties
+** (PDP-6 rounded single); 2 truncation (KI10 DFDV); 3 magnitude
+** ties-away (hardware D format). Preserve the previous exponent <=0
+** flush-to-zero policy; high overflow is a source diagnostic.
+*/
+void
+fp_pack_v62c(INT *w, unsigned long long f, int e, int neg,
+             int single, int tail, int mode)
+{
+    unsigned INT h,l;
+    if (single) {
+        unsigned long long lost=f&(FPBIT(35)-1);
+        f>>=35;
+        /* An exact midpoint plus any nonzero tail is above half. */
+        if (lost==FPBIT(34)) tail=tail==-2?0:1;
+        else tail=lost<FPBIT(34)?-1:1;
+    }
+    if (mode!=2 && (tail>0 ||
+        (tail==0 && (mode==3 || (mode==1?!neg:(f&1)))))) ++f;
+    if (f >= FPBIT(single?27:62)) { f>>=1; ++e; }
+    if (!f || e<=0) { w[0]=w[1]=0; return; }
+    if (e>255) {
+        error("Floating constant exponent exceeds PDP-10 %s format",
+              single?"F":"D");
+        w[0]=w[1]=0;
+        return;
+    }
+    if (single) f<<=35;
+    h=((unsigned INT)e<<27)|(unsigned INT)(f>>35);
+    l=(unsigned INT)f&FPM35;
+    if (neg) {
+        l=(-l)&FPM35;
+        h=(~h+(l==0))&FPM36;
+        if (!single) l|=FPSIGN;
+    }
+    w[0]=(INT)h; w[1]=(INT)l;
+}
+
+void
+fp_neg_v62c(INT *w, int single)
+{
+    unsigned INT h=(unsigned INT)w[0]&FPM36, l=(unsigned INT)w[1]&FPM35;
+    if (!h && !l) return;
+    l=(-l)&FPM35;
+    h=(~h+(l==0))&FPM36;
+    w[0]=(INT)h;
+    w[1]=(INT)(l|(!single?(h&FPSIGN):0));
+}
+
+int
+fp_cmp_v62c(const INT *a, const INT *b)
+{
+    unsigned INT h=(unsigned INT)a[0]&FPM36, k=(unsigned INT)b[0]&FPM36;
+    unsigned INT l=(unsigned INT)a[1]&FPM35, m=(unsigned INT)b[1]&FPM35;
+    if ((h^k)&FPSIGN) return (h&FPSIGN)?-1:1;
+    if (h!=k) return h<k?-1:1;
+    return l<m?-1:l>m?1:0;
+}
+
+void
+fp_from_int_v62c(INT *w, unsigned long long f, int neg, int single)
+{
+    int e=190, tail=-2;
+    if (!f) { w[0]=w[1]=0; return; }
+    if (f>=FPBIT(62)) {
+        int sticky=0;
+        while (f>=FPBIT(63)) { sticky|=(f&1)!=0; f>>=1; ++e; }
+        tail=(f&1)?(sticky?1:0):(sticky?-1:-2);
+        f>>=1; ++e;
+    }
+    while (f<FPBIT(61)) { f<<=1; --e; }
+    fp_pack_v62c(w,f,e,neg,single,tail,0);
+}
+
+void
+fp_cast_v62c(INT *w, int single)
+{
+    struct fp_parts_v62c p;
+    fp_unpack_v62c(w,&p);
+    fp_pack_v62c(w,p.frac,p.exp,p.neg,single,-2,0);
+}
+
+/* Alignment with guard/round/sticky in a pair of base-2^32 limbs.
+** Each limb operation fits in a 36-bit native word. This also avoids
+** requiring a host 65- or 66-bit integer for addition.
+*/
+#define FPLOW32 ((unsigned INT)0xffffffffUL)
+static void
+fp_align_v62c(unsigned long long f, unsigned d,
+              unsigned INT *h, unsigned INT *l)
+{
+    unsigned long long q;
+    unsigned g;
+    if (d>=65) { *h=0; *l=f!=0; return; }
+    q=d>=62?0:f>>d;
+    if (d<3) g=(unsigned)((f<<(3-d))&7);
+    else {
+        g=(unsigned)((f>>(d-3))&7);
+        if (d>3 && (f&(FPBIT(d-3)-1))) g|=1;
+    }
+    *h=(unsigned INT)(q>>29);
+    *l=((unsigned INT)q<<3)&FPLOW32;
+    *l|=g;
+}
+
+/* Return the exact remainder relation represented by guard/round/sticky. */
+static int
+fp_tail_v62c(unsigned g)
+{
+    return !g?-2:g<4?-1:g==4?0:1;
+}
+
+void
+fp_bin_v62c(INT *w, const INT *rhs, int op, int single, int mode)
+{
+    struct fp_parts_v62c a,b,t;
+    unsigned long long f,r,hi,lo,p0,p1,x0,x1,y0,y1;
+    unsigned INT ah,al,bh,bl;
+    int e,neg,tail,i;
+    fp_unpack_v62c(w,&a); fp_unpack_v62c(rhs,&b);
+    if (op==Q_MINUS) b.neg=!b.neg;
+    if (op==Q_PLUS || op==Q_MINUS) {
+        if (!a.frac) { fp_pack_v62c(w,b.frac,b.exp,b.neg,single,-2,mode); return; }
+        if (!b.frac) return;
+        if (a.exp<b.exp || (a.exp==b.exp && a.frac<b.frac)) {
+            t=a; a=b; b=t;
+        }
+        fp_align_v62c(a.frac,0,&ah,&al);
+        fp_align_v62c(b.frac,(unsigned)(a.exp-b.exp),&bh,&bl);
+        e=a.exp; neg=a.neg;
+        if (a.neg==b.neg) {
+            al+=bl; ah+=bh+(al>>32); al&=FPLOW32;
+            if (ah>=((unsigned INT)1<<33)) {
+                al=(al>>1)|(al&1)|((ah&1)<<31);
+                ah>>=1; ++e;
+            }
+        } else {
+            ah-=bh+(al<bl); al=(al-bl)&FPLOW32;
+            if (!ah && !al) { w[0]=w[1]=0; return; }
+            while (ah<((unsigned INT)1<<32)) {
+                ah=(ah<<1)|(al>>31); al=(al<<1)&FPLOW32; --e;
+            }
+        }
+        f=((unsigned long long)ah<<29)|(al>>3);
+        tail=fp_tail_v62c((unsigned)(al&7));
+    } else if (op==Q_MPLY) {
+        if (!a.frac || !b.frac) { w[0]=w[1]=0; return; }
+        x0=a.frac&0x7fffffffUL; x1=a.frac>>31;
+        y0=b.frac&0x7fffffffUL; y1=b.frac>>31;
+        p0=x0*y0; p1=x0*y1+x1*y0+(p0>>31);
+        hi=x1*y1+(p1>>31);
+        lo=((p1&0x7fffffffUL)<<31)|(p0&0x7fffffffUL);
+        e=a.exp+b.exp-128; neg=a.neg!=b.neg;
+        if (hi<FPBIT(61)) {
+            hi=(hi<<1)|(lo>>61); lo=(lo<<1)&(FPBIT(62)-1); --e;
+        }
+        f=hi;
+        tail=!lo?-2:lo<FPBIT(61)?-1:lo==FPBIT(61)?0:1;
+    } else {
+        if (!b.frac) { error("divide by zero"); return; }
+        if (!a.frac) return;
+        r=a.frac; f=0; e=a.exp-b.exp+129; neg=a.neg!=b.neg;
+        if (r<b.frac) { r<<=1; --e; }
+        for (i=0;i<62;++i) {
+            f<<=1;
+            if (r>=b.frac) { r-=b.frac; f|=1; }
+            r<<=1;
+        }
+        tail=!r?-2:r<b.frac?-1:r==b.frac?0:1;
+    }
+    fp_pack_v62c(w,f,e,neg,single,tail,mode);
+}

@@ -538,7 +538,7 @@ syminit(void)
 #endif
 
 #if KCC_PHASE_GEN
-    /* KIR1 owns the module symbol root and KGEN never enters parser scopes.
+    /* KIR2 owns the module symbol root and KGEN never enters parser scopes.
     ** Avoid allocating two parser-only dummy SYMBOL nodes; kir_read_header()
     ** installs its static root before any graph or global symbols are read. */
     symbol = symtail = locsymbol = loctail = NULL;
@@ -550,7 +550,7 @@ syminit(void)
 #endif
 
     /* Clear out symbol hash table.  Split KGEN never lexes C source, so
-    ** pre-creating every language keyword is pure heap pressure there; KIR1
+    ** pre-creating every language keyword is pure heap pressure there; KIR2
     ** supplies the real module symbols explicitly.  The parser still needs
     ** the complete reserved-word set. */
     for (i = 0 ; i < MAXHSH ; i++)
@@ -907,6 +907,27 @@ creatsym(char * id)
     s->Sflags |= SF_LOCAL;
     return s;
 }
+
+#if KCC_PHASE_GEN
+/* KIR owns the dummy root and imported symbols. The ordinary allocator
+** owns backend-generated symbols, such as floating conversion helpers.
+** KIR globals are appended only at module end, after code generation.
+** Keep symtail at the last allocator-owned entry for precise cleanup. */
+void
+kir_backend_root_v62c(SYMBOL *root)
+{
+    symbol = symtail = root;
+}
+
+void
+kir_backend_release_v62c(SYMBOL *root)
+{
+    if (symbol != root) return;
+    while (symtail != root)
+        freesym(symtail);
+    symbol = symtail = NULL;
+}
+#endif
 
 /* SYMGCREAT - create a global symbol table entry
 */
