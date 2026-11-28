@@ -912,6 +912,16 @@ fn_abi_mark_normal_queries(NODE *root)
         n = work[--sp];
         if (!n)
             continue;
+        /* Leaf payloads (wide integer high words and literal labels)
+        ** occupy the same union slots as tree links. */
+        switch (n->Nop) {
+        case Q_IDENT: case N_ICONST: case N_PCONST: case N_ECONST:
+        case N_FCONST: case N_SCONST: case N_VCONST: case N_ACONST:
+        case N_RETADDR: case Q_BREAK: case Q_CONTINUE:
+            continue;
+        default:
+            break;
+        }
         if (n->Nop == Q_QUERY && fn_abi_query_normal(n))
             n->Nflag |= NF_QUERYNORMAL;
         if (n->Nleft && sp < 255)

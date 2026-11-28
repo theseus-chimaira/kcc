@@ -634,6 +634,16 @@ fn_needs_scrreg(NODE *root)
 	    }
 	switch (op)
 	    {
+	    case Q_IDENT:
+	    case N_ICONST:
+	    case N_PCONST:
+	    case N_ECONST:
+	    case N_VCONST:
+	    case N_RETADDR:
+                /* Scalar constants and identifiers are leaves. In
+                ** particular a narrowed wide literal can retain its
+                ** original high limb in the Nleft union slot. */
+                continue;
 	    case N_NODE:
 	    case N_STATEMENT:
 	    case Q_RETURN:
@@ -648,12 +658,6 @@ fn_needs_scrreg(NODE *root)
 	    case Q_DEFAULT:
 	    case N_LABEL:
 	    case N_EXPRLIST:
-	    case Q_IDENT:
-	    case N_ICONST:
-	    case N_PCONST:
-	    case N_ECONST:
-	    case N_VCONST:
-	    case N_RETADDR:
 	    case N_CAST:
 	    case N_ADDR:
 	    case N_PREINC:
