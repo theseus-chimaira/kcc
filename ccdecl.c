@@ -21,7 +21,7 @@ extern SYMBOL *lsymhead;        /* CCSYM - var indicating loc sym blk */
 
 /* Imported functions */
 extern SYMBOL *symfidstr(char *), *creatsym(char *), *uniqsym(SYMBOL *); /* CCSYM */
-extern SYMBOL *findgsym(SYMBOL *);      /* CCSYM */
+extern SYMBOL *findlinksym(SYMBOL *);   /* CCSYM */
 extern SYMBOL *newlabel(void);  /* CCSYM */
 extern SYMBOL *symfxext(SYMBOL *);      /* CCSYM */
 extern SYMBOL *symftag(SYMBOL *);       /* CCSYM */
@@ -2212,6 +2212,51 @@ nsetjmps(void)
 ** Returns with the symbol table entry completely set up, and returns
 ** pointer to the symbol since it may have changed.
 */
+/* A linkage identity is not a lexical declaration.  When an existing
+** linked entity is declared in a new block, install a local binding
+** ahead of any shadowing declaration.  AST references use its target.
+** A previously unseen external can use its own local symbol until
+** endlsym promotes it to the translation-unit linkage list.
+*/
+static SYMBOL *
+scopeextern_v61y(SYMBOL *s, SYMBOL **local)
+{
+    SYMBOL *target, *binding;
+    TYPE *prior;
+
+    *local = NULL;
+    if (!lsymhead)
+        return symfxext(s);
+    if (isdupsym(s)) {
+        if (s->Sflags & SF_SCOPEALIAS) {
+            --s->Srefs;
+            *local = s;
+            target = s->Ssym;
+            ++target->Srefs;
+            return target;
+        }
+        if (s->Sclass == SC_EXTREF)
+            return s;
+        errdupsym(s);
+    }
+    target = findlinksym(s);
+    /* Only a visible prior declaration contributes a composite type.
+    ** Hidden linkage still requires compatibility, but does not put its
+    ** array bounds or prototype in the new lexical scope. */
+    prior = ((s->Sflags & SF_SCOPEALIAS) || s == target)
+          ? s->Stype : NULL;
+    binding = uniqsym(s);
+    if (target == NULL)
+        return binding;
+    binding->Sclass = SC_EXTREF;
+    binding->Sflags |= SF_SCOPEALIAS;
+    binding->Ssym = target;
+    binding->Stype = prior;
+    *local = binding;
+    ++target->Srefs;
+    return target;
+}
+
 SYMBOL *
 funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
 /* True if a definition
@@ -2220,7 +2265,9 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
  * Symtab entry for parsed identifier
  */
 {
-    
+    SYMBOL *binding = NULL;
+    TYPE *prior, *requested = d->Stype;
+
     /* Check out storage class.
     ** Parsing should have resulted in only one of the following three
     ** things: SC_UNDEF (none), SC_EXTREF (extern), SC_INTREF (static).
@@ -2229,7 +2276,8 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
     ** SC_EXTREF, SC_EXTDEF, SC_INTREF, SC_INTDEF, plus special case of
     ** normally invisible SC_XEXTREF.
     */
-    s = symfxext(s);            /* Make SC_XEXTREF visible if any */
+    if (def || !lsymhead)
+        s = symfxext(s);        /* File-scope linkage declaration */
 
     if ((d->Sflags & (SF_INLINE | SF_NOINLINE)) == (SF_INLINE | SF_NOINLINE))
         warn("inline function given attribute noinline");
@@ -2269,33 +2317,8 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
         /* FALLTHROUGH */
         case SC_UNDEF:          /* dpANS: default same as explicit "extern" */
         case SC_EXTREF:         /* Explicit "extern" */
-        /* dpANS: linkage is same as any visible decl of this identifier
-        ** with file scope (ie global).  If none, linkage is external.
-        ** If there is already an expired external reference (SC_XEXTREF)
-        ** then we use that in order to emit advisory warnings if the type
-        ** isn't the same.
-        */
-        /* If doing a reference in block scope and function ident already
-        ** belongs to a block-scope symbol, we:
-        ** (1) see if a file-scope symbol exists (if so, use that one)
-        ** (2) see if existing sym is external ref (if so, use that)
-        **      (this includes SC_XEXTREF)
-        ** (3) generate new file-scope symbol with SC_EXTREF.
-        */
-            if (!def && (s->Sflags&SF_LOCAL))
-                {
-                SYMBOL *ns;
-                if ((ns = findgsym(s)) != NULL)/* If file-scope def/ref exists, */
-                    s = ns;                     /* use that! */
-                else if (s->Sclass == SC_EXTREF)
-                    ;           /* OK if a block-scope extern ref */
-                else
-                    {
-                    if (isdupsym(s))    /* If was defined in this block, */
-                        errdupsym(s);   /* barf! */
-                    s = uniqsym(s);             /* Create/re-use sym, now SC_UNDEF */
-                    }
-                }
+            if (!def && lsymhead)
+                s = scopeextern_v61y(s, &binding);
         /* "s" now points to the sym linked to.  If it has any linkage, we
         ** copy that, otherwise we use external linkage.
         */
@@ -2368,15 +2391,16 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
     **          that was generated during the old-style function def.
     */
 
+    prior = binding && binding->Stype ? binding->Stype : s->Stype;
     /* First make sure that basic type is also "function returning ..."
     ** and that return types are compatible.
     */
-    if (s->Stype->Tspec != TS_FUNCT
-      || !cmptype(d->Stype->Tsubt, s->Stype->Tsubt))
+    if (prior->Tspec != TS_FUNCT
+      || !cmptype(d->Stype->Tsubt, prior->Tsubt))
         {
         /* Earlier ref/def conflicts with current one, smash to current. */
         errtwotyp(d, s);                /* Complain */
-        s->Stype = d->Stype;            /* Skip prototype testing */
+        prior = d->Stype;            /* Skip prototype testing */
         }
 
     /* If doing an old-style definition, OK to parse decl-list now.
@@ -2393,16 +2417,16 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
     /* Now see if the parameter lists need to be checked.
     ** Test for both old-style, or both with identical prototypes.
     */
-    if (d->Stype->Tproto != s->Stype->Tproto)
+    if (d->Stype->Tproto != prior->Tproto)
         {
         TYPE *tc;
-        if (d->Stype->Tproto && s->Stype->Tproto)       /* Compare 2 protos? */
+        if (d->Stype->Tproto && prior->Tproto)       /* Compare 2 protos? */
             {
-            tc = tcomposite(d->Stype, s->Stype);        /* Get composite */
+            tc = tcomposite(d->Stype, prior);        /* Get composite */
             if (tc)
                 d->Stype = tc;                  /* If won, use it! */
             else
-                plcmpare(d->Stype->Tproto, s->Stype->Tproto, 0); /* Give err */
+                plcmpare(d->Stype->Tproto, prior->Tproto, 0); /* Give err */
             }
         else if (d->Stype->Tproto)
             {
@@ -2410,7 +2434,7 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
             if (s->Sclass == SC_EXTDEF || s->Sclass == SC_INTDEF)
                 {
                 /* Old-style DEF followed by new-style REF, use hidden proto */
-                if (!tcomposite(d->Stype, s->Stype))    /* If not compatible */
+                if (!tcomposite(d->Stype, prior))    /* If not compatible */
                     plcmpare(d->Stype->Tproto, s->Shproto, 1);  /* Give err */
                 /* Don't use composite type, just the new prototype, so
                 ** leave d->Stype alone.
@@ -2425,11 +2449,11 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
             if (def)
                 {
                 /* New-style REF followed by old-style DEF, compare params */
-                plcmpold(d->Spmnext, s->Shproto, s->Stype->Tproto);
+                plcmpold(d->Spmnext, s->Shproto, prior->Tproto);
                 }
             else /* New-style ref/def followed by old-style REF */
-                plcheck(s->Stype->Tproto);      /* Check previous proto */
-            d->Stype = s->Stype;                /* Ensure proto retained */
+                plcheck(prior->Tproto);      /* Check previous proto */
+            d->Stype = prior;                /* Ensure proto retained */
             }
         }
 
@@ -2439,11 +2463,18 @@ funchk(int def, int baseclass, SYMBOL *d, SYMBOL *s)
     ** Also, if the existing symbol was a definition, don't change its
     ** class.
     */
-    s->Stype = d->Stype;        /* Force the type specification */
+    if ((binding && !binding->Stype)
+      || (!binding && s->Sclass == SC_XEXTREF))
+        d->Stype = requested;
+    if (binding)
+        binding->Stype = d->Stype;
+    else
+        s->Stype = d->Stype;    /* Force the type specification */
     s->Sflags |= d->Sflags & (SF_NORETURN | SF_NOINLINE | SF_INLINE);
     if (!def)                   /* If this decl was just a ref, */
         --(s->Srefs);           /* then usage count to undo lookup bump */
-    if (s->Sclass != SC_EXTDEF && s->Sclass != SC_INTDEF)
+    if (s->Sclass != SC_EXTDEF && s->Sclass != SC_INTDEF
+      && !(s->Sclass == SC_XEXTREF && !def && lsymhead))
         s->Sclass = d->Sclass;  /* Force the storage class */
     return s;
 }
@@ -5177,7 +5208,7 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
  * sc and type all set up, and Symbol table entry for the identifier 
  */
 {
-    SYMBOL *ns;
+    SYMBOL *ns, *binding;
     TYPE   *nt;
     NODE   *z;
 
@@ -5314,8 +5345,10 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
             if (s->Sclass != SC_UNDEF)  /* Check out type if any */
                 {
                 --(s->Srefs);           /* Linkage isn't a real ref */
-                if ((nt = tcomposite(d->Stype, s->Stype)) != NULL)
-                    d->Stype = nt;              /* Types compatible, use composite */
+                if ((nt = tcomposite(d->Stype, s->Stype)) != NULL) {
+                    if (s->Sclass != SC_XEXTREF)
+                        d->Stype = nt;
+                }
                 else
                     errtwotyp(d, s);    /* Types not compatible, barf */
                 }
@@ -5370,43 +5403,30 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
                 }
             break;                              /* Go parse izer now */
 
-    /* "extern" - existing or external linkage, use existing sym if any.
-    ** If in block scope and object ident already belongs to a
-    ** block-scope symbol, we:
-    ** (1) see if a file-scope symbol exists (if so, use that one)
-    ** (2) see if existing sym is external ref (if so, use that)
-    ** (3) generate new file-scope symbol with SC_EXTREF.
-    ** Again, not sure how to re-use Sflags.
-    */
-        case SC_EXTREF:         /* "extern" given, file or block scope */
-            s = symfxext(s);    /* Ensure an SC_XEXTREF is made visible */
-            if (lsymhead && (s->Sflags&SF_LOCAL))
-                {
-                if ((ns = findgsym(s)) != NULL)/* If file-scope def/ref exists, */
-                    s = ns;                     /* use that! */
-                else if (s->Sclass == SC_EXTREF)
-                    ;           /* OK if a block-scope extern ref */
-                else
-                    {
-                    if (isdupsym(s))    /* If was defined in this block, */
-                        errdupsym(s);   /* barf! */
-                    s = uniqsym(s);             /* Create/re-use sym, now SC_UNDEF */
-                    }
-                }
+    /* Explicit extern: bind the name in this block to its linkage
+    ** identity, independently of any enclosing automatic declaration. */
+        case SC_EXTREF:
+            s = scopeextern_v61y(s, &binding);
         /* "s" now points to the sym linked to.  If it has any linkage, we
         ** copy that, otherwise we use external linkage.
         */
             if (s->Sclass != SC_UNDEF)  /* Check out type if any */
                 {
                 --(s->Srefs);           /* Linkage isn't a real ref */
-                if ((nt = tcomposite(d->Stype, s->Stype)) != NULL)
-                    d->Stype = nt;              /* Types compatible, use composite */
+                if ((nt = tcomposite(d->Stype,
+                      binding && binding->Stype ? binding->Stype : s->Stype)) != NULL) {
+                    if (binding ? binding->Stype != NULL : s->Sclass != SC_XEXTREF)
+                        d->Stype = nt;
+                }
                 else
                     errtwotyp(d, s);    /* Types not compatible, barf */
                 }
             else if (!mapextsym(s))     /* New, so set Smaplab now */
                 error("External link name duplicated: \"%s\"", s->Sname);
-            s->Stype = d->Stype;                /* Clobber sym type to new one */
+            if (binding)
+                binding->Stype = d->Stype;
+            else
+                s->Stype = d->Stype;
 
             if (token != Q_ASGN)
                 switch (s->Sclass) /* If just a ref, simple */
@@ -5418,7 +5438,8 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
                         s->Stype = d->Stype;
                     /* FALLTHROUGH */
                     case SC_XEXTREF:
-                        s->Sclass = SC_EXTREF;
+                        if (!lsymhead || s->Sclass == SC_UNDEF)
+                            s->Sclass = SC_EXTREF;
                     /* FALLTHROUGH */
                     case SC_INTDEF:
                     case SC_INTREF:

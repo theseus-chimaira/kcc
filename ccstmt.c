@@ -3599,6 +3599,7 @@ primary(void)
 {
     NODE *n;
     SYMBOL *s, d;
+    TYPE *declared = NULL;
 
     switch (token)
 	{
@@ -3612,6 +3613,11 @@ primary(void)
 	**	This is where we check for handling calls to undeclared functs.
 	*/
 	    s = csymbol;		/* Remember pointer to identifier symbol */
+            if (s->Sflags & SF_SCOPEALIAS) {
+                declared = s->Stype;
+                s = s->Ssym;
+                ++s->Srefs;    /* Real linkage identity owns the reference */
+            }
 	    nextoken();		/* then flush token, set up next */
 	    switch (s->Sclass)
 		{
@@ -3654,6 +3660,7 @@ primary(void)
 			    d.Sclass = SC_EXTREF;
 			    d.Stype = findftype(inttype, (TYPE *)NULL);
 			    s = funchk(0, SC_EXTREF, &d, s);
+                            declared = d.Stype;
 			    s->Srefs++;	/* Referenced by call */
 			}
 
@@ -3663,6 +3670,8 @@ primary(void)
 		default:
 	    /* Normal variable or function name */
 		    n = ndefident(s);		/* Make Q_IDENT node */
+            if (declared != NULL)
+                n->Ntype = declared;
 
 	    /* Now set appropriate flags for this node.  Note Nflag
 	    ** was initialized to 0 by the ndefident() above.

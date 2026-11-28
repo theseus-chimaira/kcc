@@ -728,23 +728,34 @@ symfnext(struct symbol * osym)
     return sym;
 }
 
-/* FINDGSYM - Find global (file-scope) non-macro symbol.
-**	Starts searching from the specified sym, rather
-**	than taking an identifier string.
+/* Find the linkage identity, even behind a no-linkage declaration.
+** An expired external is still a linkage identity, but an expired
+** lexical alias must never take part in name lookup.
+** The caller accounts for references and creates the local binding.
 */
 SYMBOL *
-findgsym(struct symbol * osym)
+findlinksym(SYMBOL *s)
 {
-    register SYMBOL *sym = osym;
-    BUGMSG(("findgsym \"%s\"\n", sym->Sname))
-	while ((sym = sym->Snhash) != NULL)
-	if (((sym->Sflags&(SF_LOCAL|SF_XLOCAL|SF_OVCLS)) == 0)
-	 && symcmp(sym, osym))
-	    {
-	    sym->Srefs++;
-	    break;
-	    }
-    return sym;
+    SYMBOL *p;
+    for (p = s; p != NULL; p = p->Snhash) {
+        if ((p->Sflags & SF_OVCLS) || !symcmp(p, s))
+            continue;
+        if (p->Sflags & SF_SCOPEALIAS) {
+            if (!(p->Sflags & SF_XLOCAL))
+                return p->Ssym;
+            continue;
+        }
+        /* An unused external in a closed block may still be on the
+        ** local list; it is not a surviving linkage identity. */
+        if ((p->Sflags & (SF_LOCAL | SF_XLOCAL)) == (SF_LOCAL | SF_XLOCAL))
+            continue;
+        switch (p->Sclass) {
+        case SC_EXTREF: case SC_XEXTREF: case SC_EXTDEF: case SC_EXLINK:
+        case SC_INTREF: case SC_INTDEF: case SC_INLINK:
+            return p;
+        }
+    }
+    return NULL;
 }
 
 /*
@@ -1341,6 +1352,10 @@ endlsym(struct symbol * prevptr)
 		case SC_ULABEL:
 		    continue;
 		case SC_EXTREF:
+                    /* Aliases are lexical only; their target owns linkage
+                    ** and all emitted references. Leave them to ridlsym. */
+                    if (sym->Sflags & SF_SCOPEALIAS)
+                        break;
 		    s = sym->Sprev;		/* Remember previous */
 		    if (sym->Srefs == 0)
 			{

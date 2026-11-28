@@ -407,6 +407,8 @@ enum symbolspec {
 #define SF_ALLOCA	01000000000	/* Compiler-owned caller-frame alloca builtin */
 #define SF_ASMREF	02000000000	/* V32: actually emitted symbol reference */
 #define SF_ENUMUNSIGNED 04000000000L /* Enum tag: all enumerators nonnegative */
+#define SF_SCOPEALIAS ((INT)1 << 33) /* Parser-only local linkage binding */
+/* SC_EXTREF with SF_SCOPEALIAS uses Ssym for its linkage symbol. */
 #define SF_OVCLS (SF_MACRO|SF_MEMBER|SF_TAG|SF_LABEL)	/* All ov classes */
 
 
