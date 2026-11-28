@@ -1922,6 +1922,18 @@ setlog(NODE *e, int res) /* Operator node and Result (either 0 or 1) */
 **
 */
 
+/* Recover the low physical word of a normalized 71-bit integer constant.
+** Share the reconstruction between integer and pointer conversions.
+*/
+static INT
+dimode_narrow_word_v61g(NODE *n)
+{
+    INT hi, lo;
+
+    dimode_iconst_words(n, &hi, &lo);
+    return (INT)(((unsigned INT)(hi & 1) << 35) | (unsigned INT)lo);
+}
+
 static NODE *
 evalcast(NODE *e)
 {
@@ -1970,6 +1982,11 @@ evalcast(NODE *e)
 		dimode_hfrom_int(&acc, v, !tisunsign(tfrom));
 		dimode_hput(cn, &acc);
 #endif
+		}
+	    else if (tisdimode(tfrom) && !tisdimode(tto))
+		{
+		cn->Niconst = tolong(tto, dimode_narrow_word_v61g(cn));
+		cn->Nflag &= ~NF_WIDE;
 		}
 	    else if ((cn->Nflag & NF_WIDE) && tisdimode(tto))
 		{
@@ -2109,11 +2126,7 @@ evalcast(NODE *e)
 
 	case CAST_IT_PT:	/* Integer type to pointer type */
             if (tisdimode(tfrom)) {
-                INT hi, lo;
-                /* The independent low word has 35 bits, not 36. */
-                dimode_iconst_words(cn, &hi, &lo);
-                cn->Niconst = (INT)(((unsigned INT)(hi & 1) << 35)
-                                    | (unsigned INT)lo);
+                cn->Niconst = dimode_narrow_word_v61g(cn);
                 cn->Nflag &= ~NF_WIDE;
             }
 	    cn->Nop = N_PCONST;

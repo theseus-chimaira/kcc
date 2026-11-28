@@ -4166,11 +4166,13 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                 if (tag->Stype->Tspec == TS_UNION
                   && clevel < CLEV_ANSI)
                     error("Bit-field not allowed in union");
-                /* Integral types up to one machine word share the
-                ** existing signed/unsigned bit-field representation.
-                ** Preserve the declared value width before replacing
-                ** the type with its field-width representation. */
-                if (!tisinteg(tempsym.Stype) || tisdimode(tempsym.Stype))
+                /* GNU integral fields of at most one word share the
+                ** existing signed/unsigned field representation, even
+                ** if declared long long. Promotion depends on field
+                ** width, not the declared container. The width check
+                ** still rejects fields requiring a two-word value. */
+                if (!tisinteg(tempsym.Stype)
+                  || (!clevkcc && tisdimode(tempsym.Stype)))
                     error("Bit-field requires a one-word integral type");
                 ts = (tisunsign(tempsym.Stype) || tisbool(tempsym.Stype))
                    ? TS_UBITF : TS_BITF;
