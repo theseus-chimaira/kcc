@@ -44,6 +44,7 @@ extern void tokpush(int, SYMBOL *);			/* CCLEX */
 extern int expect (int);
 extern SYMBOL *beglsym (void);
 extern NODE *ldecllist (void);	/* from CCDECL */
+extern int istypedef_v61n(void);
 extern int isdecl (void);		/* from CCDECL */
 extern void endlsym (SYMBOL *);
 extern SYMBOL *lsymhead;		/* CCSYM block-scope marker */
@@ -2095,7 +2096,7 @@ castexpr(void)
     /* __extension__ may introduce an expression, not a type-name. */
     if (token != T_EXTENSION && csymbol
         && (tok[token].tktype == TKTY_RWTYPE
-			|| csymbol->Sclass == SC_TYPEDEF))
+			|| istypedef_v61n()))
 	{
 	t = typename();		/* Parse the type-name */
 	expect(T_RPAREN);
@@ -2563,7 +2564,7 @@ alignexpr_v1(void)
         }
     nextoken();
     if (!(csymbol && (tok[token].tktype == TKTY_RWTYPE
-                   || csymbol->Sclass == SC_TYPEDEF)))
+                   || istypedef_v61n())))
         {
         if (gnu) {
             tokpush(T_LPAREN, (SYMBOL *)NULL);
@@ -2727,7 +2728,7 @@ sizeexpr(void)
 	nextoken();
 	if(token != T_EXTENSION && csymbol
             && (tok[token].tktype == TKTY_RWTYPE
-		|| csymbol->Sclass == SC_TYPEDEF))
+		|| istypedef_v61n()))
 	    {
 	    t = typename();
 	    expect(T_RPAREN);
@@ -3810,7 +3811,7 @@ genericexpr_v4(void)
         else
             {
             if (!(csymbol && (tok[token].tktype == TKTY_RWTYPE
-                           || csymbol->Sclass == SC_TYPEDEF)))
+                           || istypedef_v61n())))
                 {
                 error("Type name or default expected in _Generic");
                 return ndeft(N_UNDEF, deftype);

@@ -52,6 +52,7 @@ extern NODE *convarrfn(NODE *);                    /* CCTYPE */
 extern TYPE *convfparam(TYPE *);                /* CCTYPE */
 extern int nextoken(void);                      /* CCLEX */
 extern void tokpush(int, SYMBOL *);             /* CCLEX */
+extern int lex_take_gnusize_v61n(void);
 extern long lex_take_gnuattrs(void);              /* CCLEX */
 extern int lex_take_tagpacked_v61j(void);
 extern void taglayout_v61j(TYPE *);
@@ -2782,6 +2783,17 @@ decllist(SYMBOL *base, SYMBOL *defbase, SYMBOL *d, SYMBOL *s,
 **              {type-specifier}
 **              {type-qualifier}
 */
+/* GCC's native unsigned six-bit typedef is available when not
+** explicitly declared by the program. Keep the existing KCC adapter's
+** explicit signed char6 typedef and ordinary identifiers untouched. */
+int
+istypedef_v61n(void)
+{
+    return csymbol && (csymbol->Sclass == SC_TYPEDEF
+        || (clevkcc && csymbol->Sclass == SC_UNDEF
+          && !strcmp(csymbol->Sname, "char6")));
+}
+
 int
 isdecl(void)
 {
@@ -2789,7 +2801,7 @@ isdecl(void)
         || token == T_ALIGNAS)
         || (csymbol != NULL && (
         (tok[token].tktype == TKTY_RWSC || tok[token].tktype == TKTY_RWTYPE)
-        || (csymbol->Sclass == SC_TYPEDEF)
+        || istypedef_v61n()
         )));
 }
 
@@ -2837,7 +2849,7 @@ typeofspec(void)
     expect(T_LPAREN);
 
     if (csymbol && (tok[token].tktype == TKTY_RWTYPE
-        || csymbol->Sclass == SC_TYPEDEF))
+        || istypedef_v61n()))
         {
         t = typename();
         expect(T_RPAREN);
@@ -2888,7 +2900,7 @@ palignas_v5(SYMBOL *symp)
     nextoken();
 
     if (csymbol && (tok[token].tktype == TKTY_RWTYPE
-        || csymbol->Sclass == SC_TYPEDEF))
+        || istypedef_v61n()))
         {
         t = typename();
         a = alignoftype_v1(t);
@@ -2951,6 +2963,26 @@ palignas_v5(SYMBOL *symp)
 #define PF_LONG         040
 #define PF_DOUBLE       0100
 
+/* Select an existing machine scalar; do not mutate a shared type. */
+static TYPE *
+gnusizetype_v61n(TYPE *t, int width)
+{
+    int spec, uns;
+    if (!width) return t;
+    if (!t || !tisinteg(t) || tisbitf(t) || tisbool(t)) {
+        error("PDP-10 size attribute requires an integer scalar");
+        return t;
+    }
+    uns = tisunsign(t);
+    if (width == 36 || width == 32)
+        spec = uns ? TS_UINT : TS_INT;
+    else if (width == 16 || width == 18)
+        spec = uns ? TS_USHORT : TS_SHORT;
+    else
+        spec = uns ? TS_UCHAR : TS_CHAR;
+    return findctype(spec, (t->Tflag & TF_QUALS) | width, 1, (TYPE *)NULL);
+}
+
 static TYPE *
 pbase(SYMBOL *symp)
 {
@@ -2958,7 +2990,7 @@ pbase(SYMBOL *symp)
     int savnsdefs = nsdefs;             /* Remember # side-eff defs so far */
     TYPE *t = NULL, *nt = NULL;
     INT nflag, qflags = 0, tflags = 0;
-    int chrsiz = 0, intsiz = 0, longcnt = 0;
+    int chrsiz = 0, intsiz = 0, longcnt = 0, gnusize = 0;
 
     if (symp)
         {
@@ -2974,6 +3006,12 @@ pbase(SYMBOL *symp)
     */
     for ( ; ; )
         {
+        int width = lex_take_gnusize_v61n();
+        if (width) {
+            if (gnusize && gnusize != width)
+                error("Conflicting PDP-10 size attributes");
+            gnusize = width;
+        }
         if (token == T_ALIGNAS)
             {
             palignas_v5(symp);
@@ -3288,9 +3326,10 @@ pbase(SYMBOL *symp)
         ** their types qualified except by typedefs.  But the qualifiers
         ** may follow the typedef, so we have to check after all's done.
         */
-        if (!t && !tflags && csymbol && csymbol->Sclass == SC_TYPEDEF)
+        if (!t && !tflags && istypedef_v61n())
             {
-            t = csymbol->Stype; /* Get the type */
+            t = csymbol->Sclass == SC_TYPEDEF ? csymbol->Stype
+                : findctype(TS_UCHAR, 6, 1, (TYPE *)NULL);
             nextoken();
             continue;           /* Keep going, sigh */
             }
@@ -3397,6 +3436,7 @@ pbase(SYMBOL *symp)
             }
         }
 
+    t = gnusizetype_v61n(t, gnusize);
     if (qflags)                         /* Add qualifiers to the basic type */
         {
         int oflag = 0;
@@ -4572,6 +4612,8 @@ declarator(SYMBOL *d)
         switch (token)
             {
             case T_LPAREN:              /* Function definition or reference */
+                if (lex_take_gnusize_v61n())
+                    error("PDP-10 size attribute cannot qualify a function");
                 d->Sflags |= lex_take_gnuattrs();
             /* Parse param list of function.  If idsym is a new symbol,
             ** we set it temporarily so as to avoid bashing our global
@@ -4645,6 +4687,7 @@ declarator(SYMBOL *d)
             /* Add base type to built-up derived type, return the result */
                 if (pp)
                     d->Stype = addpp(pp, d->Stype);
+                d->Stype = gnusizetype_v61n(d->Stype, lex_take_gnusize_v61n());
                 d->Sflags |= lex_take_gnuattrs();
                 return idsym;
             }
@@ -4761,7 +4804,7 @@ pidentlist(struct protostate
     SYMBOL *s;
 
     /* Parse parameter list as a simple ident-list. */
-    while (token == Q_IDENT && csymbol->Sclass != SC_TYPEDEF)
+    while (token == Q_IDENT && !istypedef_v61n())
         {
         if (csymbol->Sclass == SC_ARG)  /* Already a parameter? */
             error("Duplicate parameter: \"%s\"", csymbol->Sname);

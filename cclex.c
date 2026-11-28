@@ -37,6 +37,7 @@ static int zerotok(void), dzerotok(void), szerotok(void);
 static int strctok(char *), skipgnuattr(void), skipcxxattr(void),
 	attralignval(char *), gnuattrname(char *, char *);
 static long gnuattr_pending;
+static int gnusize_pending;
 static char *stripintseps(char *, char *, int);
 char ra_expr;
 
@@ -118,6 +119,7 @@ void
 lexinit(void)
 {
     gnuattr_pending = 0;
+    gnusize_pending = 0;
     tokstack = 0;
     ra_expr = 0;
     savelits = 0;		/* OK to reset string literal char pool */
@@ -153,6 +155,13 @@ tokpush(int t, SYMBOL *s)
 int
 nextoken (void)
 {
+    /* A declaration must consume the size annotation before advancing
+    ** past its associated token. Do not let an attribute on an expression
+    ** or an invalid declarator silently resize the next declaration. */
+    if (gnusize_pending) {
+        error("Misplaced PDP-10 size attribute");
+        gnusize_pending = 0;
+    }
     if (tokstack)		/* Pop token from push-back stack */
 	{
 	csymbol = tstack[tokstack].tsym;
@@ -264,6 +273,10 @@ nextoken (void)
 	break;
     default:
 	break;
+    }
+    if (token == T_EOF && gnusize_pending) {
+        error("Misplaced PDP-10 size attribute");
+        gnusize_pending = 0;
     }
     return token;
 }
@@ -477,7 +490,7 @@ gnuattrname(char *name, char *plain)
 static int
 skipgnuattr(void)
 {
-    int t, depth, inaligned;
+    int t, depth, inaligned, insize = 0, width = 0;
     int align;
     char *name;
 
@@ -498,6 +511,33 @@ skipgnuattr(void)
 	t = nextpp();
 	if (t == T_EOF)
 	    return 0;
+        /* A size attribute has exactly one integer literal argument.
+        ** Decode it with the normal target constant reader, not host int
+        ** arithmetic. Never accept a prefix of an invalid argument. */
+        if (insize && t != T_WSP && t != T_EOL) {
+            if (insize == 1 && depth == 2 && t == T_LPAREN)
+                insize = 2;
+            else if (insize == 2 && depth == 3 && t == T_ICONST) {
+                INT v;
+                trintcon();
+                v = constant.cvalue;
+                if ((constant.cwide && constant.chi != 0)
+                  || (v != 6 && v != 7 && v != 8 && v != 9
+                    && v != 16 && v != 18 && v != 32 && v != 36)) {
+                    error("Invalid PDP-10 size attribute width");
+                    width = 0;
+                } else width = (int)v;
+                insize = 3;
+            } else if (insize == 3 && depth == 3 && t == T_RPAREN) {
+                if (width && gnusize_pending && width != gnusize_pending)
+                    error("Conflicting PDP-10 size attributes");
+                if (width) gnusize_pending = width;
+                insize = 0;
+            } else {
+                error("PDP-10 size attribute requires one integer literal");
+                insize = 0;
+            }
+        }
 	if (t == T_LPAREN)
 	    ++depth;
 	else if (t == T_RPAREN)
@@ -517,6 +557,8 @@ skipgnuattr(void)
 		gnuattr_pending |= SF_NOINLINE;
 	    else if (gnuattrname(name, "packed"))
 		gnuattr_pending |= SF_PACKED;
+        else if (gnuattrname(name, "size"))
+            insize = 1;
 	    else if (gnuattrname(name, "aligned"))
 		{
 		/* GCC defaults to maximum useful target alignment when the
@@ -578,6 +620,15 @@ lex_take_gnuattrs(void)
     long flags = gnuattr_pending;
     gnuattr_pending = 0;
     return flags;
+}
+
+/* Width belongs to the type, not to the symbol's declaration flags. */
+int
+lex_take_gnusize_v61n(void)
+{
+    int size = gnusize_pending;
+    gnusize_pending = 0;
+    return size;
 }
 
 /* Consume a tag's packed attribute before parsing member declarations;
