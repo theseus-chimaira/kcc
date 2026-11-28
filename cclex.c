@@ -294,6 +294,14 @@ trident(void)
       || !strcmp(cp, "__PRETTY_FUNCTION__")) && curfn != NULL)
 	return strctok(curfn->Sname);
 
+    /* The native variadic cursor has the same type as stdarg.h's
+    ** va_list. Create its typedef only when the spelling is used. */
+    if (clevkcc && cursym && cursym->Sclass == SC_UNDEF
+      && !strcmp(cp, "__builtin_va_list")) {
+        cursym->Sclass = SC_TYPEDEF;
+        cursym->Stype = strcontype;
+    }
+
     if ((csymbol = cursym) != 0)
 	switch (csymbol->Sclass)
 	    {
@@ -570,6 +578,16 @@ lex_take_gnuattrs(void)
     long flags = gnuattr_pending;
     gnuattr_pending = 0;
     return flags;
+}
+
+/* Consume a tag's packed attribute before parsing member declarations;
+** leave unrelated declaration attributes pending. */
+int
+lex_take_tagpacked_v61j(void)
+{
+    int packed = (gnuattr_pending & SF_PACKED) != 0;
+    gnuattr_pending &= ~SF_PACKED;
+    return packed;
 }
 
 static int

@@ -53,6 +53,8 @@ extern TYPE *convfparam(TYPE *);                /* CCTYPE */
 extern int nextoken(void);                      /* CCLEX */
 extern void tokpush(int, SYMBOL *);             /* CCLEX */
 extern long lex_take_gnuattrs(void);              /* CCLEX */
+extern int lex_take_tagpacked_v61j(void);
+extern void taglayout_v61j(TYPE *);
 extern int expect (int);                        /* CCERR */
 
 /* Exported functions */
@@ -3493,7 +3495,7 @@ static TYPE *
 tagspec(int typ)                /* TS_STRUCT, TS_UNION, or TS_ENUM */
 {
     SYMBOL s, *tagsym, *osym;
-    int tok;
+    int tok, packed;
 
     switch (nextoken())
         {
@@ -3595,6 +3597,9 @@ tagspec(int typ)                /* TS_STRUCT, TS_UNION, or TS_ENUM */
     if (token != T_LBRACE)              /* If no definition, just return */
         return tagsym->Stype;
 
+    /* A prefix tag attribute belongs to this definition, not to its
+    ** first member. Leave attributes on non-defining references alone. */
+    packed = typ != TS_ENUM && lex_take_tagpacked_v61j();
     /* Define the structure. */
     nextoken();                         /* Flush the left brace */
     if (typ == TS_ENUM)
@@ -3607,6 +3612,10 @@ tagspec(int typ)                /* TS_STRUCT, TS_UNION, or TS_ENUM */
         expect(T_RBRACE);               /* Now flush the right brace */
 
     tagsym->Sclass = SC_TAG;            /* Struct is now defined */
+    if (typ != TS_ENUM) {
+        if (packed) packstruct(tagsym->Stype);
+        taglayout_v61j(tagsym->Stype);
+    }
     return tagsym->Stype;
 }
 
@@ -3634,6 +3643,8 @@ packstruct(TYPE *t)
         return;
     if (t->Tspec != TS_STRUCT && t->Tspec != TS_UNION)
         return;
+    /* All variants share the physical member layout. */
+    t = t->Tsmtag->Stype;
     isunion = (t->Tspec == TS_UNION);
 
     for (m = t->Tsmtag->Ssmnext; m != NULL; m = m->Ssmnext)
@@ -3755,6 +3766,7 @@ packstruct(TYPE *t)
     t->Tsize = (t->Tbytes + (TGSIZ_WORD/TGSIZ_CHAR) - 1)
              / (TGSIZ_WORD/TGSIZ_CHAR);
     t->Tsmtag->Sflags |= SF_PACKED;
+    taglayout_v61j(t);
 }
 
 

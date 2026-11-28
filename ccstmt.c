@@ -3503,6 +3503,91 @@ gnu_constant_p_v59t(void)
     return ndeficonst(known);
 }
 
+/* GNU variadic builtins share the native descending stack cursor used
+** by stdarg.h. Lower directly to existing typed expression nodes; no
+** new runtime helper, IR opcode or calling convention is needed. */
+static NODE *
+gnu_va_v61j(SYMBOL *s)
+{
+    NODE *ap, *arg, *n;
+    TYPE *t;
+    INT words;
+    enum { VA_ARG, VA_START, VA_COPY, VA_END } op;
+    int valid;
+
+    if (!strcmp(s->Sname, "__builtin_va_arg")) op = VA_ARG;
+    else if (!strcmp(s->Sname, "__builtin_va_start")) op = VA_START;
+    else if (!strcmp(s->Sname, "__builtin_va_copy")) op = VA_COPY;
+    else if (!strcmp(s->Sname, "__builtin_va_end")) op = VA_END;
+    else return NULL;
+    freesym(s);
+    nextoken();
+    if (constexpr) error("Variadic builtin in constant expression");
+    ap = asgnexpr();
+    valid = cmputype(ap->Ntype, strcontype)
+      && !tismaybitptr(ap->Ntype)
+      && (op == VA_END || ((ap->Nflag & NF_LVALUE) && !tisconst(ap->Ntype)));
+    if (!valid)
+        error("Invalid variadic cursor");
+    if (op == VA_END) {
+        expect(T_RPAREN);
+        return valid ? convcast(voidtype, ap) : ndeficonst(0);
+    }
+    if (!expect(T_COMMA)) return ndeficonst(0);
+    if (op == VA_ARG) {
+        t = typename();
+        expect(T_RPAREN);
+        if (!valid) return ndeficonst(0);
+        if (t->Tspec == TS_VOID || t->Tspec == TS_FUNCT
+          || t->Tspec == TS_ARRAY || tisbitf(t)
+          || (tisarith(t) && (t->Tspec == TS_FLOAT
+                              || tbitsize(t) < TGSIZ_WORD))) {
+            error("Invalid or unpromoted va_arg type");
+            return ndeficonst(0);
+        }
+        words = sizetype(t);
+        if (words <= 0 || words > 0777777L) {
+            error("Invalid va_arg size");
+            return ndeficonst(0);
+        }
+        /* Arguments occupy complete physical words, even for packed
+        ** aggregates. The cursor is a C byte pointer, not a word address. */
+        n = ndef(Q_ASMINUS, ap->Ntype, 0, ap,
+                 ndeficonst(words * (TGSIZ_WORD / tgcsize)));
+        n->Nascast = CAST_NONE;
+        if (tispacked(t)) {
+            /* The ABI slot is word-aligned, irrespective of the C
+            ** aggregate's byte alignment. Load its raw word image,
+            ** retaining the aggregate type on the value node. */
+            n = ptrapply(convcast(findtype(TS_PTR, uinttype), n));
+            n->Ntype = t;
+        } else
+            n = ptrapply(convcast(findtype(TS_PTR, t), n));
+        n->Nflag &= ~NF_LVALUE;
+        return n;
+    }
+    arg = asgnexpr();
+    expect(T_RPAREN);
+    if (!valid) return ndeficonst(0);
+    if (op == VA_START) {
+        t = curfn ? curfn->Stype->Tproto : NULL;
+        while (t && t->Tspec == TS_PARAM) t = t->Tproto;
+        if (!t || t->Tspec != TS_PARINF || arg->Nop != Q_IDENT
+          || (arg->Nid->Sclass != SC_ARG && arg->Nid->Sclass != SC_RARG)
+          || arg->Nid->Spmnext) {
+            error("va_start requires the last named parameter of a variadic function");
+            return ndeficonst(0);
+        }
+        arg = convcast(strcontype, addrapply(arg));
+    } else if (!cmputype(arg->Ntype, strcontype) || tismaybitptr(arg->Ntype)) {
+        error("Invalid va_copy source");
+        return ndeficonst(0);
+    }
+    n = ndef(Q_ASGN, ap->Ntype, 0, ap, convasgn(ap->Ntype, arg));
+    n->Nascast = CAST_NONE;
+    return convcast(voidtype, n);
+}
+
 static NODE *
 primary(void)
 {
@@ -3540,6 +3625,9 @@ primary(void)
 	        freesym(s);
 	        return gnu_constant_p_v59t();
 	    }
+            if (clevkcc && !strncmp(s->Sname, "__builtin_va_", 13)
+              && (n = gnu_va_v61j(s)) != NULL)
+                return n;
 	    if (strcmp(s->Sname, "__builtin_return_address") == 0) {
 		        freesym(s);
 		        return gnu_return_address_v59q();

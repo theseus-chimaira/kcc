@@ -16,7 +16,10 @@
  * register arguments above them in its private callee stack view, so the
  * first unnamed argument is immediately below the last named parameter.
  */
-#define va_arg(ap, type) (*(type *)((ap) -= sizeof(type)))
+/* Stack slots occupy complete native words, even for packed aggregates
+ * whose C sizeof is not a multiple of the word size. */
+#define va_arg(ap, type) (*(type *)((ap) -= \
+    ((sizeof(type) + sizeof(int) - 1) / sizeof(int)) * sizeof(int)))
 /*
  * This ABI has no va_list teardown operation.  The macro still must
  * evaluate its argument exactly once: callers may supply an lvalue

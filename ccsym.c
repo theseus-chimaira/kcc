@@ -2255,18 +2255,22 @@ static TYPE *
 findctype1(int tsp, INT flags, unsigned INT siz, struct type *proto,
     struct type *subt, int isproto)
 {
-    TYPE *t;
-    int hash;
+    TYPE *t, *layout = NULL;
+    int hash, aggregate = tsp == TS_STRUCT || tsp == TS_UNION;
 
     flags |= tfltab[tsp];	/* Ensure usual flags are added in */
 
-    /* Hash up attributes of this type and look up in table */
+    /* Aggregate identity is its tag, not its mutable layout. A forward
+    ** declaration and all qualified variants must stay in the same
+    ** bucket when the definition supplies their size and packed extent. */
+    if (aggregate && subt && ((SYMBOL *)subt)->Sclass == SC_TAG)
+        layout = ((SYMBOL *)subt)->Stype;
     hash = (int) ((((HOST_PTRINT)subt) + (tsp * 43)
-	    + ((isproto ? (HOST_PTRINT)proto : siz) * 101)) %
+	    + ((isproto ? (HOST_PTRINT)proto : aggregate ? 0 : siz) * 101)) %
 	    THASHSIZE);
     for (t = ttable[hash]; t != NULL; t = t->Tnhash)
 	if (t->Tspec == tsp && t->Tflag == flags
-		&& (isproto ? t->Tproto == proto : t->Tsize == siz)
+		&& (isproto ? t->Tproto == proto : aggregate || t->Tsize == siz)
 		&& t->Tsubt == subt)
 	    return t;		/* Found identical existing type! */
 
@@ -2309,9 +2313,28 @@ findctype1(int tsp, INT flags, unsigned INT siz, struct type *proto,
     else
 	t->Tsize = siz;
     t->Tsubt = subt;
+    if (layout) {
+        t->Tsize = layout->Tsize;
+        t->Tbytes = layout->Tbytes;
+    }
     t->Tnhash = ttable[hash];		/* link old types with same hash */
     ttable[hash] = t;			/* add this one in to hash table */
     return t;
+}
+
+/* Update existing qualified references when their tag becomes complete.
+** No extra list or metadata is required: the stable tag hash is shared. */
+void
+taglayout_v61j(TYPE *t)
+{
+    TYPE *p;
+    int hash = (int)((((HOST_PTRINT)t->Tsubt) + t->Tspec * 43) % THASHSIZE);
+
+    for (p = ttable[hash]; p != NULL; p = p->Tnhash)
+        if (p->Tspec == t->Tspec && p->Tsubt == t->Tsubt) {
+            p->Tsize = t->Tsize;
+            p->Tbytes = t->Tbytes;
+        }
 }
 
 
