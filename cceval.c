@@ -116,8 +116,10 @@ coord_unit(TYPE *t)
     return (b > 0 && TGSIZ_WORD % b == 0) ? b : 0;
 }
 
+/* Return the base expression: Q_IDENT, N_SCONST, or NULL for a
+** null-derived member address. No new node or symbol is allocated. */
 static int
-ptrcoord(NODE *n, int address, SYMBOL **base, INT *bit, int *member)
+ptrcoord(NODE *n, int address, NODE **base, INT *bit, int *member)
 {
     NODE *p, *i;
     INT unit, stride, count, off, pos, width;
@@ -135,7 +137,7 @@ ptrcoord(NODE *n, int address, SYMBOL **base, INT *bit, int *member)
         case Q_IDENT:
             if (!(n->Nflag & NF_GLOBAL) || tispacked(n->Ntype))
                 return 0;
-            *base = n->Nid;
+            *base = n;
             *bit = tisbyte(n->Ntype)
                  ? TGSIZ_WORD - tbitsize(n->Ntype) : 0;
             return 1;
@@ -178,6 +180,13 @@ ptrcoord(NODE *n, int address, SYMBOL **base, INT *bit, int *member)
     if (!unit)
         return 0;
     switch (n->Nop) {
+    case N_SCONST:
+        /* The two literal occurrences may denote a single merged
+        ** object (C leaves their identity unspecified). Compare the
+        ** exact payload, length and encoding before folding. */
+        *base = n;
+        *bit = 0;
+        return 1;
     case N_PCONST:
         /* GNU offsetof idiom: a null structure base, never a raw
         ** nonzero machine pointer. No actual storage is accessed.
@@ -195,7 +204,7 @@ ptrcoord(NODE *n, int address, SYMBOL **base, INT *bit, int *member)
           || n->Nid->Stype->Tspec != TS_ARRAY
           || tispacked(n->Nid->Stype))
             return 0;
-        *base = n->Nid;
+        *base = n;
         *bit = 0;
         return 1;
     case N_CAST:
@@ -240,15 +249,34 @@ ptrcoord(NODE *n, int address, SYMBOL **base, INT *bit, int *member)
 static int
 foldptrdiff(NODE *e)
 {
-    SYMBOL *a, *b;
+    NODE *a, *b;
     INT left, right, unit, stride;
     int amember = 0, bmember = 0;
 
     unit = coord_unit(e->Nleft->Ntype);
     if (!unit || unit != coord_unit(e->Nright->Ntype)
       || !ptrcoord(e->Nleft, 0, &a, &left, &amember)
-      || !ptrcoord(e->Nright, 0, &b, &right, &bmember) || a != b
-      || (!a && !amember && !bmember))
+      || !ptrcoord(e->Nright, 0, &b, &right, &bmember))
+        return 0;
+    if (!a || !b) {
+        if (a != b || (!amember && !bmember))
+            return 0;
+    } else if (a->Nop != b->Nop)
+        return 0;
+    else if (a->Nop == N_SCONST) {
+        INT extent;
+
+        if (a->Nsconst != b->Nsconst || a->Nsclen != b->Nsclen
+          || a->Ntype != b->Ntype
+          || ((a->Nflag ^ b->Nflag) & (NF_STRWIDE | NF_STR9)))
+            return 0;
+        /* The lexer shares payload storage, including suffixes. The
+        ** equal-length check above excludes suffix-only sharing.
+        ** Permit one-past addresses, but not offsets beyond the object. */
+        extent = (INT)a->Nsclen * coord_unit(a->Ntype);
+        if (left > extent || right > extent)
+            return 0;
+    } else if (a->Nid != b->Nid)
         return 0;
     stride = sizeptobj(e->Nleft->Ntype);
     if (stride <= 0 || stride > COORD_LIMIT / unit)
