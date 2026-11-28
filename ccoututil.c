@@ -31,8 +31,7 @@ oneinstr(PCODE *p)
     case P_DFSB:
     case P_DFMP:
     case P_DFDV:
-        return (tgarch == TGARCH_PDP6 ||
-            (tgcpu != TGCPU_PDP6 && tgcpu != TGCPU_KA));
+        return tgcpu != TGCPU_PDP6 && tgcpu != TGCPU_KA;
     case P_IDIV:
         if (tgcpu == TGCPU_PDP6 || tgarch == TGARCH_BASE ||
             tgarch == TGARCH_PDP10)

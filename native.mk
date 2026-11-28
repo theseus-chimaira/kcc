@@ -95,7 +95,21 @@ $(NATIVE_RUNTIME_DIR)/fp36-signed-df-v1750.dobj: runtime/libc/kcc-libc-fp36-sign
 $(NATIVE_RUNTIME_DIR)/fp36-unsigned-v1750.dobj: runtime/libc/kcc-libc-fp36-pdp6-v1.s
 	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ $<
 
-$(NATIVE_FP36_ARCHIVE): $(NATIVE_RUNTIME_DIR)/fp36-signed-df-v1750.dobj $(NATIVE_RUNTIME_DIR)/fp36-unsigned-v1750.dobj
+$(NATIVE_RUNTIME_DIR)/kccrt-dfcore-v62a.dobj: runtime/kccrt-dfcore-v62a.s
+	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ $<
+
+$(NATIVE_RUNTIME_DIR)/kccrt-dfadd-v62a.dobj: runtime/kccrt-dfadd-v62a.s
+	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ $<
+
+$(NATIVE_RUNTIME_DIR)/kccrt-dfmul-v62a.dobj: runtime/kccrt-dfmul-v62a.s
+	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ $<
+
+$(NATIVE_RUNTIME_DIR)/kccrt-dfdiv-v62a.dobj: runtime/kccrt-dfdiv-v62a.s
+	mkdir -p $(NATIVE_RUNTIME_DIR) && $(PDP10_DAS) -F -C -O $@ $<
+
+$(NATIVE_FP36_ARCHIVE): $(NATIVE_RUNTIME_DIR)/fp36-signed-df-v1750.dobj $(NATIVE_RUNTIME_DIR)/fp36-unsigned-v1750.dobj \
+    $(NATIVE_RUNTIME_DIR)/kccrt-dfcore-v62a.dobj $(NATIVE_RUNTIME_DIR)/kccrt-dfadd-v62a.dobj \
+    $(NATIVE_RUNTIME_DIR)/kccrt-dfmul-v62a.dobj $(NATIVE_RUNTIME_DIR)/kccrt-dfdiv-v62a.dobj
 	$(PDP10_DARC) -o $@ $^
 
 $(NATIVE_KCPP_DXR): $(NATIVE_LINK_RUNTIME) $(NATIVE_KCPP_OBJS) $(NATIVE_DAIMOS_LIBC)

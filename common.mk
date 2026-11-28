@@ -170,7 +170,9 @@ RUNTIME = \
 	$(RUNTIMEDIR)/ks10rt-adjbp.s $(RUNTIMEDIR)/ks10rt-kdfad.s \
 	$(RUNTIMEDIR)/ks10rt-kdfsb.s $(RUNTIMEDIR)/ks10rt-kdfmp.s \
 	$(RUNTIMEDIR)/ks10rt-kdfdv.s $(RUNTIMEDIR)/kccrt-zero.s \
-	$(RUNTIMEDIR)/kccrt-dimode-div.s
+	$(RUNTIMEDIR)/kccrt-dimode-div.s \
+	$(RUNTIMEDIR)/kccrt-dfcore-v62a.s $(RUNTIMEDIR)/kccrt-dfadd-v62a.s \
+	$(RUNTIMEDIR)/kccrt-dfmul-v62a.s $(RUNTIMEDIR)/kccrt-dfdiv-v62a.s
 
 # Sources scanned by host makedepend (ordinary KCC and native-only files).
 NATIVE_SOURCE_FILES = $(HOST_SOURCE_FILES) cckirread.c cckirwrite.c \

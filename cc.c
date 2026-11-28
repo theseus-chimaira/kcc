@@ -1344,7 +1344,11 @@ settgcpu(int cpu)
 	tgmachuse.adjbp = 0;
 	tgmachuse.fltr = 0;
 	tgmachuse.fpimm = 0;
-	tgmachuse.mapdbl = -1;	/* PDP-6 long FP is not KA software format. */
+#if defined(__COMPILER_KCC__) && HOST_DAIMOS
+        tgmachuse.mapdbl = 0;   /* Native compiler uses canonical D format. */
+#else
+        tgmachuse.mapdbl = -1;
+#endif
 	break;
 
     case TGCPU_KA:
@@ -1352,8 +1356,10 @@ settgcpu(int cpu)
 	tgmachuse.adjsp = 0;
 	tgmachuse.adjbp = 0;
 	tgmachuse.fltr = 0;
-#ifdef __COMPILER_KCC__
-	tgmachuse.mapdbl = 1;	/* Native KCC double is hardware format. */
+#if defined(__COMPILER_KCC__) && HOST_DAIMOS
+        tgmachuse.mapdbl = 0;   /* Portable D format, not KA long float. */
+#elif defined(__COMPILER_KCC__)
+	tgmachuse.mapdbl = 1;	/* Historical native KCC format. */
 #else
 	tgmachuse.mapdbl = -1;	/* Host constants still need PDP-10 mapping. */
 #endif

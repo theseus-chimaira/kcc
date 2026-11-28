@@ -212,10 +212,10 @@ kcc_inline_set_segment_v32(int seg)
 	crtsym(CRT_RETN, "$RETN")	/* CRT    ditto, returns -1 */\
 	crtsym(CRT_ZERO, "$ZERO")	/* CRT Double 0.0 constant */\
 	crtsym(CRT_ADJBP, "$ADJBP")	/* CRT ADJBP simulation rtn */\
-	crtsym(CRT_KDFAD, "$KDFAD")	/* KA10 double floating add */\
-	crtsym(CRT_KDFSB, "$KDFSB")	/* KA10 double floating subtract */\
-	crtsym(CRT_KDFMP, "$KDFMP")	/* KA10 double floating multiply */\
-	crtsym(CRT_KDFDV, "$KDFDV")	/* KA10 double floating divide */\
+	crtsym(CRT_KDFAD, "__kcc_dfadd_rt_v62a")	/* KA10 double floating add */\
+	crtsym(CRT_KDFSB, "__kcc_dfsub_rt_v62a")	/* KA10 double floating subtract */\
+	crtsym(CRT_KDFMP, "__kcc_dfmul_rt_v62a")	/* KA10 double floating multiply */\
+	crtsym(CRT_KDFDV, "__kcc_dfdiv_rt_v62a")	/* KA10 double floating divide */\
 	crtsym(CRT_BPMUL, "$BPMUL")	/* CRT BP mul table (for P_SUBBP) */\
 	crtsym(CRT_BPADT, "$BPADT")	/* CRT BP table of $BPADn (for ") */\
 	crtsym(CRT_BPAD6, "$BPAD6")	/* CRT BP 6-bit add table (for ") */\
@@ -282,10 +282,10 @@ kcc_inline_set_segment_v32(int seg)
 	crtsym(CRT_RETN, "$RETN")	/* CRT    ditto, returns -1 */\
 	crtsym(CRT_ZERO, "$ZERO")	/* CRT Double 0.0 constant */\
 	crtsym(CRT_ADJBP, "$ADJBP")	/* CRT ADJBP simulation rtn */\
-	crtsym(CRT_KDFAD, "$KDFAD")	/* KA10 double floating add */\
-	crtsym(CRT_KDFSB, "$KDFSB")	/* KA10 double floating subtract */\
-	crtsym(CRT_KDFMP, "$KDFMP")	/* KA10 double floating multiply */\
-	crtsym(CRT_KDFDV, "$KDFDV")	/* KA10 double floating divide */\
+	crtsym(CRT_KDFAD, "__kcc_dfadd_rt_v62a")	/* KA10 double floating add */\
+	crtsym(CRT_KDFSB, "__kcc_dfsub_rt_v62a")	/* KA10 double floating subtract */\
+	crtsym(CRT_KDFMP, "__kcc_dfmul_rt_v62a")	/* KA10 double floating multiply */\
+	crtsym(CRT_KDFDV, "__kcc_dfdiv_rt_v62a")	/* KA10 double floating divide */\
 	crtsym(CRT_BPMUL, "$BPMUL")	/* CRT BP mul table (for P_SUBBP) */\
 	crtsym(CRT_BPADT, "$BPADT")	/* CRT BP table of $BPADn (for ") */\
 	crtsym(CRT_BPAD6, "$BPAD6")	/* CRT BP 6-bit add table (for ") */\
@@ -1141,57 +1141,6 @@ realcode (PCODE *p)
 	case P_DFSB:
 	case P_DFMP:
 	case P_DFDV:
-	    if (tgarch == TGARCH_PDP6) {
-		PCODE q;
-		int scr1, scr2;
-		char *mn;
-
-		switch (p->Pop & POF_OPCODE) {
-		case P_DFAD: mn = "FADL"; break;
-		case P_DFSB: mn = "FSBL"; break;
-		case P_DFMP: mn = "FMPL"; break;
-		case P_DFDV: mn = "FDVL"; break;
-		default: mn = "FADL"; break;
-		}
-
-		if (p->Ptype == PTA_DCONST) {
-		    scr1 = 013;
-		    scr2 = 014;
-		    if (p->Preg == scr1 || p->Preg + 1 == scr1
-		      || p->Preg == scr2 || p->Preg + 1 == scr2) {
-			scr1 = 010;
-			scr2 = 011;
-		    }
-		    fprintf (out, "\tPUSH\t17,0%o\n", scr1);
-		    fprintf (out, "\tPUSH\t17,0%o\n", scr2);
-		    q = *p;
-		    q.Pop = P_MOVE;
-		    q.Preg = scr1;
-		    q.Ptype = PTA_DCONST1 | (p->Ptype & PTF_SKIPPED);
-		    outinstr (&q);
-		    q.Preg = scr2;
-		    q.Ptype = PTA_DCONST2 | (p->Ptype & PTF_SKIPPED);
-		    outinstr (&q);
-		    fprintf (out, "\t%s\t0%o,0%o\n", mn, p->Preg, scr1);
-		    fprintf (out, "\tPOP\t17,0%o\n", scr2);
-		    fprintf (out, "\tPOP\t17,0%o\n", scr1);
-		    return;
-		}
-
-		if ((p->Ptype & PTF_ADRMODE) == PTA_REGIS) {
-		    fprintf (out, "\t%s\t0%o,0%o\n", mn, p->Preg, p->Pr2);
-		    return;
-		}
-
-		outc ('\t');
-		outstr (mn);
-		outc ('\t');
-		outnum (p->Preg);
-		outc (',');
-		outaddress (p);
-		outnl ();
-		return;
-	    }
 	    if (tgcpu == TGCPU_PDP6 || tgcpu == TGCPU_KA) {
 		simdfop(p);
 		return;
@@ -2320,7 +2269,7 @@ static void
 simdfop (PCODE *p)
 {
     PCODE q, q2;
-    int i, op, helper, save[5];
+    int i, r, op, helper;
 
     op = p->Pop & POF_OPCODE;
     switch (op) {
@@ -2341,10 +2290,10 @@ simdfop (PCODE *p)
 	return;
     }
 
-    for (i = 0; i < 5; ++i) {
-	save[i] = 010 + i;
-	fprintf(out, "\tPUSH\t17,0%o\n", save[i]);
-    }
+    /* Save the private ABI scratch registers before either operand
+    ** is moved. Their saved values also resolve source overlap. */
+    for (i = 010; i <= 014; ++i)
+        fprintf(out, "\tPUSH\t17,0%o\n", i);
 
     q = *p;
     q.Pop = P_MOVE;
@@ -2365,7 +2314,7 @@ simdfop (PCODE *p)
 	    return;
 	}
 	if (((q.Ptype & PTF_ADRMODE) == PTA_MINDEXED && q.Pindex == 013)
-	  || (q.Ptype == PTA_REGIS && q.Pr2 == 013)) {
+	  || (q.Ptype == PTA_REGIS && q.Pr2 == 012)) {
 	    q2.Preg = 014;
 	    outinstr(&q2);
 	    q.Preg = 013;
@@ -2378,18 +2327,29 @@ simdfop (PCODE *p)
 	}
     }
 
-    fprintf(out, "\tMOVE\t10,0%o\n", p->Preg);
-    fprintf(out, "\tMOVE\t11,0%o\n", p->Preg + 1);
+    for (i = 0; i < 2; ++i) {
+        r = p->Preg + i;
+        if (r >= 010 && r <= 014)
+            fprintf(out, "\tMOVE\t%o,%d(17)\n", 010+i, r-014);
+        else
+            fprintf(out, "\tMOVE\t%o,0%o\n", 010+i, r);
+    }
     fprintf(out, "\tPUSHJ\t17,%s\n", crtsnam[helper]);
     ++crtref[helper];
-    fprintf(out, "\tMOVE\t0%o,010\n", p->Preg);
-    fprintf(out, "\tMOVE\t0%o,011\n", p->Preg + 1);
-
-    for (i = 0; i < 5; ++i)
-	if (save[i] != p->Preg && save[i] != p->Preg + 1)
-	    fprintf(out, "\tMOVE\t%o,%d(17)\n", save[i], i - 4);
+    /* If the destination overlaps upward with AC10:11, copy low first. */
+    r = p->Preg;
+    if (r == 011) {
+        fprintf(out, "\tMOVE\t12,11\n\tMOVE\t11,10\n");
+    } else if (r != 010) {
+        fprintf(out, "\tMOVE\t%o,10\n", r);
+        fprintf(out, "\tMOVE\t%o,11\n", r+1);
+    }
+    for (i = 010; i <= 014; ++i)
+        if (i != r && i != r+1)
+            fprintf(out, "\tMOVE\t%o,%d(17)\n", i, i-014);
     outadjsp(-5);
 }
+
 
 /* SIMDFIX - Output expansion of P_DFIX double-to-integer conversion "instr"
 **	P_DFIX reg,M
