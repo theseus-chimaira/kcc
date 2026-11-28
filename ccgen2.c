@@ -279,10 +279,7 @@ static void gdimemstore(VREG *, VREG *);
 static int gdimodirectstore(VREG *, NODE *);
 static void gdimove(VREG *, VREG *);
 static VREG *gdimode_from_int(VREG *, TYPE *, TYPE *, NODE *);
-static VREG *gdimode_pair_floatcast(VREG *, TYPE *, int, int);
-static VREG *gdimode_fixsf_call(VREG *, TYPE *);
-static VREG *gint_pdp6_floatcast(VREG *, TYPE *, int, int);
-static VREG *gint_pdp6_fixcast(VREG *, TYPE *, int, int);
+static VREG *gfp_intcast_call(VREG *, TYPE *, TYPE *, int);
 static void gretmove(TYPE *, VREG *, VREG *);
 static VREG *gdimodeadd(VREG *, VREG *);
 static VREG *gdimodesub(VREG *, VREG *);
@@ -1712,203 +1709,81 @@ gdimodehelper(VREG *r1, VREG *r2, int ts, int wantmod)
     return res;
 }
 
-/* Pair-valued conversion for signed and unsigned 71-bit integers.
-** The PDP-6 native floating-point format is not the later PDP-10
-** D-format.  The freestanding helpers below explicitly construct the
-** established portable KCC/GCC two-word D-format using integer
-** instructions only. Retain the old signed DF helpers on PDP-6;
-** shared libgcc entries handle unsigned values and direct SF rounding
-** with all 71 input bits, independently of target CPU.
-**
-** The helpers receive a two-word value in AC1:AC2 and return a
-** pair there, or a single-precision result in AC1.
-** Keep the operand pair together until both words have been saved:
-** the allocator's ordinary one-word widening is not applicable.
+/* Use the portable integer-only SF/D-format helpers for conversions
+** involving 36-bit words and 71-bit arithmetic pairs. All entry points
+** accept one or two words in AC1:AC2 and return their result there.
+** Keep the original signed PDP-6 pair helpers; the shared libgcc
+** routines handle direct SF rounding and unsigned pair conversions.
+** The wide integer ABI duplicates the sign in the low word; KCC's
+** internal arithmetic representation leaves that bit clear.
 */
 static VREG *
-gdimode_pair_floatcast(VREG *r, TYPE *tto, int to_float, int unsign)
+gfp_intcast_call(VREG *r, TYPE *from, TYPE *to, int to_float)
 {
     VREG *res;
     SYMBOL *s;
-    int hi, lo;
-    int single_result = to_float && tto->Tspec == TS_FLOAT;
     const char *name;
+    int pair_in = sizetype(from) == 2;
+    int pair_out = sizetype(to) == 2;
+    int wide = tisdimode(to_float ? from : to);
+    int uns = tisunsign(to_float ? from : to);
+    int hi, lo = 0;
 
-    if (tgcpu == TGCPU_PDP6 && !unsign && !single_result)
-        name = to_float ? "__kcc_floatdidf" : "__kcc_fixdfdi";
-    else if (to_float)
-        name = single_result ? (unsign ? "__floatundisf" : "__floatdisf")
-                             : (unsign ? "__floatundidf" : "__floatdidf");
-    else
-        name = unsign ? "__fixunsdfdi" : "__fixdfdi";
+    if (to_float) {
+        if (wide) {
+            if (!pair_out) name = uns ? "__floatundisf" : "__floatdisf";
+            else if (uns) name = "__floatundidf";
+            else name = tgcpu == TGCPU_PDP6 ? "__kcc_floatdidf" : "__floatdidf";
+        } else if (pair_out)
+            name = uns ? "__kcc_floatunsidf" : "__kcc_floatsidf";
+        else name = uns ? "__kcc_floatunssisf" : "__kcc_floatsisf";
+    } else {
+        if (wide) {
+            if (!pair_in) name = uns ? "__fixunssfdi" : "__fixsfdi";
+            else if (uns) name = "__fixunsdfdi";
+            else name = tgcpu == TGCPU_PDP6 ? "__kcc_fixdfdi" : "__fixdfdi";
+        } else if (pair_in)
+            name = uns ? "__kcc_fixunsdfsi" : "__kcc_fixdfsi";
+        else name = uns ? "__kcc_fixunssfsi" : "__kcc_fixsfsi";
+    }
 
-    if (!r || !vrispair(r)) {
-        int_error("Wide floating conversion needs a register pair");
+    if (!r || !!vrispair(r) != pair_in) {
+        int_error("Floating conversion register layout invalid");
         return (VREG *)-1;
     }
     vrspillothers(r, (VREG *)NULL);
-    (void) vrstoreal(r, VR2(r));
-    hi = vrreal(r);
-    lo = vrreal(VR2(r));
-    if (to_float)
+    if (pair_in) {
+        (void)vrstoreal(r, VR2(r));
+        lo = vrreal(VR2(r));
+    }
+    hi = vrtoreal(r);
+    if (to_float && wide)
         gccabi_dimode_encode_regs(hi, lo);
 
-    code00(P_PUSH, R_SP, hi);
-    code00(P_PUSH, R_SP, lo);
-    stackoffset += 2;
+    /* The only remaining live expression registers belong to the operand.
+    ** Pairs are consecutive and start at AC1 or above, so moving the high
+    ** word first cannot destroy the low source word. No stack argument
+    ** copy is required. Flush the physical transfers before the ABI call
+    ** so peephole renaming cannot move an input out of AC1:AC2.
+    */
+    if (hi != 1) code00(P_MOVE, 1, hi);
+    if (pair_in && lo != 2) code00(P_MOVE, 2, lo);
+    flushcode();
     vrfree(r);
-    codemdx(P_MOVE, 1, (SYMBOL *)NULL, -1, R_SP);
-    codemdx(P_MOVE, 2, (SYMBOL *)NULL, 0, R_SP);
-
     s = symfidstr((char *)name);
-    if (s == NULL) {
+    if (!s) {
         s = symgcreat((char *)name);
         s->Sclass = SC_EXTREF;
     }
     ++s->Srefs;
     code6(P_PUSHJ, VR_SP, s);
-    code8(P_ADJSP, VR_SP, -2);
-    stackoffset -= 2;
-
-    res = single_result ? vrretget() : vrretdget();
-    res->Vrtype = tto;
-    if (!single_result)
-        VR2(res)->Vrtype = tto;
-    if (!to_float)
+    res = pair_out ? vrretdget() : vrretget();
+    res->Vrtype = to;
+    if (pair_out) VR2(res)->Vrtype = to;
+    if (!to_float && wide) {
         code8(P_TLZ, VR2(res), 0400000L);
-    return res;
-}
-
-/* Convert canonical SF to signed or unsigned 71-bit DImode.
-** FIX only returns a single 36-bit integer, so use the shared
-** libgcc entry returning the complete pair in AC1:AC2.
-*/
-static VREG *
-gdimode_fixsf_call(VREG *r, TYPE *tto)
-{
-    VREG *res;
-    SYMBOL *s;
-    int src;
-    char *name = tisunsign(tto) ? "__fixunssfdi" : "__fixsfdi";
-
-    vrspillothers(r, (VREG *)NULL);
-    src = vrtoreal(r);
-    code00(P_PUSH, R_SP, src);
-    ++stackoffset;
-    vrfree(r);
-    codemdx(P_MOVE, 1, (SYMBOL *)NULL, 0, R_SP);
-    s = symfidstr(name);
-    if (s == NULL) {
-        s = symgcreat(name);
-        s->Sclass = SC_EXTREF;
+        if (tisnarrowpair(to)) return gfieldnormalize_v61i(res, to);
     }
-    ++s->Srefs;
-    code6(P_PUSHJ, VR_SP, s);
-    code8(P_ADJSP, VR_SP, -1);
-    --stackoffset;
-    res = vrretdget();
-    res->Vrtype = tto;
-    VR2(res)->Vrtype = tto;
-    code8(P_TLZ, VR2(res), 0400000L);
-    return res;
-}
-
-/* Real compiler-owned PDP-6 conversion of unsigned SImode into SF or
-** full D-format.  The former FSC-only lowering lost significant low
-** bits and rounded halfway values incorrectly.  Spill live registers
-** before the ABI call and transfer the source through one stack word.
-** This also amortizes the cost of normalization across all callsites.
-*/
-static VREG *
-gint_pdp6_floatcast(VREG *r, TYPE *tto, int to_double, int is_unsigned)
-{
-    VREG *res;
-    SYMBOL *s;
-    char *name;
-    int src;
-
-    if (!r || vrispair(r)) {
-        int_error("PDP-6 unsigned float conversion needs one register");
-        return (VREG *)-1;
-    }
-    vrspillothers(r, (VREG *)NULL);
-    src = vrreal(r);
-    code00(P_PUSH, R_SP, src);
-    ++stackoffset;
-    vrfree(r);
-    codemdx(P_MOVE, 1, (SYMBOL *)NULL, 0, R_SP);
-
-    name = to_double ? (is_unsigned ? "__kcc_floatunsidf" :
-                        "__kcc_floatsidf") :
-        (is_unsigned ? "__kcc_floatunssisf" : "__kcc_floatsisf");
-    s = symfidstr(name);
-    if (s == NULL) {
-        s = symgcreat(name);
-        s->Sclass = SC_EXTREF;
-    }
-    ++s->Srefs;
-    code6(P_PUSHJ, VR_SP, s);
-    code8(P_ADJSP, VR_SP, -1);
-    --stackoffset;
-
-    if (to_double) {
-        res = vrretdget();
-        res->Vrtype = tto;
-        VR2(res)->Vrtype = tto;
-    } else {
-        res = vrretget();
-        res->Vrtype = tto;
-    }
-    return res;
-}
-
-/* Convert a positive PDP-6 SF or D-format operand to an unsigned
-** 36-bit integer.  Signed FIX/DFIX cannot represent values with the
-** sign bit set in the unsigned result.  Use the exact compiler-owned
-** conversion routines instead, preserving both D-format words.
-*/
-static VREG *
-gint_pdp6_fixcast(VREG *r, TYPE *tto, int from_double,
-                  int is_unsigned)
-{
-    VREG *res;
-    SYMBOL *s;
-    char *name;
-    int hi, lo;
-
-    if (!r || (from_double && !vrispair(r))) {
-        int_error("PDP-6 unsigned fix conversion register layout invalid");
-        return (VREG *)-1;
-    }
-    vrspillothers(r, (VREG *)NULL);
-    if (from_double)
-        (void) vrstoreal(r, VR2(r));
-    hi = vrreal(r);
-    lo = from_double ? vrreal(VR2(r)) : 0;
-    code00(P_PUSH, R_SP, hi);
-    if (from_double)
-        code00(P_PUSH, R_SP, lo);
-    stackoffset += from_double ? 2 : 1;
-    vrfree(r);
-    codemdx(P_MOVE, 1, (SYMBOL *)NULL, from_double ? -1 : 0, R_SP);
-    if (from_double)
-        codemdx(P_MOVE, 2, (SYMBOL *)NULL, 0, R_SP);
-
-    name = from_double ? (is_unsigned ? "__kcc_fixunsdfsi" :
-                          "__kcc_fixdfsi") :
-        (is_unsigned ? "__kcc_fixunssfsi" : "__kcc_fixsfsi");
-    s = symfidstr(name);
-    if (s == NULL) {
-        s = symgcreat(name);
-        s->Sclass = SC_EXTREF;
-    }
-    ++s->Srefs;
-    code6(P_PUSHJ, VR_SP, s);
-    code8(P_ADJSP, VR_SP, from_double ? -2 : -1);
-    stackoffset -= from_double ? 2 : 1;
-
-    res = vrretget();
-    res->Vrtype = tto;
     return res;
 }
 
@@ -5958,30 +5833,7 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	case CAST_FP_IT:
 	    if (!r)
 		return (VREG *)-1;	/* Stop if just checking. */
-	    if (tisdimode(tto)) {
-	        if (tfrom->Tspec == TS_FLOAT)
-	            r = gdimode_fixsf_call(r, tto);
-	        else
-	            r = gdimode_pair_floatcast(r, tto, 0, tisunsign(tto));
-	        return tisnarrowpair(tto) ? gfieldnormalize_v61i(r, tto) : r;
-	    }
-	    if (tgcpu == TGCPU_PDP6)
-		return gint_pdp6_fixcast(r, tto,
-		    tfrom->Tspec != TS_FLOAT, tisunsign(tto));
-	    switch (tfrom->Tspec)
-		{
-		case TS_FLOAT:
-		    code0(P_FIX, r, r);	/* just use that! */
-		    break;
-		case TS_DOUBLE:
-		case TS_LNGDBL:
-		    code0(P_DFIX, r, r);	/* r must be a register pair */
-		    if (vrispair(r))
-			vrnarrow(r);		/* Use 1st AC as result */
-		    break;
-		}
-	/* Narrow the int here if needed */
-	    break;
+        return gfp_intcast_call(r, tfrom, tto, 0);
 
 	case CAST_FP_FP:
 	    switch (castidx(tfrom->Tspec,tto->Tspec))
@@ -6010,66 +5862,9 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	case CAST_IT_FP:
 	    if (!r)
 		return (VREG *)-1;	/* Stop if just checking. */
-	    if (tisdimode(tfrom))
-		return gdimode_pair_floatcast(r, tto, 1, tisunsign(tfrom));
-	    r = gintwiden(r, tfrom,		/* Ensure widened to int or unsigned */
-		    tissigned(tfrom) ? inttype : uinttype,
-		    ln);
-	    switch (tto->Tspec)
-		{
-		case TS_FLOAT:
-		    if (tgcpu == TGCPU_PDP6 && !tisdimode(tfrom))
-			return gint_pdp6_floatcast(r, tto, 0,
-			    tisunsign(tfrom));
-		/* Although FLTR and UFLTR are always supported by CCOUT,
-		** on KA-10s they are inefficient enough that it is worth
-		** checking for the opportunity to use a simple FSC, which
-		** is limited to integers of 27 bits or less.
-		*/
-		    if (tissigned(tfrom) || tbitsize(tfrom) < TGSIZ_WORD)
-			{
-		    /* Signed or known positive */
-			code0(P_FLTR, r, r); /* Use FLTR instr or macro */
-			break;
-			}
-		/* Ugh, unsigned full word value, must use hairy UFLTR. */
-		    code0(P_UFLTR, r, r); /* Use UFLTR simulated op */
-		    break;
-
-		case TS_DOUBLE:
-		case TS_LNGDBL:
-		    if (tgcpu == TGCPU_PDP6 && !tisdimode(tfrom))
-			return gint_pdp6_floatcast(r, tto, 1,
-			    tisunsign(tfrom));
-		    vrlowiden(r);	/* Make into register pair */
-		    code5(P_SETZ, VR2(r)); /* zero the next reg */
-		    if ((tgcpu == TGCPU_PDP6 || tgcpu == TGCPU_KA)
-		      && (tissigned(tfrom) || tbitsize(tfrom) < TGSIZ_WORD))
-			{
-			/* PDP-6/KA10 have no FLTR instruction and the old
-			** ASHC/TLC/DFAD-zero normalization sequence is not
-			** reliable with the DAIMON helper path.  A single-float
-			** conversion in the high word plus a zero low word gives
-			** the expected double value for signed/small integer inputs.
-			*/
-			code0(P_FLTR, r, r);
-			break;
-			}
-		    if (tissigned(tfrom) || tbitsize(tfrom) < TGSIZ_WORD)
-			{
-			code8(P_ASHC, r, -8); /* shift out mantissa*/
-			code8(P_TLC, r, 0243000L); /* put exponent in */
-			}
-		    else			/* Unsigned conversion */
-			{
-			code8(P_LSHC, r, -9);		/* Shift unsigned */
-			code8(P_LSH, VR2(r), -1); /* Fix up lo wd */
-			code8(P_TLC, r, 0244000L); /* exp (note 1 bigger!) */
-			}
-		    code9(P_DFAD, r, 0.0, 1);	/* Normalize the result */
-		    break;
-		}
-	    break;
+        if (!tisdimode(tfrom))
+            r = gintwiden(r, tfrom, tissigned(tfrom) ? inttype : uinttype, ln);
+        return gfp_intcast_call(r, tfrom, tto, 1);
 
 	default:
 	    int_error("gcastr: bad cast %d", cop);

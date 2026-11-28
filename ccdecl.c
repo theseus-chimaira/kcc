@@ -602,15 +602,10 @@ tntdef(void)
 static int
 fn_abi_cast_call(NODE *n)
 {
-    TYPE *from, *to;
     if (n->Nop != N_CAST || !n->Nleft)
         return 0;
-    from = n->Nleft->Ntype;
-    to = n->Ntype;
-    if (n->Ncast == CAST_FP_IT)
-        return tgcpu == TGCPU_PDP6 || tisdimode(to);
-    if (n->Ncast == CAST_IT_FP)
-        return tgcpu == TGCPU_PDP6 || tisdimode(from);
+    if (n->Ncast == CAST_FP_IT || n->Ncast == CAST_IT_FP)
+        return 1;
     return 0;
 }
 
