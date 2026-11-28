@@ -1720,7 +1720,11 @@ gizptr(NODE *n)
 			case SC_INTDEF: case SC_INTREF:
 			case SC_INLINK: case SC_ISTATIC:
 			    pv.pv_id = n->Nleft->Nid;	/* Remember ident */
-			    if (tisbyte(n->Nleft->Ntype)) {
+                            if (n->Nleft->Ntype->Tspec == TS_VOID) {
+                                /* External linker symbol: first C byte. */
+                                pv.pv_bsize = TGSIZ_CHAR;
+                                pv.pv_off = 0;
+                            } else if (tisbyte(n->Nleft->Ntype)) {
 				/* Single bytes are right-justified */
 				pv.pv_bsize = (int) tbitsize(n->Nleft->Ntype);
 				pv.pv_off = (TGSIZ_WORD/pv.pv_bsize) - 1;

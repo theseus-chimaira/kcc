@@ -5160,7 +5160,10 @@ dodecl(int baseclass, SYMBOL *d, SYMBOL *s)
     /* Check for a function reference, which needs special handling */
     if (d->Stype->Tspec == TS_VOID)     /* Declaring a void object? */
         {
-        if (d->Sclass != SC_TYPEDEF)
+        /* GNU linker symbols may have incomplete void type, but only
+        ** as external references. Never allocate a void object. */
+        if (d->Sclass != SC_TYPEDEF
+          && !(clevkcc && d->Sclass == SC_EXTREF && token != Q_ASGN))
             {
             error("Cannot declare %S (or any object) as void", s);
             d->Stype = deftype;

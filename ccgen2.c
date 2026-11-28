@@ -8177,6 +8177,8 @@ gprimary(NODE *n)
 	    return genexpr(n->Nright);
 
 	case Q_IDENT:		/* Variable name */
+            if (n->Ntype->Tspec == TS_VOID)
+                return NULL; /* Incomplete external symbol has no value. */
 	    if ((t = n->Nid->Stype->Tspec) == TS_FUNCT || t == TS_ARRAY )
 		{
 	   /* Check for funct/array. Make sure Ntype is ptr */
@@ -9947,7 +9949,12 @@ gaddress(NODE *n)
 	    r = vrget();
 	    r->Vrtype = n->Ntype;		/* Set C type of object in reg */
 	    s = n->Nid;
-	    if (tisbytearray(s->Stype))	/* If ident is byte array, */
+            if (s->Stype->Tspec == TS_VOID) {
+                /* External void has no storage width. Its address denotes
+                ** the first C byte, like a GNU label value. */
+                bsiz = TGSIZ_CHAR;
+                offset = 0;
+            } else if (tisbytearray(s->Stype))	/* If ident is byte array, */
 		{
 		bsiz = elembsize(s->Stype);		/* set byte params */
 		offset = 0;				/* with left-justified byte */

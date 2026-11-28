@@ -2278,7 +2278,8 @@ unary(void)
     nextoken();			/* Have a prefix op, move on to next token */
     n = castexpr();		/* and parse cast-expr following the op */
     if (n->Ntype->Tspec == TS_VOID
-      && !(op == N_ADDR && n->Nop == N_PTR))
+      && !(op == N_ADDR && (n->Nop == N_PTR
+                           || (clevkcc && n->Nop == Q_IDENT))))
 	error("Unary operand cannot have void type");
 
     switch (op)
