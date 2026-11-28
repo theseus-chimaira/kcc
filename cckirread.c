@@ -37,6 +37,17 @@ static int nodelinks(int);
 static SYMBOL *getsymid(unsigned);
 static SYMBOL *ensuresym(unsigned);
 
+/* Builtin types are shared with the generator's type table.  In
+** particular, synthesized arithmetic must see the same int type as
+** the input graph.  Qualified and noncanonical types remain owned
+** by the graph.
+*/
+static int
+builtin_type(TYPE *t)
+{
+    return t && t->Tspec < TS_MAX && typeptr[t->Tspec] == t;
+}
+
 static int
 nodelinks(int op)
 {
@@ -179,6 +190,18 @@ readgraph(FILE *fp, INT *head, unsigned hn, NODE **root, INT *record)
         t->Tspec=(unsigned char)w[j++]; t->Tbytes=(unsigned short)w[j++]; t->Tflag=unpackint(&w[j]); j+=KIR_INT_CHUNKS;
         tr[id].v0kind=(int)w[j++]; memcpy(tr[id].v0,&w[j],KIR_INT_CHUNKS*sizeof(INT)); j+=KIR_INT_CHUNKS;
         tr[id].v1kind=(int)w[j++]; tr[id].v1=(unsigned)w[j++];
+        if (t->Tspec < TS_MAX && !tr[id].v0kind &&
+            tr[id].v1kind == 1 && !tr[id].v1) {
+            TYPE *base = typeptr[t->Tspec];
+            if (base && base->Tspec == t->Tspec &&
+                base->Tflag == t->Tflag && base->Tbytes == t->Tbytes &&
+                base->Tsize == (unsigned INT)unpackint(tr[id].v0) &&
+                !base->Tsubt) {
+                last_types[id] = base;
+                free(t);
+            }
+        }
+
     }
     for(i=0;i<ns;++i){ unsigned id,j=0,k; SYMBOL*s; INT refs;
         if(readrec(fp,&kind,w,KIR_MAX_RECORD_WORDS,&n)||kind!=KIR_REC_SYMBOL||n<54) goto bad;
@@ -236,7 +259,7 @@ readgraph(FILE *fp, INT *head, unsigned hn, NODE **root, INT *record)
         }
         goto bad;
     }
-    for(i=1;i<=nt;++i){ TYPE*t=last_types[i]; if(tr[i].v0kind)t->t_v0.t_subt=(unsigned)tr[i].v0[0]<=nt?last_types[(unsigned)tr[i].v0[0]]:NULL; else t->Tsize=(unsigned INT)unpackint(tr[i].v0); if(tr[i].v1kind==2)t->Tsmtag=getsymid(tr[i].v1); else t->Tsubt=tr[i].v1<=nt?last_types[tr[i].v1]:NULL; }
+    for(i=1;i<=nt;++i){ TYPE*t=last_types[i]; if(builtin_type(t)) continue; if(tr[i].v0kind)t->t_v0.t_subt=(unsigned)tr[i].v0[0]<=nt?last_types[(unsigned)tr[i].v0[0]]:NULL; else t->Tsize=(unsigned INT)unpackint(tr[i].v0); if(tr[i].v1kind==2)t->Tsmtag=getsymid(tr[i].v1); else t->Tsubt=tr[i].v1<=nt?last_types[tr[i].v1]:NULL; }
     for(i=0;i<ns;++i){ SYMBOL*s=sr[i].sym; s->Stype=sr[i].type<=nt?last_types[sr[i].type]:NULL; s->Ssmnext=getsymid(sr[i].next); if(sr[i].valkind)s->Ssym=getsymid((unsigned)sr[i].val[0]); else s->Svalue=unpackint(sr[i].val); if(sr[i].tagkind==1)s->Ssmtag=getsymid(sr[i].tag); else if(sr[i].tagkind==2)s->Shproto=sr[i].tag<=nt?last_types[sr[i].tag]:NULL; }
     for(i=0;i<ns;++i) {
         SYMBOL *s=sr[i].sym;
@@ -324,7 +347,7 @@ clear_graph(void)
     _reg_count = 0;
     for(i=1;i<=last_nn;++i){ if(last_nodes&&last_nodes[i]){ if(last_nodes[i]->Nop==N_SCONST)free(last_nodes[i]->Nsconst); free(last_nodes[i]); } }
     for(i=1;i<=local_ns;++i) if(local_syms&&local_syms[i]) free(local_syms[i]);
-    for(i=1;i<=last_nt;++i) if(last_types&&last_types[i]) free(last_types[i]);
+    for(i=1;i<=last_nt;++i) if(last_types&&last_types[i]&&!builtin_type(last_types[i])) free(last_types[i]);
     free(last_nodes); free(local_syms); free(last_types);
     last_nodes=NULL; local_syms=NULL; last_types=NULL; last_nn=local_ns=last_nt=0;
 }

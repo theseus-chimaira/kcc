@@ -724,6 +724,11 @@ convarrfn(struct node * n)
 
 	case TS_ARRAY:		/* Convert "array of T" to "pointer to T" */
 	    if (!(n->Nflag & NF_LVALUE)) {
+#if !KCC_PHASE_GEN
+                /* Materialization belongs to parsing, before the local
+                ** frame is finalized and serialized to KIR. KGEN must
+                ** not create a new automatic object from an unlowered
+                ** non-lvalue array expression. */
                 /* C99 permits decay of an array member of a non-lvalue
                 ** aggregate. Materialize the aggregate value in ordinary
                 ** automatic storage before taking the member address.
@@ -755,6 +760,7 @@ convarrfn(struct node * n)
                     return ndef(N_EXPRLIST, ptr->Ntype, ptr->Nflag,
                                 seq, ptr);
                 }
+#endif
 		error("Array ref must be lvalue");
 	    }
 
