@@ -694,7 +694,8 @@ dimode_hlsh(DIMODE_HACC *r, const DIMODE_HACC *a, int n)
 	r->lo = (a->lo << n) & dimode_hmask35();
 	return;
     }
-    r->hi = (a->lo << (n - 35)) & dimode_hmask36();
+    r->hi = ((a->lo << (n - 35))
+             | (n == 35 ? (a->hi << 35) : 0)) & dimode_hmask36();
     r->lo = 0;
 }
 

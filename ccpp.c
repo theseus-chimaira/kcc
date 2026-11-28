@@ -361,7 +361,6 @@ static
 void tkerr(char *, int);
 static
 tlist_t getlinetl(void), tlwspdel(tlist_t, int);
-static INT ppifexpr(PPTOK **, int, int *);
 static
 tlist_t asmrefill(void);
 static
@@ -679,6 +678,8 @@ ppinit(void)
     /* Matches the installed stddef.h and native pointer subtraction. */
     mdefstr("__PTRDIFF_TYPE__", MACF_ATOM, "int");
     mdefstr("__LONG_LONG_71BIT__", MACF_ATOM, "1");
+    if (CSTD_HAS(CSTD_C99))
+        mdefstr("__LONG_LONG_MAX__", MACF_ATOM, "1180591620717411303423LL");
     mdefstr("__LINE__",		MACF_LINE, NULL);
     mdefstr("__FILE__",		MACF_FILE, NULL);
     mdefstr("__COUNTER__",	MACF_COUNTER, NULL);
@@ -5335,70 +5336,189 @@ ppifskip(PPTOK *p)
     return p;
 }
 
-/*
- * PPIFINT - Convert an integer preprocessing token to an INT.
- *
- * This deliberately avoids strtol(): KCPP needs no extra libc conversion
- * machinery merely to evaluate #if.  KCC accepts the usual decimal, octal,
- * hexadecimal, and GNU/KCC binary spellings.  Integer suffixes are ignored
- * after the digit sequence, as their signedness/width does not affect the
- * truth value of the bootstrap expressions.
+/* A preprocessing value uses two native words: 36 high payload bits,
+ * 35 low payload bits, and unsignedness in the spare low-word bit.
+ * Do not use the host's long width or pull the parser into KCPP.
  */
-static INT
-ppifint(char *s, int *bad)
-{
-    unsigned INT v = 0;
-    int base = 10;
-    int d;
-    int any = 0;
+#define PP_LO ((unsigned INT)0377777777777ULL)
+#define PP_HI ((unsigned INT)0777777777777ULL)
+#define PP_U  ((unsigned INT)0400000000000ULL)
+typedef struct { unsigned INT hi, lo; } PPVAL;
 
-    if (s == NULL) {
-	*bad = 1;
-	return 0;
+static void
+ppset(PPVAL *v, unsigned INT hi, unsigned INT lo, unsigned INT uns)
+{
+    v->hi = hi & PP_HI;
+    v->lo = (lo & PP_LO) | uns;
+}
+
+/* C89 has only 36-bit long; C99 and GNU modes use 71-bit intmax_t. */
+static void
+ppnorm(PPVAL *v)
+{
+    if (!CSTD_HAS(CSTD_C99))
+        v->hi = (v->hi & 1) ? ((v->lo & PP_U) ? 1 : PP_HI) : 0;
+}
+
+static int
+pptruth(const PPVAL *v)
+{
+    return v->hi != 0 || (v->lo & PP_LO) != 0;
+}
+
+static void
+ppadd(PPVAL *a, const PPVAL *b)
+{
+    unsigned INT lo = (a->lo & PP_LO) + (b->lo & PP_LO);
+    ppset(a, a->hi + b->hi + (lo >> 35), lo, (a->lo | b->lo) & PP_U);
+}
+
+static void
+ppsub(PPVAL *a, const PPVAL *b)
+{
+    unsigned INT x = a->lo & PP_LO, y = b->lo & PP_LO;
+    ppset(a, a->hi - b->hi - (x < y), x-y, (a->lo | b->lo) & PP_U);
+}
+
+static void
+ppneg(PPVAL *v)
+{
+    unsigned INT lo = v->lo & PP_LO;
+    ppset(v, 0-v->hi-(lo != 0), 0-lo, v->lo & PP_U);
+}
+
+static int
+ppcmp(const PPVAL *a, const PPVAL *b)
+{
+    unsigned INT x, y;
+    if (a->hi != b->hi) return a->hi < b->hi ? -1 : 1;
+    x = a->lo & PP_LO;
+    y = b->lo & PP_LO;
+    return x < y ? -1 : x != y;
+}
+
+static void
+ppshift(PPVAL *v, int n, int right, int sign)
+{
+    unsigned INT lo = v->lo & PP_LO, hi = v->hi, uns = v->lo & PP_U;
+    if (!n) return;
+    if (!right) {
+        if (n < 35) ppset(v, (hi << n) | (lo >> (35-n)), lo << n, uns);
+        else ppset(v, (lo << (n-35)) | (n == 35 ? (hi << 35) : 0), 0, uns);
+        return;
     }
+    if (n < 35) {
+        lo = (lo >> n) | (hi << (35-n));
+        hi = (hi >> n) | (sign ? (PP_HI ^ (PP_HI >> n)) : 0);
+    } else {
+        n -= 35;
+        lo = (hi >> n) | (sign ? (PP_LO ^ (PP_LO >> n)) : 0);
+        hi = sign ? PP_HI : n == 0 ? hi >> 35 : 0;
+    }
+    ppset(v, hi, lo, uns);
+}
+
+static void
+ppmul(PPVAL *a, const PPVAL *b)
+{
+    PPVAL x = *a, y = *b;
+    ppset(a, 0, 0, (a->lo | b->lo) & PP_U);
+    while (pptruth(&y)) {
+        if (y.lo & 1) ppadd(a, &x);
+        ppshift(&y, 1, 1, 0);
+        ppshift(&x, 1, 0, 0);
+    }
+}
+
+/* Unsigned restoring division, with explicit carry out of the remainder.
+ * The common small case needs only a native word divide. */
+static void
+ppdiv(PPVAL *a, const PPVAL *b, int mod, int uns)
+{
+    PPVAL x = *a, y = *b, q, r;
+    int i, aneg = !uns && (x.hi & PP_U) != 0;
+    int bneg = !uns && (y.hi & PP_U) != 0;
+    x.lo &= PP_LO;
+    y.lo &= PP_LO;
+    if (aneg) ppneg(&x);
+    if (bneg) ppneg(&y);
+    ppset(&q, 0, 0, 0);
+    r = q;
+    if (!x.hi && !y.hi) {
+        q.lo = x.lo / y.lo;
+        r.lo = x.lo % y.lo;
+    } else {
+        for (i = 0; i < 71; ++i) {
+            int carry = (r.hi & PP_U) != 0;
+            ppshift(&r, 1, 0, 0);
+            if (x.hi & PP_U) r.lo |= 1;
+            ppshift(&x, 1, 0, 0);
+            ppshift(&q, 1, 0, 0);
+            if (carry || ppcmp(&r, &y) >= 0) {
+                ppsub(&r, &y);
+                q.lo |= 1;
+            }
+        }
+    }
+    *a = mod ? r : q;
+    if (mod ? aneg : aneg != bneg) ppneg(a);
+    if (uns) a->lo |= PP_U;
+}
+
+/* Convert a literal with four small multiply/carry steps. Each partial
+ * product fits even the native 36-bit host word. Detect overflow instead
+ * of letting a wider source constant wrap at the host's integer width.
+ */
+static void
+ppifint(char *s, int *bad, PPVAL *v)
+{
+    unsigned INT part, lo, hi, carry;
+    int base = 10, d, any = 0, us = 0, ls = 0;
+    ppset(v,0,0,0);
+    if (s == NULL) { *bad = 1; return; }
     if (*s == '0') {
-	++s;
-	if (*s == 'x' || *s == 'X') {
-	    base = 16;
-	    ++s;
-	} else if (*s == 'b' || *s == 'B') {
-	    base = 2;
-	    ++s;
-	} else {
-	    base = 8;
-	    any = 1;		/* The leading zero is itself a digit. */
-	}
+        ++s;
+        if (*s == 'x' || *s == 'X') { base = 16; ++s; }
+        else if (*s == 'b' || *s == 'B') { base = 2; ++s; }
+        else { base = 8; any = 1; }
     }
-    while (*s != '\0') {
-	int c = (unsigned char)*s;
-	if (c == '\'') {		/* C23/GNU digit separator */
-	    ++s;
-	    continue;
-	}
-	if (c >= '0' && c <= '9')
-	    d = c - '0';
-	else if (c >= 'a' && c <= 'f')
-	    d = c - 'a' + 10;
-	else if (c >= 'A' && c <= 'F')
-	    d = c - 'A' + 10;
-	else
-	    break;
-	if (d >= base)
-	    break;
-	v = v * (unsigned INT)base + (unsigned INT)d;
-	any = 1;
-	++s;
+    while (*s) {
+        int c = (unsigned char)*s;
+        if (c == '\'') { ++s; continue; }
+        if (c >= '0' && c <= '9') d = c-'0';
+        else if (c >= 'a' && c <= 'f') d = c-'a'+10;
+        else if (c >= 'A' && c <= 'F') d = c-'A'+10;
+        else break;
+        if (d >= base) break;
+        part = (v->lo & 0777777UL)*base + d;
+        lo = part & 0777777UL;
+        part = (v->lo >> 18)*base + (part >> 18);
+        lo |= (part & 0377777UL) << 18;
+        carry = part >> 17;
+        part = (v->hi & 0777777UL)*base + carry;
+        hi = part & 0777777UL;
+        part = (v->hi >> 18)*base + (part >> 18);
+        if (part >> 18) *bad = 1;
+        v->hi = hi | ((part & 0777777UL) << 18);
+        v->lo = lo;
+        any = 1; ++s;
     }
-    if (!any) {
-	*bad = 1;
-	return 0;
+    while (*s) {
+        if (*s == 'u' || *s == 'U') ++us;
+        else if (*s == 'l' || *s == 'L') ++ls;
+        else break;
+        ++s;
     }
-    /* Only standard integer suffix letters may remain. */
-    while (*s == 'u' || *s == 'U' || *s == 'l' || *s == 'L')
-	++s;
-    if (*s != '\0')
-	*bad = 1;
-    return (INT)v;
+    if (!any || *s || us > 1 || ls > 2) *bad = 1;
+    if (!CSTD_HAS(CSTD_C99)) {
+        if (v->hi > 1 || ls > 1) *bad = 1;
+        if (v->hi & 1) us = 1;
+    } else if (v->hi & PP_U) {
+        if (!us && base == 10 && !clevkcc) *bad = 1;
+        us = 1;
+    }
+    if (us) v->lo |= PP_U;
+    ppnorm(v);
 }
 
 /*
@@ -5502,140 +5622,125 @@ ppifprec(int tok)
     }
 }
 
-static INT ppifcond(PPTOK **, int, int *);
+/* Results are written directly into the caller's two-word slot. This
+ * avoids native aggregate-return temporaries at recursive parser levels. */
+static void ppifcond(PPTOK **, int, int *, PPVAL *);
 
-static INT
-ppifprimary(PPTOK **pp, int eval, int *bad)
+static void
+ppifprimary(PPTOK **pp, int eval, int *bad, PPVAL *v)
 {
     PPTOK *p = ppifskip(*pp);
-    INT v;
+    INT ch;
     int op;
-
-    if (p == NULL) {
-	*bad = 1;
-	return 0;
-    }
+    if (!p) { *bad = 1; ppset(v,0,0,0); return; }
     op = p->pt_typ;
     *pp = tokn2p(p->pt_nxt);
     switch (op) {
     case T_ICONST:
-	return eval ? ppifint(p->pt_val.cp, bad) : 0;
+        ppifint(p->pt_val.cp, bad, v);
+        if (!eval) ppset(v,0,0,v->lo & PP_U);
+        return;
     case T_CCONST:
-	return eval ? ppifchar(p->pt_val.cp, bad) : 0;
+        ch = ppifchar(p->pt_val.cp, bad);
+        if (!eval) ch = 0;
+        ppset(v,((unsigned INT)ch & PP_U) ? PP_HI : 0,ch,0);
+        return;
     case T_LPAREN:
-	v = ppifcond(pp, eval, bad);
-	p = ppifskip(*pp);
-	if (p == NULL || p->pt_typ != T_RPAREN) {
-	    *bad = 1;
-	    return 0;
-	}
-	*pp = tokn2p(p->pt_nxt);
-	return v;
-    case Q_PLUS:
-	return ppifprimary(pp, eval, bad);
-    case Q_MINUS:
-	v = ppifprimary(pp, eval, bad);
-	return eval ? -v : 0;
-    case Q_NOT:
-	v = ppifprimary(pp, eval, bad);
-	return eval ? !v : 0;
-    case Q_COMPL:
-	v = ppifprimary(pp, eval, bad);
-	return eval ? ~v : 0;
-    default:
-	*bad = 1;
-	return 0;
+        ppifcond(pp, eval, bad, v);
+        p = ppifskip(*pp);
+        if (!p || p->pt_typ != T_RPAREN) { *bad = 1; return; }
+        *pp = tokn2p(p->pt_nxt);
+        return;
+    case Q_PLUS: case Q_MINUS: case Q_NOT: case Q_COMPL:
+        ppifprimary(pp, eval, bad, v);
+        if (op == Q_NOT) { ppset(v,0,eval && !pptruth(v),0); return; }
+        if (eval && op == Q_MINUS) ppneg(v);
+        if (eval && op == Q_COMPL) ppset(v,~v->hi,~v->lo,v->lo & PP_U);
+        ppnorm(v);
+        return;
+    default: *bad = 1; ppset(v,0,0,0); return;
     }
 }
 
-static INT
-ppifbinary(PPTOK **pp, int minprec, int eval, int *bad)
+static void
+ppifbinary(PPTOK **pp, int minprec, int eval, int *bad, PPVAL *lhs)
 {
-    INT lhs = ppifprimary(pp, eval, bad);
-
+    PPVAL rhs;
+    ppifprimary(pp, eval, bad, lhs);
     for (;;) {
-	PPTOK *p = ppifskip(*pp);
-	int op;
-	int prec;
-	int reval;
-	INT rhs;
-
-	if (p == NULL || (prec = ppifprec(p->pt_typ)) < minprec)
-	    break;
-	op = p->pt_typ;
-	*pp = tokn2p(p->pt_nxt);
-	reval = eval;
-	if (op == Q_LAND && lhs == 0)
-	    reval = 0;
-	else if (op == Q_LOR && lhs != 0)
-	    reval = 0;
-	rhs = ppifbinary(pp, prec + 1, reval, bad);
-	if (!eval)
-	    continue;
-	switch (op) {
-	case Q_MPLY: lhs *= rhs; break;
-	case Q_DIV:
-	    if (rhs == 0) *bad = 1;
-	    else lhs /= rhs;
-	    break;
-	case Q_MOD:
-	    if (rhs == 0) *bad = 1;
-	    else lhs %= rhs;
-	    break;
-	case Q_PLUS: lhs += rhs; break;
-	case Q_MINUS: lhs -= rhs; break;
-	case Q_LSHFT:
-	    if (rhs < 0 || rhs >= 36) *bad = 1;
-	    else lhs <<= rhs;
-	    break;
-	case Q_RSHFT:
-	    if (rhs < 0 || rhs >= 36) *bad = 1;
-	    else lhs >>= rhs;
-	    break;
-	case Q_LESS: lhs = lhs < rhs; break;
-	case Q_GREAT: lhs = lhs > rhs; break;
-	case Q_LEQ: lhs = lhs <= rhs; break;
-	case Q_GEQ: lhs = lhs >= rhs; break;
-	case Q_EQUAL: lhs = lhs == rhs; break;
-	case Q_NEQ: lhs = lhs != rhs; break;
-	case Q_ANDT: lhs &= rhs; break;
-	case Q_XORT: lhs ^= rhs; break;
-	case Q_OR: lhs |= rhs; break;
-	case Q_LAND: lhs = (lhs != 0 && rhs != 0); break;
-	case Q_LOR: lhs = (lhs != 0 || rhs != 0); break;
-	default: *bad = 1; break;
-	}
+        PPTOK *p = ppifskip(*pp);
+        int op, prec, reval, cmp, logical, shift, uns;
+        unsigned INT u;
+        if (!p || (prec = ppifprec(p->pt_typ)) < minprec) break;
+        op = p->pt_typ;
+        *pp = tokn2p(p->pt_nxt);
+        reval = eval;
+        if (op == Q_LAND && !pptruth(lhs)) reval = 0;
+        if (op == Q_LOR && pptruth(lhs)) reval = 0;
+        ppifbinary(pp, prec+1, reval, bad, &rhs);
+        logical = op == Q_LAND || op == Q_LOR || prec == 9 || prec == 10;
+        shift = op == Q_LSHFT || op == Q_RSHFT;
+        u = (lhs->lo | (shift ? 0 : rhs.lo)) & PP_U;
+        uns = u != 0;
+        if (!eval) { ppset(lhs,0,0,logical ? 0 : u); continue; }
+        if (!shift && op != Q_LAND && op != Q_LOR) {
+            lhs->lo = (lhs->lo & PP_LO) | u;
+            rhs.lo = (rhs.lo & PP_LO) | u;
+            ppnorm(lhs);
+            ppnorm(&rhs);
+        }
+        switch (op) {
+        case Q_MPLY: ppmul(lhs,&rhs); break;
+        case Q_DIV: case Q_MOD:
+            if (!pptruth(&rhs)) *bad = 1;
+            else ppdiv(lhs,&rhs,op == Q_MOD,uns);
+            break;
+        case Q_PLUS: ppadd(lhs,&rhs); break;
+        case Q_MINUS: ppsub(lhs,&rhs); break;
+        case Q_LSHFT: case Q_RSHFT:
+            if (rhs.hi || (rhs.lo & PP_LO) >= (CSTD_HAS(CSTD_C99) ? 71 : 36))
+                *bad = 1;
+            else ppshift(lhs,(int)(rhs.lo & PP_LO),op == Q_RSHFT,
+                         !uns && (lhs->hi & PP_U));
+            break;
+        case Q_LESS: case Q_GREAT: case Q_LEQ: case Q_GEQ:
+        case Q_EQUAL: case Q_NEQ:
+            if (!uns && ((lhs->hi ^ rhs.hi) & PP_U))
+                cmp = (lhs->hi & PP_U) ? -1 : 1;
+            else cmp = ppcmp(lhs,&rhs);
+            ppset(lhs,0,op == Q_LESS ? cmp < 0 : op == Q_GREAT ? cmp > 0 :
+                op == Q_LEQ ? cmp <= 0 : op == Q_GEQ ? cmp >= 0 :
+                op == Q_EQUAL ? cmp == 0 : cmp != 0,0);
+            break;
+        case Q_ANDT: ppset(lhs,lhs->hi & rhs.hi,lhs->lo & rhs.lo,u); break;
+        case Q_XORT: ppset(lhs,lhs->hi ^ rhs.hi,lhs->lo ^ rhs.lo,u); break;
+        case Q_OR: ppset(lhs,lhs->hi | rhs.hi,lhs->lo | rhs.lo,u); break;
+        case Q_LAND: ppset(lhs,0,pptruth(lhs) && pptruth(&rhs),0); break;
+        case Q_LOR: ppset(lhs,0,pptruth(lhs) || pptruth(&rhs),0); break;
+        default: *bad = 1; break;
+        }
+        ppnorm(lhs);
     }
-    return lhs;
 }
 
-static INT
-ppifcond(PPTOK **pp, int eval, int *bad)
+static void
+ppifcond(PPTOK **pp, int eval, int *bad, PPVAL *v)
 {
-    INT cond = ppifbinary(pp, 4, eval, bad);
-    PPTOK *p = ppifskip(*pp);
-
-    if (p != NULL && p->pt_typ == Q_QUERY) {
-	INT tv;
-	INT fv;
-	*pp = tokn2p(p->pt_nxt);
-	tv = ppifcond(pp, eval && cond != 0, bad);
-	p = ppifskip(*pp);
-	if (p == NULL || p->pt_typ != T_COLON) {
-	    *bad = 1;
-	    return 0;
-	}
-	*pp = tokn2p(p->pt_nxt);
-	fv = ppifcond(pp, eval && cond == 0, bad);
-	return eval ? (cond != 0 ? tv : fv) : 0;
+    PPTOK *p;
+    ppifbinary(pp,4,eval,bad,v);
+    p = ppifskip(*pp);
+    if (p && p->pt_typ == Q_QUERY) {
+        PPVAL other;
+        int yes = pptruth(v);
+        *pp = tokn2p(p->pt_nxt);
+        ppifcond(pp,eval && yes,bad,yes ? v : &other);
+        p = ppifskip(*pp);
+        if (!p || p->pt_typ != T_COLON) { *bad = 1; return; }
+        *pp = tokn2p(p->pt_nxt);
+        ppifcond(pp,eval && !yes,bad,yes ? &other : v);
+        v->lo |= other.lo & PP_U;
+        ppnorm(v);
     }
-    return cond;
-}
-
-static INT
-ppifexpr(PPTOK **pp, int eval, int *bad)
-{
-    return ppifcond(pp, eval, bad);
 }
 
 /* IFTEST - auxiliary for #if and #elif.
@@ -5676,7 +5781,11 @@ iftest(void)
 	if (debpp) pmactl("iftest", curtl, 0);
 #endif
 	p = tlpcur(curtl);
-	val = ppifexpr(&p, 1, &bad);
+	{
+            PPVAL result;
+            ppifcond(&p, 1, &bad, &result);
+            val = pptruth(&result);
+        }
 	p = ppifskip(p);
 	if (p != NULL)
 	    bad = 1;
