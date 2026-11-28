@@ -17,6 +17,7 @@
 #endif
 
 /* Imported (external) functions used herein */
+extern NODE *labeldiff_v61o(NODE *);
 extern void ridlsym(SYMBOL *);
 extern void vlaclear_v12(void);				/* CCSYM */
 extern SYMBOL *newlabel(void);
@@ -82,6 +83,9 @@ static void gizpacked(NODE *, TYPE *, SYMBOL *);
 static void gizpackedscalar(NODE *, TYPE *, SYMBOL *);
 static void gizpackedputbits(unsigned INT, int);
 static void gizfieldbits_v61i(NODE *, int);
+static void outdiff_v61o(NODE *, int);
+static void outbyteprefix_v61o(int);
+static void outdiffbits_v61o(NODE *, int);
 static void gizbytes(NODE *, TYPE *, SYMBOL *, int);
 static void bytbeg(int), 
 	    wdalign(void), 
@@ -1331,6 +1335,31 @@ static INT
 gizconst(NODE *e)
 {
     INT res;
+    NODE *diff = labeldiff_v61o(e);
+
+    if (diff) {
+        int bits = tbitsize(e->Ntype);
+        /* Match standalone byte scalars' right-justified native slot.
+        ** Word integers are emitted directly. */
+        if (tisbyte(e->Ntype)) {
+            int pad = TGSIZ_WORD % bits;
+            bytbeg(bits);
+            outbyte(0, TGSIZ_WORD - bits - pad);
+            outdiffbits_v61o(diff, bits);
+            if (pad) outbyte(0, pad);
+            bytend();
+        } else {
+            outstr(asmdialect == ASM_GAS ? "\t.word " : "\t");
+            outdiff_v61o(diff, 0);
+            if (bits < TGSIZ_WORD && tisunsign(e->Ntype)) {
+                outstr("&");
+                outnum(((unsigned INT)1 << bits) - 1);
+            }
+            outnl();
+            ++locctr;
+        }
+        return CT_CON;
+    }
 
     switch(e->Nop) {
 
@@ -1963,9 +1992,13 @@ gizlist(NODE *n, TYPE *t, SYMBOL *s)	/* N_IZLIST to initialize from */
 	    else if (n->Nleft == NULL)
 		outbyte(0L, s);
 	    else {
-		if (n->Nleft->Nop != N_ICONST) /* not const? */
-		    int_error("gizlist: bitf izer not iconst %N", n);
-		outbyte(n->Nleft->Niconst, s);
+                NODE *diff = labeldiff_v61o(n->Nleft);
+                if (diff) outdiffbits_v61o(diff, s);
+                else {
+                    if (n->Nleft->Nop != N_ICONST)
+                        int_error("gizlist: bitf izer not iconst %N", n);
+                    outbyte(n->Nleft->Niconst, s);
+                }
 	    }
 	}
 	bytend();			/* Done, ensure out of byte mode */
@@ -2074,6 +2107,11 @@ gizfieldbits_v61i(NODE *n, int bits)
     INT hi = 0, lo = 0;
 
     if (n != NULL) {
+        NODE *diff = labeldiff_v61o(n);
+        if (diff && bits <= TGSIZ_WORD) {
+            outdiffbits_v61o(diff, bits);
+            return;
+        }
         if (n->Nop != N_ICONST) {
             int_error("bitfield initializer not integer constant %N", n);
         } else if (bits > TGSIZ_WORD) {
@@ -2116,6 +2154,14 @@ gizpackedscalar(NODE *n, TYPE *t, SYMBOL *s)
     if (n == NULL) {
         gizpackedputbits(0, storebits);
         return;
+    }
+    {
+        NODE *diff = labeldiff_v61o(n);
+        if (diff) {
+            outdiffbits_v61o(diff, bits);
+            if (storebits > bits) gizpackedputbits(0, storebits - bits);
+            return;
+        }
     }
     if (n->Nop != N_ICONST && n->Nop != N_PCONST) {
         error("GNU packed static scalar initializer must be an integer constant");
@@ -2276,7 +2322,14 @@ gizbytes(NODE *izl, TYPE *t, SYMBOL *s, int lev) /* Level (0 is top level) */
 		nbs -= sizearray(t->Tsubt);	/* Done with subarray bytes */
 		break;
 	    default:
-		int_error("gizbytes: bad izer for %S %N", s, n);
+                {
+                    NODE *diff = labeldiff_v61o(n->Nleft);
+                    if (diff) {
+                        outbyteprefix_v61o(bsiz);
+                        outdiff_v61o(diff, 0);
+                        nbs--;
+                    } else int_error("gizbytes: bad izer for %S %N", s, n);
+                }
 	}
     }
 
@@ -2356,30 +2409,64 @@ outval(INT v)
 **	Must already be in byte mode.
 */
 static void
-outbyte(INT v, int siz)
+outbyteprefix_v61o(int siz)
 {
     char nbuf[40];
 
-    v &= ((unsigned INT)1 << siz) - 1;	/* Ensure value masked off */
     if (bpos < siz)
 	wdalign();		/* If not enough room, get new wd */
     if (bpos == TGSIZ_WORD) {	/* If at start of word, */
 	sprintf(nbuf, asmdialect == ASM_GAS ? "\t.byte %d," : "\tBYTE (%d) ", siz);
 	outstr(nbuf);
-	outnum(v);			/* DAS values use explicit KCC octal */
 	bsiz = siz;			/* and remember the active size */
     }
     else if (siz == bsiz) {		/* can skip size if no change */
 	outstr(",");
-	outnum(v);
     }
     else {
 	sprintf(nbuf, " (%d) ", siz);	/* Else just output it */
 	outstr(nbuf);
-	outnum(v);
 	bsiz = siz;
     }
     bpos -= siz;
+}
+
+static void
+outbyte(INT v, int siz)
+{
+    outbyteprefix_v61o(siz);
+    outnum(v & (siz == TGSIZ_WORD ? ~(unsigned INT)0 : (((unsigned INT)1 << siz) - 1)));
+}
+
+/* Both labels are in the same function's text section. Their word
+** difference is absolute at assembly time; scale to C-byte units. */
+static void
+outdiff_v61o(NODE *n, int shift)
+{
+    outnum(TGSIZ_WORD / TGSIZ_CHAR);
+    outstr("*(");
+    outmiref(n->Nleft->Nxfsym);
+    outstr("-");
+    outmiref(n->Nright->Nxfsym);
+    outstr(")");
+    if (shift) {
+        outstr(">>");
+        outnum(shift);
+    }
+}
+
+/* Emit the low bits of a deferred value, splitting only when the
+** physical field crosses a word. DAS masks each absolute fragment. */
+static void
+outdiffbits_v61o(NODE *n, int bits)
+{
+    while (bits > 0) {
+        int take = bpos ? bpos : TGSIZ_WORD;
+        if (take > bits) take = bits;
+        bits -= take;
+        outbyteprefix_v61o(take);
+        outdiff_v61o(n, bits);
+    }
 }
 
 #if 0	/* 5/91 KCC size */

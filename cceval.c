@@ -253,6 +253,12 @@ foldptrdiff(NODE *e)
     INT left, right, unit, stride;
     int amember = 0, bmember = 0;
 
+    if (e->Nleft->Nop == N_ACONST && e->Nright->Nop == N_ACONST
+      && e->Nleft->Nxfsym == e->Nright->Nxfsym) {
+        e->Nop = N_ICONST;
+        e->Niconst = 0;
+        return 1;
+    }
     unit = coord_unit(e->Nleft->Ntype);
     if (!unit || unit != coord_unit(e->Nright->Ntype)
       || !ptrcoord(e->Nleft, 0, &a, &left, &amember)
@@ -823,6 +829,8 @@ evalbinop(NODE *e)
     chkovf();				/* clear machine overflow flags */
 #endif    
 
+    if (eleft->Nop == N_ACONST || e->Nright->Nop == N_ACONST)
+        return e;
     switch (eleft->Ntype->Tspec) {
     case TS_INT:
     case TS_LONG:
@@ -1975,6 +1983,15 @@ evalcast(NODE *e)
     TYPE *tfrom = cn->Ntype;	/* Converting from this typespec */
     TYPE *tto = e->Ntype;	/* to this one */
 
+    /* Label nodes hold symbol references, not encoded pointer integers. */
+    if (cn->Nop == N_ACONST && e->Ncast != CAST_NONE
+      && e->Ncast != CAST_BOOL && e->Ncast != CAST_VOID)
+        return e;
+    if (cn->Nop == N_ACONST && e->Ncast == CAST_BOOL) {
+        e->Nop = N_ICONST;
+        e->Niconst = 1;
+        return e;
+    }
     switch ((int) e->Ncast) {
 	case CAST_ILL:		/* Illegal cast from error? */
 	    return e;		/* Should already have complained */

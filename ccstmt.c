@@ -2266,6 +2266,10 @@ unary(void)
 		}
 	    lab = csymbol;
 	    nextoken();
+        if (!curfn || !clevkcc) {
+            error("GNU label address requires a function in GNU mode");
+            return ndeficonst(0);
+        }
 	    n = ndeft(N_ACONST, voidptrtype);
 	    n->Nxfsym = plabel(lab, 0);
 	    return n;

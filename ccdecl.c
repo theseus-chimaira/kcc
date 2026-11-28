@@ -43,6 +43,7 @@ extern void copysym(SYMBOL *, SYMBOL *), ridlsym(SYMBOL *);     /* CCSYM */
 extern void mapintsym(SYMBOL *);                /* CCSYM */
 extern int  mapextsym(SYMBOL *);                /* CCSYM */
 extern void freesym(SYMBOL *);  /* CCSYM */
+extern NODE *labeldiff_v61o(NODE *);
 extern NODE *evalexpr(NODE *);          /* CCEVAL */
 extern NODE *funstmt(void), *asgnexpr(void);    /* CCSTMT */
 extern NODE *exprconst(void);           /* CCSTMT */
@@ -5790,7 +5791,8 @@ chkarith(TYPE *t, NODE *e, int noptyp)
     if ((n = convasgn(t, e)) != e)      /* Apply assignment convs */
         e = (optpar || !izautof) /* and optimize result if */
                 ? evalexpr(n) : n;      /* want or need to. */
-    if ((!izautof) && e->Nop != noptyp)
+    if ((!izautof) && e->Nop != noptyp
+      && !(noptyp == N_ICONST && curfn && labeldiff_v61o(e)))
         error("%s constant required as initializer",
                 (noptyp == N_ICONST ? "Integer" : "Floating-point"));
     return e;

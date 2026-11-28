@@ -29,6 +29,33 @@ int nodeidx(NODE *);		/* CCERR */
   void nodedump(NODE *n);	/* CC */
 #endif
 
+/* Recognize a deferred difference in native C-byte units. Only narrowing
+** integer conversions (or equal-width conversions) preserve its low bits
+** without needing a separate signed intermediate expression. Keep the
+** existing tree so KIR needs no new node kind or serialized metadata. */
+NODE *
+labeldiff_v61o(NODE *e)
+{
+    if (!e) return NULL;
+    while (e->Nop == N_CAST) {
+        if ((e->Ncast != CAST_NONE && e->Ncast != CAST_IT_IT)
+          || !tisinteg(e->Ntype) || tisbool(e->Ntype)
+          || tbitsize(e->Ntype) > TGSIZ_WORD
+          || !tisinteg(e->Nleft->Ntype)
+          || tbitsize(e->Ntype) > tbitsize(e->Nleft->Ntype))
+            return NULL;
+        e = e->Nleft;
+    }
+    if (e->Nop == Q_MINUS && e->Nleft->Nop == N_ACONST
+      && e->Nright->Nop == N_ACONST && tisinteg(e->Ntype)
+      && e->Nleft->Ntype->Tspec == TS_PTR
+      && e->Nright->Ntype->Tspec == TS_PTR
+      && e->Nleft->Ntype->Tsubt->Tspec == TS_VOID
+      && e->Nright->Ntype->Tsubt->Tspec == TS_VOID)
+        return e;
+    return NULL;
+}
+
 /* Internal functions */
 static NODE *nget(void);
 #if DEBUG_KCC		/* 5/91 KCC size */
