@@ -1892,6 +1892,12 @@ copyflag (NODE *new, NODE *old)
 
     new->Ntype = old->Ntype;
     new->Nflag = old->Nflag | wide;
+    if (new->Nop == N_ICONST && tisnarrowpair(new->Ntype)) {
+        INT hi, lo;
+        dimode_iconst_words(new, &hi, &lo);
+        dimode_iconst_put(new, targetint(tbitsize(new->Ntype) - 35,
+                                        tisunsign(new->Ntype), hi), lo);
+    }
     return new;
 }
 
@@ -1988,14 +1994,8 @@ evalcast(NODE *e)
 		cn->Niconst = tolong(tto, dimode_narrow_word_v61g(cn));
 		cn->Nflag &= ~NF_WIDE;
 		}
-	    else if ((cn->Nflag & NF_WIDE) && tisdimode(tto))
-		{
-		if (!tisdimode(tfrom))
-		    {
-		    cn->Niconst = tolong(tto, cn->Niconst);
-		    cn->Nflag &= ~NF_WIDE;
-		    }
-		}
+	    else if (tisdimode(tto))
+		; /* Already a normalized arithmetic pair. */
 	    else
 		cn->Niconst = tolong(tto, cn->Niconst);
 	    break;

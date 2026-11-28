@@ -264,6 +264,7 @@ static VREG *gpackedload(NODE *);
 static VREG *gpackedloadat(NODE *, VREG *);
 static VREG *gpackedstore(VREG *, NODE *);
 static VREG *gpackedstoreat(VREG *, NODE *, VREG *);
+static VREG *gfieldnormalize_v61i(VREG *, TYPE *);
 static VREG *gpackedcopy(NODE *, NODE *, TYPE *, int);
 static VREG *gpackedvalue(NODE *, TYPE *);
 static VREG *gpackedbitbase(NODE *, INT *);
@@ -354,6 +355,7 @@ genxrelease(NODE *n)
 static VREG *
 gexpr(NODE *n)
 {
+    VREG *r;
     switch (tok[n->Nop].tktype)
 	{
 	case TKTY_ASOP:
@@ -361,12 +363,16 @@ gexpr(NODE *n)
 	case TKTY_TERNARY:
 	    return gternary(n);
 	case TKTY_BINOP:
-	    return gbinary(n);
+	    r = gbinary(n);
+    return r && tisnarrowpair(n->Ntype) ? gfieldnormalize_v61i(r, n->Ntype) : r;
 	case TKTY_BOOLOP:
 	case TKTY_BOOLUN:
 	    return glogical(n);
 	case TKTY_UNOP:
-	    return gunary(n);
+	    r = gunary(n);
+	    if ((n->Nop == Q_COMPL || n->Nop == N_NEG) && tisnarrowpair(n->Ntype))
+	        return gfieldnormalize_v61i(r, n->Ntype);
+	    return r;
 	case TKTY_RWOP:				/* For now, RW's go below */
 	case TKTY_PRIMARY:
 	    return gprimary(n);
@@ -3634,9 +3640,13 @@ gassign(NODE *n)
         if (n->Nascast != CAST_NONE)
             r1 = gcastr(n->Nascast, r1, n->Nleft->Ntype, n->Ntype,
                         (NODE *)NULL);
+        else if (tisnarrowpair(nod->Ntype))
+            r1 = gfieldnormalize_v61i(r1, nod->Ntype);
         if (ra != NULL)
             {
-            int raflags = ra->Vrflags;
+            int raflags;
+            (void) vrtoreal(ra);
+            raflags = ra->Vrflags;
             ra->Vrflags |= VRF_LOCK;
             r1 = gpackedstoreat(r1, nod, ra);
             ra->Vrflags = raflags;
@@ -5898,6 +5908,8 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 			}
 		    }
 		}
+	    else if (tisdimode(tto) && tisdimode(tfrom))
+	        ; /* Both limbs already have arithmetic representation. */
 	    else if (tbitsize(tto) < tbitsize(tfrom))
 		{
 		int bits = tbitsize(tto);
@@ -5925,6 +5937,8 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 	    if (Register_Nopreserve (r->Vrloc) && unsigned)
 #endif
 		r = gintwiden(r, tfrom, tto, ln); /*Widen integer if needed */
+	    if (tisnarrowpair(tto))
+	        return gfieldnormalize_v61i(r, tto);
 	    break;
 
         case CAST_PT_IT:
@@ -5946,8 +5960,10 @@ gcastr(int cop, struct vreg * r, struct type * tfrom, struct type * tto, struct 
 		return (VREG *)-1;	/* Stop if just checking. */
 	    if (tisdimode(tto)) {
 	        if (tfrom->Tspec == TS_FLOAT)
-	            return gdimode_fixsf_call(r, tto);
-	        return gdimode_pair_floatcast(r, tto, 0, tisunsign(tto));
+	            r = gdimode_fixsf_call(r, tto);
+	        else
+	            r = gdimode_pair_floatcast(r, tto, 0, tisunsign(tto));
+	        return tisnarrowpair(tto) ? gfieldnormalize_v61i(r, tto) : r;
 	    }
 	    if (tgcpu == TGCPU_PDP6)
 		return gint_pdp6_fixcast(r, tto,
@@ -6399,7 +6415,13 @@ gincdec(NODE *n, int inc, int pre)
 	    int len;
 
 	    ra = gaddress(n);
-	    r = getmem(ra, n->Ntype, 0, 1);
+	    if (tisbitf(n->Ntype)) {
+	        int flags = ra->Vrflags;
+	        ra->Vrflags |= VRF_LOCK;
+	        r = gpackedloadat(n, ra);
+	        ra->Vrflags = flags;
+	    } else
+	        r = getmem(ra, n->Ntype, 0, 1);
 	    if (!pre)
 		{
 		rflags = r->Vrflags;
@@ -6411,7 +6433,9 @@ gincdec(NODE *n, int inc, int pre)
 		VR2(r)->Vrflags = r2flags;
 		r2->Vrtype = n->Ntype;
 		VR2(r2)->Vrtype = n->Ntype;
-		gdimove(r2, r);
+		/* Postfix needs both the saved value and the live update pair. */
+		codek0(P_MOVE, r2, r);
+		codek0(P_MOVE, VR2(r2), VR2(r));
 		}
 
 	    (void) vrstoreal(r, VR2(r));
@@ -6435,7 +6459,13 @@ gincdec(NODE *n, int inc, int pre)
 		    vrreal(VR2(r)), vrreal(VR2(r)), lab,
 		    vrreal(VR2(r)), vrreal(r), lab);
 	    codestr(buf, len);
-	    stomem(r, ra, 2, 0);
+	    if (tisbitf(n->Ntype)) {
+	        r = gfieldnormalize_v61i(r, n->Ntype);
+	        (void) gpackedstoreat(r, n, ra);
+	        (void) vrtoreal(ra);
+	        vrfree(ra);
+	    } else
+	        stomem(r, ra, 2, 0);
 	    if (!pre)
 		{
 		vrfree(r);
@@ -6963,25 +6993,49 @@ gmaybitstoredepth(VREG *reg, NODE *n, int depth)
 ** The caller starts with an S=1 pointer to the first field bit.
 */
 static int
-gfieldfragment_v61h(VREG *p, int phase, int bits, int done)
+gfieldfragment_v61h(VREG *p, int phase, int bits, int done, int prev)
 {
-    int take, oldps, newps;
+    int take, oldps, newps, pos, limb;
 
     if (phase < 0)
         return 1;
+    pos = (phase + done) % TGSIZ_WORD;
+    take = TGSIZ_WORD - pos;
+    if (take > bits - done) take = bits - done;
+    /* Arithmetic pairs have a 35-bit low limb. No fragment may
+    ** straddle that boundary, even inside a single physical word. */
+    limb = bits - 35 - done;
+    if (bits > TGSIZ_WORD && limb > 0 && take > limb) take = limb;
     if (done == 0) {
-        take = TGSIZ_WORD - phase;
-        if (take > bits) take = bits;
         oldps = ((TGSIZ_WORD - phase - 1) << 6) | 1;
-        newps = ((TGSIZ_WORD - phase - take) << 6) | take;
     } else {
-        take = bits - done;
-        oldps = done;
-        newps = ((TGSIZ_WORD - take) << 6) | take;
-        code1(P_ADD, p, 1);
+        int oldpos = (phase + done - prev) % TGSIZ_WORD;
+        oldps = ((TGSIZ_WORD - oldpos - prev) << 6) | prev;
+        if (pos == 0) code1(P_ADD, p, 1);
     }
+    newps = ((TGSIZ_WORD - pos - take) << 6) | take;
     code8(P_TLC, p, (oldps ^ newps) << 6);
     return take;
+}
+
+/* A wide field has a canonical arithmetic pair, with a possibly
+** narrower high limb. The low 35 payload bits are already normalized. */
+static VREG *
+gfieldnormalize_v61i(VREG *r, TYPE *t)
+{
+    int shift = TGSIZ_LONGLONG - tbitsize(t);
+    if (!r) return (VREG *)-1;
+    if (shift > 0) {
+        if (tisunsign(t))
+            code1(P_AND, r, ((unsigned INT)1 << (TGSIZ_WORD - shift)) - 1);
+        else {
+            code8(P_LSH, r, shift);
+            code8(P_ASH, r, -shift);
+        }
+    }
+    r->Vrtype = t;
+    VR2(r)->Vrtype = t;
+    return r;
 }
 
 static VREG *
@@ -6997,10 +7051,11 @@ gpackedloadat(NODE *n, VREG *savedbase)
     int bits, units, tail, i, nbits, saveflags, pflags;
 
     bits = tbitsize(n->Ntype);
-    if (bitptrderef(n) || bitptrmember(n) || crossbit(n->Nxoff))
+    if (bitptrderef(n) || bitptrmember(n) || crossbit(n->Nxoff)
+      || (bits > TGSIZ_WORD && packedbit(n->Nxoff)))
         {
-        int done, phase, take;
-        VREG *acc;
+        int done, phase, take = 0, split;
+        VREG *acc, *pair = NULL;
 
         if (savedbase != NULL)
             {
@@ -7015,25 +7070,39 @@ gpackedloadat(NODE *n, VREG *savedbase)
         saveflags = p->Vrflags;
         p->Vrflags |= VRF_LOCK;
         acc = NULL;
+        split = bits > TGSIZ_WORD ? bits - 35 : 0;
+        if (split) {
+            pair = vrdget();
+            pair->Vrflags |= VRF_LOCK;
+        }
         phase = crossbit(n->Nxoff) && !bitptrmember(n)
                 && !bitptrderef(n) ? crossbitoff(n->Nxoff) % TGSIZ_WORD : -1;
         for (done = 0; done < bits; done += take)
             {
-            take = gfieldfragment_v61h(p, phase, bits, done);
-            q = vrget();
-            q->Vrtype = uinttype;
-            code00(P_LDB, vrtoreal(q), vrtoreal(p));
-            if (acc == NULL)
-                acc = q;
-            else {
-                code8(P_LSH, acc, take);
-                code0(P_IOR, acc, q);
+            take = gfieldfragment_v61h(p, phase, bits, done, take);
+            if (pair && (done == 0 || done == split)) {
+                acc = done == 0 ? pair : VR2(pair);
+                code00(P_LDB, vrtoreal(acc), vrtoreal(p));
+            } else {
+                q = vrget();
+                q->Vrtype = uinttype;
+                code00(P_LDB, vrtoreal(q), vrtoreal(p));
+                if (acc == NULL)
+                    acc = q;
+                else {
+                    code8(P_LSH, acc, take);
+                    code0(P_IOR, acc, q);
+                }
             }
             if (phase < 0 && done + take < bits)
                 code00(P_IBP, 0, vrtoreal(p));
             }
         p->Vrflags = saveflags;
         vrfree(p);
+        if (pair) {
+            pair->Vrflags &= ~VRF_LOCK;
+            return gfieldnormalize_v61i(pair, n->Ntype);
+        }
         return gcastr(CAST_IT_IT, acc, uinttype, n->Ntype, (NODE *)NULL);
         }
     if (packedbit(n->Nxoff) || packedbitscalar(n->Nxoff))
@@ -7151,9 +7220,11 @@ gpackedstoreat(VREG *reg, NODE *n, VREG *savedbase)
     int bits, units, tail, i, nbits, below, savebase, savereg, pflags;
 
     bits = tbitsize(n->Ntype);
-    if (bitptrderef(n) || bitptrmember(n) || crossbit(n->Nxoff))
+    if (bitptrderef(n) || bitptrmember(n) || crossbit(n->Nxoff)
+      || (bits > TGSIZ_WORD && packedbit(n->Nxoff)))
         {
-        int done, rflags, shift, phase, take;
+        int done, rflags, shift, phase, take = 0, split;
+        VREG *src;
 
         if (savedbase != NULL)
             {
@@ -7163,6 +7234,7 @@ gpackedstoreat(VREG *reg, NODE *n, VREG *savedbase)
             }
         else
             base = gaddress(n);
+        (void) vrstoreal(reg, base);
         rflags = reg->Vrflags;
         reg->Vrflags |= VRF_LOCK;
         p = base;
@@ -7171,20 +7243,26 @@ gpackedstoreat(VREG *reg, NODE *n, VREG *savedbase)
         p->Vrflags |= VRF_LOCK;
         phase = crossbit(n->Nxoff) && !bitptrmember(n)
                 && !bitptrderef(n) ? crossbitoff(n->Nxoff) % TGSIZ_WORD : -1;
+        split = bits > TGSIZ_WORD ? bits - 35 : 0;
         for (done = 0; done < bits; done += take)
             {
-            take = gfieldfragment_v61h(p, phase, bits, done);
+            take = gfieldfragment_v61h(p, phase, bits, done, take);
             shift = bits - done - take;
+            src = reg;
+            if (split) {
+                if (done < split) shift -= 35;
+                else src = VR2(reg);
+            }
             /* DPB consumes exactly the low S bits of its source. */
             if (shift != 0) {
                 q = vrget();
                 q->Vrtype = uinttype;
-                codek0(P_MOVE, q, reg);
+                codek0(P_MOVE, q, src);
                 code8(P_LSH, q, -shift);
                 code00(P_DPB, vrtoreal(q), vrtoreal(p));
                 vrfree(q);
             } else
-                code00(P_DPB, vrtoreal(reg), vrtoreal(p));
+                code00(P_DPB, vrtoreal(src), vrtoreal(p));
             if (phase < 0 && done + take < bits)
                 code00(P_IBP, 0, vrtoreal(p));
             }
@@ -7349,6 +7427,40 @@ gpackedregscalar(NODE *n, VREG *agg)
 
     bitoff = packedoffbit(n->Nxoff);
     bits = tbitsize(n->Ntype);
+    if (bits > TGSIZ_WORD && tisbitf(n->Ntype)) {
+        VREG *pair, *dst;
+        int done = 0, split = bits - 35;
+        int flags = agg->Vrflags;
+
+        /* Returned aggregates are raw physical words. Extract the
+        ** two arithmetic limbs separately, never using a DImode load. */
+        (void) vrstoreal(agg, VR2(agg));
+        agg->Vrflags |= VRF_LOCK;
+        pair = vrdget();
+        pair->Vrflags |= VRF_LOCK;
+        while (done < bits) {
+            int pos = (bitoff + done) % TGSIZ_WORD;
+            int take = TGSIZ_WORD - pos;
+            int end = done < split ? split : bits;
+            if (take > end - done) take = end - done;
+            dst = done < split ? pair : VR2(pair);
+            q = (done == 0 || done == split) ? dst : vrget();
+            codek0(P_MOVE, q, bitoff + done < TGSIZ_WORD ? agg : VR2(agg));
+            shift = TGSIZ_WORD - pos - take;
+            if (shift) code8(P_LSH, q, -shift);
+            if (take < TGSIZ_WORD)
+                code1(P_AND, q, ((unsigned INT)1 << take) - 1);
+            if (q != dst) {
+                code8(P_LSH, dst, take);
+                code0(P_IOR, dst, q);
+            }
+            done += take;
+        }
+        agg->Vrflags = flags;
+        vrfree(agg);
+        pair->Vrflags &= ~VRF_LOCK;
+        return gfieldnormalize_v61i(pair, n->Ntype);
+    }
     word = (int)(bitoff / TGSIZ_WORD);
     intra = (int)(bitoff % TGSIZ_WORD);
     if (bits <= 0 || bits > TGSIZ_WORD || word < 0 || word > 1)
@@ -8083,12 +8195,9 @@ gprimary(NODE *n)
         ** caller does not need a second MOVE in greturn().  Otherwise use
         ** a normal temporary.
         */
-        /* Incoming ABI register pairs are used by both integer DImode and
-        ** native two-word floating scalars.  Treating only integer DImode as
-        ** a pair loses the low half of a direct-register double parameter.
-        */
-        if (sizetype(n->Ntype) == 2
-          && n->Ntype->Tspec != TS_STRUCT && n->Ntype->Tspec != TS_UNION) {
+        /* Incoming two-word values, including raw aggregates, occupy
+        ** a register pair. Preserve both words without scalar conversion. */
+        if (sizetype(n->Ntype) == 2) {
             if ((n->Nid->Sflags & (SF_ABIREG|SF_ABICONSUME))
               == (SF_ABIREG|SF_ABICONSUME)) {
                 r = vrdgetreg(n->Nid->Sreg);
@@ -8307,6 +8416,8 @@ gprimary(NODE *n)
 	*/
 	{
 	n->Nop = Q_MEMBER;
+	if (tisinteg(n->Ntype) && (crossbit(n->Nxoff) || packedbit(n->Nxoff)))
+	    return gpackedload(n);
 
 	if (Register_Id(n))	/* approximate getmem() for registers */
 #if 0
@@ -8323,7 +8434,7 @@ gprimary(NODE *n)
     /* Pull component out of structure in 1- or 2-word register */
     r = genexpr(n->Nleft);	/* Get the structure */
     if (tisinteg(n->Ntype)
-      && (packedcross(n->Nxoff) || packedbit(n->Nxoff)
+      && (crossbit(n->Nxoff) || packedcross(n->Nxoff) || packedbit(n->Nxoff)
        || packedbitscalar(n->Nxoff)))
         return gpackedregscalar(n, r);
     switch (n->Nxoff)		/* See which part of it we want */
@@ -9754,6 +9865,11 @@ gaddress(NODE *n)
                     vrfree(r);
                     r = p;
                     }
+                if (tisbitf(n->Ntype) && tisdimode(n->Ntype)) {
+                    code10(P_PTRCNV, r, (SYMBOL *)NULL, 1, -TGSIZ_CHAR);
+                    b = packedmembit(offset) % TGSIZ_CHAR;
+                    if (b != 0) code1(P_SUB, r, b << 30);
+                }
                 return r;
                 }
             b = packedmembyte(offset);

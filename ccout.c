@@ -2276,6 +2276,17 @@ simdmovx (PCODE *p)
 	    q.Preg = r;
 	    q.Pr2--;
 	    outinstr(&q);
+	} else if ((q.Ptype & PTF_ADRMODE) == PTA_MINDEXED
+	        && !(q.Ptype & PTF_IND) && q.Pindex != 0 && q.Pindex == r) {
+	    /* The peepholer can coalesce the address with the first
+	    ** destination AC. Fetch the second word before overwriting
+	    ** that address; the original DMOVE computes its EA once. */
+	    q.Preg = r + 1;
+	    ++q.Poffset;
+	    outinstr(&q);
+	    q.Preg = r;
+	    --q.Poffset;
+	    outinstr(&q);
 	} else {
 	    outinstr(&q);
 	    q.Preg = r + 1;

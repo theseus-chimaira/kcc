@@ -81,6 +81,7 @@ static INT gizpackedbits(TYPE *);
 static void gizpacked(NODE *, TYPE *, SYMBOL *);
 static void gizpackedscalar(NODE *, TYPE *, SYMBOL *);
 static void gizpackedputbits(unsigned INT, int);
+static void gizfieldbits_v61i(NODE *, int);
 static void gizbytes(NODE *, TYPE *, SYMBOL *, int);
 static void bytbeg(int), 
 	    wdalign(void), 
@@ -1914,7 +1915,6 @@ gizlist(NODE *n, TYPE *t, SYMBOL *s)	/* N_IZLIST to initialize from */
                 if ((code & 07777L) == 07300L) {
                     INT bitoff = (INT)(code >> 12);
                     INT curbit;
-                    unsigned INT v;
 
                     s = tbitsize(sm->Stype);
                     if (!bsiz) bytbeg(1);
@@ -1930,14 +1930,7 @@ gizlist(NODE *n, TYPE *t, SYMBOL *s)	/* N_IZLIST to initialize from */
                         gizpackedputbits(0, take);
                         curbit += take;
                     }
-                    if (n->Nleft == NULL)
-                        v = 0;
-                    else {
-                        if (n->Nleft->Nop != N_ICONST)
-                            int_error("gizlist: bitf izer not iconst %N", n);
-                        v = (unsigned INT)n->Nleft->Niconst;
-                    }
-                    gizpackedputbits(v, s);
+                    gizfieldbits_v61i(n->Nleft, s);
                     continue;
                 }
 		w = (-o) >> 12;		/* Decode word offset */
@@ -2072,6 +2065,29 @@ gizpackedputbits(unsigned INT v, int bits)
     }
 }
 
+/* A wide field is a contiguous physical stream, not the two-word
+** arithmetic ABI representation. Emit high payload then low35,
+** omitting the duplicated ABI sign bit entirely. */
+static void
+gizfieldbits_v61i(NODE *n, int bits)
+{
+    INT hi = 0, lo = 0;
+
+    if (n != NULL) {
+        if (n->Nop != N_ICONST) {
+            int_error("bitfield initializer not integer constant %N", n);
+        } else if (bits > TGSIZ_WORD) {
+            dimode_iconst_words(n, &hi, &lo);
+        } else
+            lo = n->Niconst;
+    }
+    if (bits > TGSIZ_WORD) {
+        gizpackedputbits((unsigned INT)hi, bits - 35);
+        bits = 35;
+    }
+    gizpackedputbits((unsigned INT)lo, bits);
+}
+
 /* GIZPACKEDSCALAR - emit one integral packed member in the exact bit stream.
 ** Bit-fields occupy exactly their declared width.  Ordinary scalar members
 ** occupy ceil(width/9) C address units, so any spare low bits in the last
@@ -2091,6 +2107,10 @@ gizpackedscalar(NODE *n, TYPE *t, SYMBOL *s)
     }
 
     bits = tbitsize(t);
+    if (tisbitf(t)) {
+        gizfieldbits_v61i(n, bits);
+        return;
+    }
     storebits = tisbitf(t) ? bits
                            : ((bits + TGSIZ_CHAR - 1) / TGSIZ_CHAR) * TGSIZ_CHAR;
     if (n == NULL) {

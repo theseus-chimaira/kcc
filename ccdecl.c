@@ -4030,11 +4030,12 @@ sdeclanon_v7(SYMBOL *tag, SYMBOL *prevsmem, TYPE *type, INT *offset,
 ** the member even when its declaration has been diagnosed.
 */
 static int
-bitfieldwidth(INT width, int named)
+bitfieldwidth(INT width, int named, TYPE *base)
 {
-    if (width < 0 || width > TGSIZ_WORD)
+    int limit = clevkcc && tisdimode(base) ? TGSIZ_LONGLONG : TGSIZ_WORD;
+    if (width < 0 || width > limit)
         {
-        error("Bit field longer than word (%d bits)", TGSIZ_WORD);
+        error("Bit field exceeds maximum width (%d bits)", limit);
         return 1;
         }
     if (named && width == 0)
@@ -4105,7 +4106,12 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                 *boffset = 0;   /* Force to word boundary */
                 (*offset)++;
                 }
-            fldsize(bitfieldwidth(pconst(), 0), offset, boffset);
+            bsiz = bitfieldwidth(pconst(), 0, base.Stype);
+            if (bsiz > tbitsize(base.Stype)) {
+                error("Bit-field width exceeds declared type");
+                bsiz = 1;
+            }
+            fldsize((int)bsiz, offset, boffset);
             (*inbitf)++;                        /* Say in bitfield now */
             }
         else
@@ -4169,8 +4175,8 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                 /* GNU integral fields of at most one word share the
                 ** existing signed/unsigned field representation, even
                 ** if declared long long. Promotion depends on field
-                ** width, not the declared container. The width check
-                ** still rejects fields requiring a two-word value. */
+                ** width, not the declared container. Wider fields use
+                ** a two-word arithmetic value with an exact field width. */
                 if (!tisinteg(tempsym.Stype)
                   || (!clevkcc && tisdimode(tempsym.Stype)))
                     error("Bit-field requires a one-word integral type");
@@ -4188,7 +4194,7 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                 (*inbitf)++;                    /* Say now in bitfield */
 
                 nextoken();                     /* move over colon */
-                bsiz = bitfieldwidth(pconst(), 1); /* Parse and validate */
+                bsiz = bitfieldwidth(pconst(), 1, tempsym.Stype);
                 if (tisinteg(tempsym.Stype)
                   && bsiz > (tisbool(tempsym.Stype) ? 1 : tbitsize(tempsym.Stype)))
                     {
@@ -4196,7 +4202,12 @@ sdeclaration(SYMBOL *tag, SYMBOL *prevsmem, INT *offset, int *boffset,
                     bsiz = 1;
                     }
                 offcode = fldsize((int)bsiz, offset, boffset);  /* Handle it */
-                tempsym.Stype = findctype(ts,           /* Make bitfld type */
+                if (bsiz > TGSIZ_WORD)
+                    tempsym.Stype = findctype(ts == TS_BITF ? TS_LONGLONG : TS_ULONGLONG,
+                        bsiz | TF_BITF | (tempsym.Stype->Tflag & TF_QUALS),
+                        2, (TYPE *)NULL);
+                else
+                    tempsym.Stype = findctype(ts,
                         bsiz | (tempsym.Stype->Tflag&(TF_QUALS|TF_BOOL)),
                         1, (TYPE *)NULL);
                 }
@@ -4339,8 +4350,8 @@ fldsize(int bsiz, INT *offset, int *boffset)
     INT startbit;
     int oldboff;
 
-    if (bsiz > TGSIZ_WORD || bsiz < 0)  /* range check */
-        error("Bit field longer than word (%d bits)", TGSIZ_WORD);
+    if (bsiz > TGSIZ_LONGLONG || bsiz < 0)  /* range check */
+        error("Bit field exceeds maximum width (%d bits)", TGSIZ_LONGLONG);
 
     /* A zero-width bit-field is an alignment directive, not a field.
     ** Move directly to the next word boundary.  The old TGSIZ_WORD+1

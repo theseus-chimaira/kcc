@@ -157,7 +157,8 @@ stmtpackedbit(INT off)
 
     if (off >= 0) return off * TGSIZ_WORD;
     code = (unsigned INT)(-off);
-    if ((code & 07777) == 07400
+    if ((code & 07777) == 07300
+      || (code & 07777) == 07400
       || (code & 07777) == 07500
       || (code & 07777) == 07600)
         return (INT)(code >> 12);
@@ -2761,6 +2762,11 @@ sizeexpr(void)
 
     /* Have type, now determine its size */
     n->Niconst = 0;			/* Clear in case of error */
+    if (tisbitf(t) && tisdimode(t)) {
+        error("Operand of sizeof has bitfield type");
+        constexpr = saveconst;
+        return n;
+    }
     switch (t->Tspec)
 	{
 	case TS_VOID:

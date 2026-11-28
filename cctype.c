@@ -395,6 +395,12 @@ cast_op(struct type * to, struct type * frm)
         return CAST_BOOL;
     }
 
+    /* A narrow pair must be normalized even if only signedness changes. */
+    if (tisnarrowpair(to)
+      && tisinteg(frm) && tbitsize(frm) > TGSIZ_WORD
+      && tisunsign(to) != tisunsign(frm))
+        return CAST_IT_IT;
+
     switch (cop = convtab[castidx(frm->Tspec,to->Tspec)]) {
 	case CAST_TRIV:		/* Verify that types are identical */
 	    if (to == frm	/* This should have been caught before call */
@@ -825,6 +831,14 @@ convunary(struct node * n)
 {
     TYPE *newtype;
 
+    if (tisbitf(n->Ntype) && tbitsize(n->Ntype) > TGSIZ_WORD) {
+        /* Remove the lvalue/field attribute, not its precision. GNU
+        ** extended integers wider than int retain their rank and width. */
+        TYPE *t = n->Ntype;
+        return convcast(findctype(t->Tspec, t->Tflag & ~(TF_BITF | TF_QUALS),
+                                  2, (TYPE *)NULL), n);
+    }
+
     switch (n->Ntype->Tspec) {
 	case TS_FLOAT:			/* If ANSI, leave float alone */
 	    if (clevel < CLEV_ANSI) {
@@ -930,6 +944,18 @@ convbinary(struct node * n)
     else if (lt == flttype || rt == flttype)
 	convboth(n, flttype);
 
+    /* A precision-specific wide field value ranks below a wider
+    ** integer and above a narrower one. A wider signed type can
+    ** represent every value of a narrower unsigned type. */
+    else if (tisinteg(lt) && tisinteg(rt)
+          && (tisnarrowpair(lt) || tisnarrowpair(rt))) {
+        int lb = tbitsize(lt), rb = tbitsize(rt);
+        int bits = lb > rb ? lb : rb;
+        int uns = lb > rb ? tisunsign(lt) : rb > lb ? tisunsign(rt)
+                              : tisunsign(lt) || tisunsign(rt);
+        convboth(n, findctype(uns ? TS_ULONGLONG : TS_LONGLONG,
+                            bits, 2, (TYPE *)NULL));
+    }
     /* 3.  If one operand is "unsigned long long", make both. */
     else if (lt == ulonglongtype || rt == ulonglongtype)
 	convboth(n, ulonglongtype);
@@ -984,7 +1010,8 @@ convxboth(struct node * n, struct type * newtyp)
 	** right thing.
 	*/
 	if (n->Nop == N_CAST
-	  && (n->Nflag & NF_USERCAST)==0) {	/* Implicit cast? */
+	  && (n->Nflag & NF_USERCAST)==0
+          && (!tisnarrowpair(n->Ntype) || n->Ncast == CAST_NONE)) {
 	    n->Ntype = newtyp;			/* Yup, fix it up */
 	    n->Ncast = cast_op(newtyp, n->Nleft->Ntype);
 	} else					/* Casting something else */
