@@ -2439,24 +2439,10 @@ simdfix (PCODE *p)
     fprintf (out, "\t MOVNS\t%o\n", r);	/* Negate result */
 }
 
-/* SIMDSNGL - Output expansion of P_DSNGL double-to-float conversion "instr"
-**	P_DSNGL reg,M
-**		reg = register pair, float will be left in 1st reg.
-**		M = any memory ref to double-word float operand.
-**
-** Note that reg+1 is clobbered!
-** Expands into:
-**	DMOVE R,M		; Get double value
-**	SKIPGE 16,R		; Check sign, save indicator
-**	 DMOVN R,R		; Negative, make positive temporarily.
-**	TLNE R+1,200000		; If low word >= .5
-**	 TRON R,1		; then must round high wd, try fast hack
-**	  JRST .+4		; Won!
-**	   MOVE R+1,R		; Ugh, have to do it hard way.  Copy high wd
-**	   AND R+1,[777000000001]	; Zap all but exp and low-order bit
-**	   FADR R,R+1		; Add low bit to effect rounding
-**	CAIGE 16,		; Now if original was negative,
-**	 MOVN R,R		; make it negative again.
+/* SIMDSNGL - Round a canonical D-format pair to SF in its first AC.
+** The source pair may be in memory or registers. Work on its magnitude,
+** use guard/sticky bits for ties-to-even, normalize any rounding carry,
+** and restore the sign. The second AC and scratch AC16 are clobbered.
 */
 static void
 simdsngl (PCODE *p)
@@ -2468,46 +2454,30 @@ simdsngl (PCODE *p)
 	p->Pop = P_DMOVE;		/* Make DMOVE R,M to get double */
 	outinstr (p);
 	}
-    if (!tgmachuse.dmovx) {
-	/* The low word contains 35 fraction bits, not an independent
-	** signed integer.  Use the correct 71-bit negation expansion
-	** (seven instructions), then round magnitude to 27 bits.
-	** Discarded low bit 34 is the guard; bits 33..0 are sticky.
-	** A halfway case rounds upward only when high's last bit is odd.
-	** Simple TRON would round all ties upward; that incorrectly
-	** converts (1<<27)+1 to (1<<27)+2.
-	*/
-	fprintf (out, "\tSKIPL\t16,0%o\n", r);
-	outstr ("\t JRST\t.+010\n");
-	outdmovn(r);
-	fprintf (out, "\tTLNN\t%o,0200000\n", r + 1);
-	outstr ("\t JRST\t.+013\n");
-	fprintf (out, "\tTRNE\t%o,01\n", r);
-	outstr ("\t JRST\t.+06\n");
-	fprintf (out, "\tTLNE\t%o,0177777\n", r + 1);
-	outstr ("\t JRST\t.+04\n");
-	fprintf (out, "\tTRNE\t%o,0777777\n", r + 1);
-	outstr ("\t JRST\t.+02\n\t JRST\t.+04\n");
-	fprintf (out, "\tADDI\t%o,01\n", r);
-	fprintf (out, "\tTLNN\t%o,0400\n", r);
-	fprintf (out, "\t TLO\t%o,0400\n", r);
-	outstr ("\tCAIGE\t16,\n");
-	fprintf (out, "\t MOVNS\t%o\n", r);
-	return;
+    /* Round the magnitude to nearest, ties to even. Low bit 34 is
+    ** the guard; bits 33..0 are sticky. All CPUs use the same portable
+    ** D-format; only the full-pair negation instruction differs. */
+    if (tgmachuse.dmovx) {
+        fprintf (out, "\tSKIPGE\t16,0%o\n", r);
+        outc (' ');
     } else {
-	fprintf (out, "\tSKIPGE\t16,0%o\n", r);
-	outc (' ');
-	outdmovn(r);
+        fprintf (out, "\tSKIPL\t16,0%o\n", r);
+        outstr ("\t JRST\t.+010\n");
     }
-    fprintf (out, "\tTLNE\t%o,0200000\n", r+1);
-    fprintf (out, "\t TRON\t%o,01\n\t  JRST\t.+04\n", r);
-    fprintf (out, "\tMOVE\t%o,0%o\n\tAND\t%o,[0777000,,01]\n\tFADR\t%o,0%o\n",
-		r+1, r,
-		r+1,
-		r, r+1);
-
-    outstr ("\tCAIGE\t16,\n");		/* Check sign bit of original # */
-    fprintf (out, "\t MOVNS\t%o\n", r);	/* Negate result */
+    outdmovn(r);
+    fprintf (out, "\tTLNN\t%o,0200000\n", r + 1);
+    outstr ("\t JRST\t.+013\n");
+    fprintf (out, "\tTRNE\t%o,01\n", r);
+    outstr ("\t JRST\t.+06\n");
+    fprintf (out, "\tTLNE\t%o,0177777\n", r + 1);
+    outstr ("\t JRST\t.+04\n");
+    fprintf (out, "\tTRNE\t%o,0777777\n", r + 1);
+    outstr ("\t JRST\t.+02\n\t JRST\t.+04\n");
+    fprintf (out, "\tADDI\t%o,01\n", r);
+    fprintf (out, "\tTLNN\t%o,0400\n", r);
+    fprintf (out, "\t TLO\t%o,0400\n", r);
+    outstr ("\tCAIGE\t16,\n");
+    fprintf (out, "\t MOVNS\t%o\n", r);
 }
 
 /* SIMSUBBP - Output expansion of P_SUBBP byte-pointer subtraction "instr".

@@ -591,7 +591,13 @@ vla_evalbounds_v11(TYPE *t)
     NODE *as, *rhs;
     SYMBOL *bs;
 
-    if (t == NULL || t->Tspec != TS_ARRAY)
+    if (t == NULL)
+        return;
+    if (t->Tspec == TS_PTR) {
+        vla_evalbounds_v11(t->Tsubt);
+        return;
+    }
+    if (t->Tspec != TS_ARRAY)
         return;
     if (tisvla(t)) {
         bs = vlaboundsym_v11(t);
@@ -627,11 +633,11 @@ genvla_v11(SYMBOL *s)
             return;
         }
         /* Parameter array declarators have already adjusted the outermost
-        ** array to a pointer.  Capture any remaining variably-modified row
+        ** array to a pointer. Capture remaining variably-modified row
         ** bounds at function entry; no dynamic object is allocated here. */
         if ((s->Sclass == SC_ARG || s->Sclass == SC_RARG)
           && pt != NULL && pt->Tspec == TS_PTR) {
-            vla_evalbounds_v11(pt->Tsubt);
+            vla_evalbounds_v11(pt);
             return;
         }
         int_error("genvla_v11: missing base symbol");

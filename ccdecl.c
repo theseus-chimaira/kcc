@@ -310,14 +310,24 @@ vlaobjadd_v11(SYMBOL *s)
     vlabindtype_v11(s->Stype);
 }
 
+/* The adjusted-away outer array bound is still evaluated at entry.
+** Discard its value: only the remaining dimensions affect pointer
+** arithmetic or sizeof, and need hidden fixed-frame storage. Build
+** the entry statements in parameter declaration order. */
 static NODE *
 vlaparamdata_v11(SYMBOL *args)
 {
-    NODE *head, *tail, *d, *iz, *vz;
+    NODE *head = NULL, **tail = &head, *d, *iz, *vz;
     SYMBOL *s;
+    TYPE *outer;
 
-    head = tail = NULL;
     for (s = args; s != NULL; s = s->Spmnext) {
+        outer = s->Shproto;
+        s->Shproto = NULL; /* temporary parameter declarator metadata */
+        if (outer != NULL) {
+            *tail = ndefl(N_STATEMENT, vlaboundexpr_v11(outer));
+            tail = &(*tail)->Nright;
+        }
         if (!vlacontains_v11(s->Stype))
             continue;
         vlamarkfn_v11();
@@ -326,11 +336,8 @@ vlaparamdata_v11(SYMBOL *args)
         vz->Nid = s;
         iz = ndeflr(N_IZ, ndefident(s), vz);
         d = ndefl(N_DATA, iz);
-        if (tail != NULL)
-            tail->Nright = d;
-        else
-            head = d;
-        tail = d;
+        *tail = ndefl(N_STATEMENT, d);
+        tail = &(*tail)->Nright;
     }
     return head;
 }
@@ -1427,15 +1434,22 @@ fn_abi_initializers_leaf(NODE *d)
     return 1;
 }
 
+/* A nested entry/compound list may be followed by the actual body.
+** It is safe to scan the inner list only if the sibling suffix has
+** no use of this parameter. Otherwise a bare call in the inner list
+** cannot end its lifetime. Share the before/at-call analysis. */
 static int
-fn_abi_drop_before_first_call(NODE *body, SYMBOL *sym)
+fn_abi_drop_call(NODE *body, SYMBOL *sym, int used)
 {
     NODE *stmt, *expr;
 
     stmt = body;
     if (stmt != NULL && stmt->Nop == N_STATEMENT
-      && stmt->Nleft != NULL && stmt->Nleft->Nop == N_STATEMENT)
+      && stmt->Nleft != NULL && stmt->Nleft->Nop == N_STATEMENT) {
+        if (fn_abi_param_used(stmt->Nright, sym))
+            return 0;
         stmt = stmt->Nleft;
+    }
     while (stmt != NULL) {
         if (stmt->Nop != N_STATEMENT)
             return 0;
@@ -1447,39 +1461,8 @@ fn_abi_drop_before_first_call(NODE *body, SYMBOL *sym)
             continue;
         }
         if (expr->Nop == N_FNCALL)
-            return !fn_abi_param_used(expr, sym)
+            return !!fn_abi_param_used(expr, sym) == used
                 && !fn_abi_param_used(stmt->Nright, sym);
-        if (!fn_abi_leaf(expr, (int *)NULL))
-            return 0;
-        stmt = stmt->Nright;
-    }
-    return 0;
-}
-
-static int
-fn_abi_drop_first_call(NODE *body, SYMBOL *sym)
-{
-    NODE *stmt, *expr;
-
-    stmt = body;
-    if (stmt != NULL && stmt->Nop == N_STATEMENT
-      && stmt->Nleft != NULL && stmt->Nleft->Nop == N_STATEMENT)
-        stmt = stmt->Nleft;
-    while (stmt != NULL) {
-        if (stmt->Nop != N_STATEMENT)
-            return 0;
-        expr = stmt->Nleft;
-        if (expr == NULL || expr->Nop == N_DATA) {
-            if (expr != NULL && !fn_abi_initializers_leaf(expr))
-                return 0;
-            stmt = stmt->Nright;
-            continue;
-        }
-        if (expr->Nop == N_FNCALL) {
-            if (!fn_abi_param_used(expr, sym))
-                return 0;
-            return !fn_abi_param_used(stmt->Nright, sym);
-        }
         if (!fn_abi_leaf(expr, (int *)NULL))
             return 0;
         stmt = stmt->Nright;
@@ -1918,9 +1901,9 @@ promote_abi_params(SYMBOL *args, SYMBOL *fn, NODE *body)
           || s->Svalue < 1 || s->Svalue > GCCABI_ARG_REGS)
             return;
         if (s->Sclass == SC_ARG) {
-            if (!fn_abi_drop_before_first_call(body, s)
+            if (!fn_abi_drop_call(body, s, 0)
               && !(fn_abi_param_refs(body, s) == 1
-                   && fn_abi_drop_first_call(body, s)))
+                   && fn_abi_drop_call(body, s, 1)))
                 ++need;
         } else if (s->Sclass != SC_RARG)
             return;
@@ -1998,7 +1981,7 @@ preserve_params:
         return;
 
     for (s = args; s; s = s->Spmnext) {
-        if (fn_abi_drop_before_first_call(body, s)) {
+        if (fn_abi_drop_call(body, s, 0)) {
             if (s->Sclass == SC_ARG)
                 s->Sclass = SC_RARG;
             s->Sreg = s->Svalue;
@@ -2018,7 +2001,7 @@ preserve_params:
         ** parameters go through the normal preserved-AC binding.
         */
         if (fn_abi_param_refs(body, s) == 1
-          && fn_abi_drop_first_call(body, s)) {
+          && fn_abi_drop_call(body, s, 1)) {
             if (s->Sclass == SC_ARG)
                 s->Sclass = SC_RARG;
             s->Sreg = s->Svalue;
@@ -2037,6 +2020,52 @@ preserve_params:
     fnabidirect = 1;
 }
 
+/* Old-style definitions receive default-promoted arguments but expose
+** objects of the declared type. Materialize only parameters that need
+** a conversion. Keep their original symbols for source references and
+** insert private promoted ABI symbols in the incoming parameter list.
+** Only the converted objects require local storage; ordinary arguments
+** retain their existing direct-register/stack paths.
+*/
+static NODE *
+oldparamdata_v61w(SYMBOL **args)
+{
+    SYMBOL *s, *in;
+    NODE *head = NULL, *tail = NULL, *d;
+    TYPE *promoted;
+    char name[40];
+    char *end;
+
+    while ((s = *args) != NULL) {
+        promoted = convfparam(s->Stype);
+        if (promoted == s->Stype) {
+            args = &s->Spmnext;
+            continue;
+        }
+        name[0] = SPC_IAUTO;
+        name[1] = 'a';
+        end = declputd(name + 2, (int)++vlacounter_v11);
+        *end = '\0';
+        in = creatsym(name);
+        in->Sclass = SC_ARG;
+        in->Stype = promoted;
+        in->Srefs = 1;
+        in->Spmnext = s->Spmnext;
+        *args = in;
+        args = &in->Spmnext;
+        s->Spmnext = NULL;
+        s->Sclass = SC_AUTO;
+        s->Svalue = maxauto;
+        maxauto += sizetype(s->Stype);
+        d = ndefl(N_DATA, ndeflr(N_IZ, ndefident(s),
+                              convasgn(s->Stype, ndefident(in))));
+        if (tail) tail->Nright = d;
+        else head = d;
+        tail = d;
+    }
+    return head;
+}
+
 static NODE *
 funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
 /* Base, contains parsed <decl-specs>, 
@@ -2046,7 +2075,7 @@ funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
 {
     INT n, siz;
     int nsjmps;
-    NODE *nnode, *header, *vlaparamdata;
+    NODE *nnode, *header, *vlaparamdata, *oldparamdata = NULL;
     SYMBOL *s1;
     SYMBOL *args = d->Spmnext;  /*  List of parameter syms */
     SYMBOL *arghead = args;
@@ -2080,6 +2109,12 @@ funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
     ** the # of parameters that paramlist() actually parsed while building
     ** the prototype.
     */
+    maxauto = 0;
+    fnvla_v11 = 0;
+    if (!npartypes) {
+        oldparamdata = oldparamdata_v61w(&arghead);
+        args = arghead;
+    }
     n = 0;                              /* set up for first arg */
     siz = sizetype(syment->Stype->Tsubt);       /* get size of return val */
     if (siz > 4)                        /* If returning too-large object, */
@@ -2095,8 +2130,6 @@ funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
     if (npartypes && (npartypes-1 != nparidents))
         error("Missing identifier for parameter in function def");
 
-    maxauto = 0;                        /* no local variables yet */
-    fnvla_v11 = 0;                      /* establish per-function VLA state */
     vlaparamdata = vlaparamdata_v11(arghead);
     stackrefs = 0;                      /* and therefore no refs to them */
     nsjmps = nsetjmps();                /* Remember # of setjmp refs */
@@ -2111,6 +2144,8 @@ funcdef(SYMBOL *b, SYMBOL *d, SYMBOL *syment)
     nnode = funstmt();                  /* Parse function statement */
     if (vlaparamdata != NULL)
         nnode = ndeflr(N_STATEMENT, vlaparamdata, nnode);
+    if (oldparamdata != NULL)
+        nnode = ndeflr(N_STATEMENT, oldparamdata, nnode);
 
     promote_abi_params(arghead, syment, nnode);
 
@@ -2584,8 +2619,16 @@ pdecllist(void)
                 {
                 s1->Sclass = stemp.Sclass;      /* Maybe indicate register */
                 s1->Sflags |= SF_PARAMDECL;     /* Say decl seen for arg */
-                s1->Stype = convfparam(stemp.Stype);    /* Get right type */
-                Set_Register(s1, SC_RARG, SC_ARG);
+                s1->Stype = stemp.Stype;
+                if (s1->Stype->Tspec == TS_ARRAY) {
+                    if (tisvla(s1->Stype)) s1->Shproto = s1->Stype;
+                    s1->Stype = findtype(TS_PTR, s1->Stype->Tsubt);
+                } else if (s1->Stype->Tspec == TS_FUNCT)
+                    s1->Stype = findtype(TS_PTR, s1->Stype);
+                /* A promoted argument will become a local object at entry. */
+                if (convfparam(s1->Stype) == s1->Stype)
+                    Set_Register(s1, SC_RARG, SC_ARG);
+                else s1->Sclass = SC_ARG;
                 }
             if (token != T_COMMA)
                 break;  /* repeat through list */
@@ -2609,7 +2652,7 @@ mkproto(SYMBOL *s)
 static TYPE *
 mkprox(SYMBOL *s)
 {
-    return s ? findptype(TS_PARAM, mkprox(s->Spmnext), s->Stype) : NULL;
+    return s ? findptype(TS_PARAM, mkprox(s->Spmnext), convfparam(s->Stype)) : NULL;
 }
 
 /* DATADEF - Parse top-level declaration that isn't a function definition.
@@ -4941,6 +4984,8 @@ paramlist(struct protostate
             ps->stail->Spmnext = s;     /* or in last param so far */
         ps->stail = s;                  /* Move on to end of chain */
         s->Spmnext = NULL;              /* This one is now the last */
+        if (tisvla(ps->decl.Stype))
+            s->Shproto = ps->decl.Stype;
         s->Stype = t;                   /* Set type, and */
         s->Sclass = ps->decl.Sclass;    /* say it's a function parameter */
         Set_Register(s, SC_RARG, SC_ARG);
