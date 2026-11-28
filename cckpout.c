@@ -1,4 +1,4 @@
-/* CCKPOUT.C - KGEN output shim writing the KPCODE2 stream. */
+/* CCKPOUT.C - KGEN output shim writing the KPCODE3 stream. */
 
 #include "cckpcode.h"
 #include <stdlib.h>
@@ -22,7 +22,7 @@ static int
 write_words(unsigned int kind, const INT *words, unsigned int nwords)
 {
     if (kpcode_write_record(out, kind, words, nwords) != 0) {
-        jerr("Cannot write KPCODE2 record %u", kind);
+        jerr("Cannot write KPCODE3 record %u", kind);
         return -1;
     }
     return 0;
@@ -73,7 +73,7 @@ symid_raw(SYMBOL *s)
         p = (struct kp_symmap *)realloc((char *)symmap,
             cap * sizeof(struct kp_symmap));
         if (p == NULL)
-            efatal("Out of memory for KPCODE2 symbol map");
+            efatal("Out of memory for KPCODE3 symbol map");
         symmap = p;
         capsymmap = cap;
     }
@@ -98,9 +98,9 @@ emit_symbol(SYMBOL *s)
         link[1] = (INT)sid;
         if (kpcode_write_symbol(out, id, s) != 0 ||
             write_words(KPCODE_REC_SYMBOL_LINK, link, 2) != 0)
-            jerr("Cannot write KPCODE2 symbol");
+            jerr("Cannot write KPCODE3 symbol");
     } else if (kpcode_write_symbol(out, id, s) != 0)
-        jerr("Cannot write KPCODE2 symbol");
+        jerr("Cannot write KPCODE3 symbol");
     return id;
 }
 
@@ -109,7 +109,13 @@ pack_target_flags(void)
 {
     INT f;
 
+#if HOST_DAIMOS || !defined(__COMPILER_KCC__)
+    /* KPCODE3 carries canonical target words, not the producer's
+    ** host floating representation. A native KOPT must not remap them. */
+    f = 1;
+#else
     f = (INT)((tgmachuse.mapdbl + 1) & KPCODE_TF_MAPDBL_MASK);
+#endif
     if (tgmachuse.dmovx) f |= KPCODE_TF_DMOVX;
     if (tgmachuse.adjsp) f |= KPCODE_TF_ADJSP;
     if (tgmachuse.adjbp) f |= KPCODE_TF_ADJBP;
@@ -136,11 +142,11 @@ outinit(void)
     if (longidents) cf |= KPCODE_CF_LONGIDENTS;
     h.compile_flags = cf;
     if (kpcode_write_header(out, &h) != 0)
-        jerr("Cannot write KPCODE2 header");
+        jerr("Cannot write KPCODE3 header");
     prefix[0] = (INT)debcsi;
     if (write_string(KPCODE_REC_MODULE_BEGIN, prefix, 1, inpfname,
             (unsigned int)strlen(inpfname)) != 0)
-        jerr("Cannot write KPCODE2 module header");
+        jerr("Cannot write KPCODE3 module header");
     kpseg = 1;
     _word_cnt = 0;
 }
@@ -155,7 +161,7 @@ outdone(int mainf)
     for (s = symbol != NULL ? symbol->Snext : NULL; s != NULL; s = s->Snext) {
         id = emit_symbol(s);
         if (kpcode_write_symbol(out, id, s) != 0)
-            jerr("Cannot update KPCODE2 global symbol");
+            jerr("Cannot update KPCODE3 global symbol");
         rec[0] = (INT)id;
         if (write_words(KPCODE_REC_GLOBAL_SYMBOL, rec, 1) != 0)
             break;
@@ -176,7 +182,7 @@ realcode(PCODE *p)
         return;
     sid = emit_symbol(p->Pptr);
     if (kpcode_write_pcode(out, p, sid) != 0)
-        jerr("Cannot write KPCODE2 pseudo instruction");
+        jerr("Cannot write KPCODE3 pseudo instruction");
     ++_word_cnt;
 }
 
@@ -219,7 +225,7 @@ outid(char *s)
 {
     if (write_string(KPCODE_REC_OUTID, NULL, 0, s,
             (unsigned int)strlen(s)) != 0)
-        jerr("Cannot write KPCODE2 identifier");
+        jerr("Cannot write KPCODE3 identifier");
 }
 
 void
@@ -230,7 +236,7 @@ outscon(char *s, int len, int bsiz)
     prefix[1] = (INT)bsiz;
     if (write_string(KPCODE_REC_OUTSCON, prefix, 2, s,
             (unsigned int)len) != 0)
-        jerr("Cannot write KPCODE2 string constant");
+        jerr("Cannot write KPCODE3 string constant");
 }
 
 void
@@ -246,14 +252,14 @@ outstr(char *s)
 {
     if (write_string(KPCODE_REC_TEXT, NULL, 0, s,
             (unsigned int)strlen(s)) != 0)
-        jerr("Cannot write KPCODE2 text");
+        jerr("Cannot write KPCODE3 text");
 }
 
 void
 outnstr(char *s, int len)
 {
     if (write_string(KPCODE_REC_TEXT, NULL, 0, s, (unsigned int)len) != 0)
-        jerr("Cannot write KPCODE2 text");
+        jerr("Cannot write KPCODE3 text");
 }
 
 void
@@ -272,22 +278,8 @@ int
 outflt(int typ, INT *ptr, int flags)
 {
     INT rec[4];
-#ifdef __COMPILER_KCC__
     rec[2] = ptr[0];
     rec[3] = ptr[1];
-#else
-    unsigned char b[8];
-    double d;
-    unsigned INT a, c;
-    memcpy((char *)&d, (char *)ptr, sizeof(double));
-    memcpy((char *)b, (char *)&d, 8);
-    a = ((unsigned INT)b[0] << 24) | ((unsigned INT)b[1] << 16) |
-        ((unsigned INT)b[2] << 8) | (unsigned INT)b[3];
-    c = ((unsigned INT)b[4] << 24) | ((unsigned INT)b[5] << 16) |
-        ((unsigned INT)b[6] << 8) | (unsigned INT)b[7];
-    rec[2] = (INT)a;
-    rec[3] = (INT)c;
-#endif
     rec[0] = (INT)typ;
     rec[1] = (INT)flags;
     write_words(KPCODE_REC_OUTFLT, rec, 4);

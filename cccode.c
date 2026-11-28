@@ -216,13 +216,13 @@ INT idx;
 #endif
 	    break;
 	case PTA_DCONST:		/* [double-prec float] */
-	    fprintf(f, "DCONST R=%o, Dblcon=%g", p->Preg, p->Pdouble);
+	    fprintf(f, "DCONST R=%o, Dblcon=%" INT_OFMT ":%" INT_OFMT, p->Preg, p->Pdouble1, p->Pdouble2);
 	    break;
 	case PTA_DCONST1:		/* [1st wd of double float] */
-	    fprintf(f, "DCONST1 R=%o, 1st wd of dblcon=%g", p->Preg, p->Pdouble);
+	    fprintf(f, "DCONST1 R=%o, word=%" INT_OFMT, p->Preg, p->Pdouble1);
 	    break;
 	case PTA_DCONST2:		/* [2nd wd of double float] */
-	    fprintf(f, "DCONST2 R=%o, 2nd wd of dblcon=%g", p->Preg, p->Pdouble);
+	    fprintf(f, "DCONST2 R=%o, word=%" INT_OFMT, p->Preg, p->Pdouble2);
 	    break;
 	default:
 	    fprintf(f, "Illegal ADRMODE value = %o", i);
@@ -2577,8 +2577,14 @@ code9(int op, VREG *vr, double value, int twowds)
 	    }
 
     p = newcode((twowds ? PTA_DCONST : PTA_FCONST), op, r);
-    if (twowds)
-	p->Pdouble = value;
+    if (twowds) {
+#ifdef __COMPILER_KCC__
+        p->p_u.p_dval = value;
+#else
+        host_pdp10_double_words(value, (unsigned INT *)&p->Pdouble1,
+                               (unsigned INT *)&p->Pdouble2);
+#endif
+    }
     else
 #ifdef __COMPILER_KCC__
 	p->Pfloat = (float) value;
@@ -3169,7 +3175,8 @@ rrpre2(struct pcode * p, struct pcode * np)
 			case PTA_DCONST:
 			    p->Ptype = PTA_DCONST2;		/* MOVE R+1,1+[const] */
 			    np->Ptype = PTA_DCONST1;	/* PUSH R,[const] */
-			    np->Pdouble = p->Pdouble;
+			    np->Pdouble1 = p->Pdouble1;
+                            np->Pdouble2 = p->Pdouble2;
 			    break;
 			}
 

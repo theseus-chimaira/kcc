@@ -1,4 +1,4 @@
-/* CCKPREAD.C - bounded KPCODE2 stream reader */
+/* CCKPREAD.C - bounded KPCODE3 stream reader */
 
 #include "cckpcode.h"
 #include <string.h>
@@ -140,22 +140,12 @@ kpcode_decode_pcode(const INT *words, unsigned int nwords, PCODE *p,
 #else
     mode = p->Ptype & PTF_ADRMODE;
     if (mode == PTA_FCONST) {
-        /* KPCODE v2: exact 36-bit single, same meaning on every host. */
+        /* KPCODE v3: exact 36-bit single, same meaning on every host. */
         p->Pfloatword = kpcode_unpack_int(&words[KPCODE_PCODE_AUX00]);
     } else if (mode == PTA_DCONST || mode == PTA_DCONST1 ||
                mode == PTA_DCONST2) {
-        unsigned char b[8];
-        unsigned INT a = (unsigned INT)kpcode_unpack_int(&words[KPCODE_PCODE_AUX00]);
-        unsigned INT c = (unsigned INT)kpcode_unpack_int(&words[KPCODE_PCODE_AUX10]);
-        b[0] = (unsigned char)(a >> 24);
-        b[1] = (unsigned char)(a >> 16);
-        b[2] = (unsigned char)(a >> 8);
-        b[3] = (unsigned char)a;
-        b[4] = (unsigned char)(c >> 24);
-        b[5] = (unsigned char)(c >> 16);
-        b[6] = (unsigned char)(c >> 8);
-        b[7] = (unsigned char)c;
-        memcpy((char *)&p->Pdouble, (char *)b, 8);
+        p->Pdouble1 = kpcode_unpack_int(&words[KPCODE_PCODE_AUX00]);
+        p->Pdouble2 = kpcode_unpack_int(&words[KPCODE_PCODE_AUX10]);
     } else {
         p->p_u.p_int = kpcode_unpack_int(&words[KPCODE_PCODE_AUX00]);
     }

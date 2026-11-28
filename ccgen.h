@@ -25,6 +25,7 @@
 extern unsigned long host_u32_from_bytes(unsigned char *);
 extern void host_double_bits(double, unsigned long *, unsigned long *);
 extern unsigned INT host_pdp10_float_word_v1(double);
+extern void host_pdp10_double_words(double, unsigned INT *, unsigned INT *);
 extern double pdp10_host_round_single_v1(long double);
 extern double pdp10_host_round_single_arith_pdp6_v1(long double);
 #endif
@@ -84,7 +85,7 @@ PCODE {			/* pseudo op in peephole buffer */
 #endif
     union {
 	float p_fval;		/* single-prec f.p. value */
-	double p_dval;		/* double-prec f.p. value */
+	double p_dval;		/* native conversion to D-format words */
 	INT p_di[2];		/* Access to 2 wds of double value (cheat) */
 	INT p_int;		/* Integer for other stuff */
     } p_u;
@@ -146,14 +147,12 @@ GEXT int maxcode, mincode;	/* top and bottom indices into codes */
 */
 #define Pfloatword p_u.p_int
 
-/* Pdouble - double-precision floating-point constant
-** Pdouble1 - 1st wd of double constant
+/* Pdouble1 - 1st wd of double constant
 ** Pdouble2 - 2nd wd of double constant
 **	Used only by PTA_DCONST, PTA_DCONST1, and PTA_DCONST2 respectively.
-**	The latter two definitions are for "cheating" - access to
-**	the two integer word values making up the bit pattern of the double.
+**	Both words hold the target D-format image (native legacy formats
+**	retain their historical mapping at output).
 */
-#define Pdouble p_u.p_dval
 #define Pdouble1 p_u.p_di[0]
 #define Pdouble2 p_u.p_di[1]
 
@@ -264,13 +263,10 @@ floating-point constant.  This is normally assembled as shown but
 may sometimes turn into an immediate-mode instruction if the value
 has no bits set in its right half.
 
-PTA_DCONST	OP Preg,[Pdouble]	"Double constant"
+PTA_DCONST	OP Preg,[Pdouble1,Pdouble2]	"Double constant"
 PTA_DCONST1	OP Preg,[Pdouble1]	"1st word of DCONST"
 PTA_DCONST2	OP Preg,[Pdouble2]	"2nd word of DCONST"
-	Pdouble is used to hold a double-precision floating-point
-value; Pdouble1 and Pdouble2 are used to access the two words
-(as integer bit patterns) which constitute this value.  The full
-value is always available as Pdouble.
+	Both words retain their target representation, even for a split operand.
 
 */
 #endif

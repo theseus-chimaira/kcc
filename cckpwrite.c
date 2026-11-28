@@ -1,4 +1,4 @@
-/* CCKPWRITE.C - bounded KPCODE2 stream writer */
+/* CCKPWRITE.C - bounded KPCODE3 stream writer */
 
 #include "cckpcode.h"
 #include <string.h>
@@ -124,20 +124,13 @@ kpcode_write_pcode(FILE *fp, const PCODE *p, unsigned int symid)
 #else
     mode = p->Ptype & PTF_ADRMODE;
     if (mode == PTA_FCONST) {
-        /* KPCODE v2: compact, host-independent 36-bit target word. */
+        /* KPCODE v3: compact, host-independent 36-bit target word. */
         kpcode_pack_int(&words[KPCODE_PCODE_AUX00], p->Pfloatword);
         kpcode_pack_int(&words[KPCODE_PCODE_AUX10], 0);
     } else if (mode == PTA_DCONST || mode == PTA_DCONST1 ||
                mode == PTA_DCONST2) {
-        unsigned char b[8];
-        unsigned INT a, c;
-        memcpy((char *)b, (char *)&p->Pdouble, 8);
-        a = ((unsigned INT)b[0] << 24) | ((unsigned INT)b[1] << 16) |
-            ((unsigned INT)b[2] << 8) | (unsigned INT)b[3];
-        c = ((unsigned INT)b[4] << 24) | ((unsigned INT)b[5] << 16) |
-            ((unsigned INT)b[6] << 8) | (unsigned INT)b[7];
-        kpcode_pack_int(&words[KPCODE_PCODE_AUX00], (INT)a);
-        kpcode_pack_int(&words[KPCODE_PCODE_AUX10], (INT)c);
+        kpcode_pack_int(&words[KPCODE_PCODE_AUX00], p->Pdouble1);
+        kpcode_pack_int(&words[KPCODE_PCODE_AUX10], p->Pdouble2);
     } else {
         kpcode_pack_int(&words[KPCODE_PCODE_AUX00], p->p_u.p_int);
         kpcode_pack_int(&words[KPCODE_PCODE_AUX10], 0);

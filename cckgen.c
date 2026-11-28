@@ -1,4 +1,4 @@
-/* CCKGEN.C - compact native KIR1 -> KPCODE2 driver. */
+/* CCKGEN.C - compact native KIR1 -> KPCODE3 driver. */
 #include "cckir.h"
 #include <stdlib.h>
 #include <string.h>
@@ -22,7 +22,7 @@ init_pdp6_target(int optimize)
     tgmachuse.adjbp = 0;
     tgmachuse.fltr = 0;
     tgmachuse.fpimm = 0;
-    tgmachuse.mapdbl = -1;
+    tgmachuse.mapdbl = 0; /* Canonical native D-format constants. */
     optpar = optgen = optobj = optimize;
     delete = assemble = link = 0;
     longidents = 1;

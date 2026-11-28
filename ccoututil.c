@@ -273,4 +273,67 @@ host_pdp10_float_word_v1 (double d)
     return (unsigned INT) word;
 }
 
+void
+host_pdp10_double_words (double d, unsigned INT * w1, unsigned INT * w2)
+{
+    unsigned INT fraction, high, low, mask35, mask36;
+    unsigned long lo32, hi32;
+    int exponent, negative;
+
+    host_double_bits (d, &lo32, &hi32);
+    exponent = (int)((hi32 >> 20) & 03777UL);
+    negative = (hi32 & (1UL << 31)) != 0;
+    /* Host subnormal doubles are below the minimum PDP-10 exponent. */
+    if (exponent == 0)
+	{
+	*w1 = 0;
+	*w2 = 0;
+	return;
+	}
+    if (exponent == 03777) {
+	/* PDP-10 D format has no infinity or NaN encoding.  Source
+	** constants and folded expressions can overflow the host format;
+	** diagnose them as user errors, not compiler internal failures. */
+	error ("Floating constant overflow (no PDP-10 nonfinite value)");
+	*w1 = *w2 = 0;
+	return;
+    }
+    exponent -= 894; /* IEEE excess-1023 to PDP-10 excess-128. */
+    if (exponent <= 0) {
+	*w1 = *w2 = 0;
+	return;
+    }
+    if (exponent > 0377) {
+	error ("Floating constant exponent exceeds PDP-10 D format");
+	*w1 = *w2 = 0;
+	return;
+    }
+
+    /* The IEEE double's 53-bit significand fits exactly in the
+    ** PDP-10 two-word 62-bit fraction.  Preserve the entire
+    ** significand rather than reconstructing it in 18-bit pieces:
+    ** the old emitter spilled bits into the sign-copy slot and
+    ** encoded -2^35+1 with a false high-word fraction.
+    */
+    fraction = ((unsigned INT)1 << 52)
+	| ((unsigned INT)(hi32 & 0xfffffUL) << 32)
+	| (unsigned INT)lo32;
+    fraction <<= 9;
+    mask35 = ((unsigned INT)1 << 35) - 1;
+    mask36 = ((unsigned INT)1 << 36) - 1;
+    high = ((unsigned INT)exponent << 27) | (fraction >> 35);
+    low = fraction & mask35;
+    if (negative) {
+	/* The D-format negative is a 71-bit two's complement:
+	** carry from the low 35 bits propagates into the high word.
+	** Bit 35 in the low storage word is the copied sign.
+	*/
+	low = (~low + 1) & mask35;
+	high = (~high + (low == 0)) & mask36;
+	low |= (unsigned INT)1 << 35;
+    }
+    *w1 = high;
+    *w2 = low;
+}
+
 #endif /* !__COMPILER_KCC__ */

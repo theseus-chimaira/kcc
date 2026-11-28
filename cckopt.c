@@ -1,4 +1,4 @@
-/* CCKOPT.C - minimal KPCODE2 replay driver for the KOPT phase. */
+/* CCKOPT.C - minimal KPCODE3 replay driver for the KOPT phase. */
 
 #include "ccsite.h"
 #include "cckpcode.h"
@@ -229,24 +229,10 @@ replay(FILE *fp)
             break;
         case KPCODE_REC_OUTFLT:
             if (n != 4U) return -1;
-#ifdef __COMPILER_KCC__
             {
                 INT fw[2]; fw[0] = w[2]; fw[1] = w[3];
                 outflt((int)w[0], fw, (int)w[1]);
             }
-#else
-            {
-                unsigned char b[8];
-                unsigned INT a = (unsigned INT)w[2], c = (unsigned INT)w[3];
-                double d;
-                b[0]=(unsigned char)(a>>24); b[1]=(unsigned char)(a>>16);
-                b[2]=(unsigned char)(a>>8); b[3]=(unsigned char)a;
-                b[4]=(unsigned char)(c>>24); b[5]=(unsigned char)(c>>16);
-                b[6]=(unsigned char)(c>>8); b[7]=(unsigned char)c;
-                memcpy((char *)&d, (char *)b, 8);
-                outflt((int)w[0], (INT *)&d, (int)w[1]);
-            }
-#endif
             break;
         case KPCODE_REC_OUTNL: outnl(); break;
         case KPCODE_REC_OUTPGHDR: outpghdr(); break;

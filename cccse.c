@@ -865,7 +865,7 @@ sameaddr(struct pcode * p, struct pcode * q, INT stkoffset)
 #endif
 
     case PTA_DCONST:
-	return (p->Pdouble == q->Pdouble);
+	return p->Pdouble1 == q->Pdouble1 && p->Pdouble2 == q->Pdouble2;
     case PTA_DCONST1:
 	return (p->Pdouble1 == q->Pdouble1);
     case PTA_DCONST2:

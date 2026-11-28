@@ -1742,7 +1742,7 @@ foldboth(void)
 	    if ((b->Ptype&PTF_ADRMODE) == PTA_DCONST)
 		{
 		b->Ptype = (b->Ptype& ~PTF_ADRMODE) | PTA_FCONST;
-		b->Pfloat = (float)b->Pdouble;
+		/* Obsolete disabled rule: D-format narrowing is not a float cast. */
 		}
 	    break;			/* escape loop */
 	    }

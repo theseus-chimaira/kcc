@@ -108,11 +108,12 @@ static void simptrcnv (PCODE *), simsmove (PCODE *),
 	simadjsp (PCODE *), simadjbp (PCODE *), simdfop (PCODE *),
 	outadjsp (INT), outdmovn (int);
 static void outadjbp_body (void);
-static void outmpdbl (INT *, int, int), outpreamble (void),
-	outlpnum (unsigned INT, int), outinstr (PCODE *),
+#ifdef __COMPILER_KCC__
+static void outmpdbl (INT *, int, int);
+#endif
+static void outpreamble (void), outinstr (PCODE *),
 	outrawnum (unsigned INT), outpnum (unsigned INT), outop (int), outreg (int),
-	outpti (int, INT), outaddress (PCODE *),
-	outlpnum (unsigned INT, int);
+	outpti (int, INT), outaddress (PCODE *);
 #if !HOST_DAIMOS
 static void outasmh (void);
 #endif
@@ -120,10 +121,6 @@ static int fltpow2 (PCODE *), outdecl (void),
 	   obplh (INT, INT *, int), bumpaddr (PCODE *), gasbplhval (int);
 static int directop (int);
 static int bigfloat (PCODE *);
-#ifndef __COMPILER_KCC__
-static unsigned long host_float_bits (float *);
-static void host_pdp10_double_words (double, unsigned INT *, unsigned INT *);
-#endif
 static void outfile (void); /* KAR-1/92, output of input filename (for NPD) */
 static void outnpd (PCODE *); /* KAR-1/92, added for output of NPD code */
 
@@ -1664,75 +1661,43 @@ outinstr (PCODE *p)
 	    }
 	    break;
 
-	case PTA_DCONST1:		/* Double-word floating constant */
-	case PTA_DCONST2:
-	    i = ((p->Ptype)&PTF_ADRMODE) == PTA_DCONST1 ? 1 : 2;
-	    outop (p->Pop);
-	    outreg (p->Preg);
-	    outc ('[');
-	    if (tgmachuse.mapdbl)		/* If target mach fmt is different */
-		{
+        case PTA_DCONST1:
+        case PTA_DCONST2:
+            i = (p->Ptype & PTF_ADRMODE) == PTA_DCONST1 ? 1 : 2;
+            outop(p->Pop);
+            outreg(p->Preg);
+            outc('[');
 #ifdef __COMPILER_KCC__
-		outmpdbl ((INT *)&p->Pdouble, i, 1);/* Mapped literal word */
-#else
-		unsigned INT dword1, dword2;
-		host_pdp10_double_words (p->Pdouble, &dword1, &dword2);
-		outpnum (i == 1 ? dword1 : dword2);
+            if (tgmachuse.mapdbl)
+                outmpdbl(p->p_u.p_di, i, 1);
+            else
 #endif
-		}
-	    else
-		outnum (i == 1 ? p->Pdouble1 : p->Pdouble2);
-	    outc (']');
+                outpnum((i == 1 ? p->Pdouble1 : p->Pdouble2) & (unsigned INT)0777777777777);
+            outc(']');
+            break;
 
-	    if (!delete)			/* If keeping asm file around, */
-		fprintf (out,"\t; %.20g", p->Pdouble); /* add comment for humans */
-	    break;
-
-	case PTA_DCONST:		/* Double-word floating constant */
-	    outop (p->Pop);
-	    outreg (p->Preg);
-	    if (p->Pdouble == 0)		/* Hack: if a double zero, */
-		{
-		outstr (crtsnam[CRT_ZERO]);	/* Use universal constant location. */
-		crtref[CRT_ZERO]++;
-		}
-	    else if (tgmachuse.mapdbl)	/* If target mach fmt is different */
-		{
-		outc ('[');
+        case PTA_DCONST:
+            outop(p->Pop);
+            outreg(p->Preg);
+            if (!p->Pdouble1 && !p->Pdouble2) {
+                outstr(crtsnam[CRT_ZERO]);
+                crtref[CRT_ZERO]++;
+            } else {
+                outc('[');
 #ifdef __COMPILER_KCC__
-		outmpdbl ((INT *) &p->Pdouble, 3, 1); /* Two-word code literal */
-#else
-		unsigned INT dword1, dword2;
-		host_pdp10_double_words (p->Pdouble, &dword1, &dword2);
-		outpnum (dword1);
-		if (GAS_DIALECT)
-		    outc (',');
-		else {
-		    outnl ();
-		    outtab ();
-		    outtab ();
-		}
-		outpnum (dword2);
+                if (tgmachuse.mapdbl)
+                    outmpdbl(p->p_u.p_di, 3, 1);
+                else
 #endif
-		outc (']');
-		}
-	    else
-		{
-		outc ('[');
-		outnum (p->Pdouble1);
-		if (GAS_DIALECT)
-		    outc (',');
-		else {
-		    outnl ();
-		    outtab ();
-		    outtab ();
-		}
-		outnum (p->Pdouble2);
-		outc (']');
-		}
-	    if (!delete)			/* If keeping asm file around, */
-		fprintf (out,"\t; %.20g",p->Pdouble); /* add comment for humans */
-	    break;
+                {
+                    outpnum(p->Pdouble1 & (unsigned INT)0777777777777);
+                    if (GAS_DIALECT) outc(',');
+                    else { outnl(); outtab(); outtab(); }
+                    outpnum(p->Pdouble2 & (unsigned INT)0777777777777);
+                }
+                outc(']');
+            }
+            break;
 
 	default:
 	    int_error ("outinstr: bad adrmode %d", (p->Ptype & PTF_ADRMODE));
@@ -3355,9 +3320,6 @@ obplh (INT boff, INT *awoff, int bsize)
 #define OF_WD1 01	/* Emit word 1 only */
 #define OF_WD2 02	/* Emit word 2 only */
 
-#ifndef __COMPILER_KCC__
-#endif
-
 int
 outflt (int typ, INT *ptr, int flags)
 /* Tspec of value, Generic pointer to object, and flags */
@@ -3374,138 +3336,41 @@ outflt (int typ, INT *ptr, int flags)
 	}
     if (typ == TS_FLOAT)
 	{
-#ifdef __COMPILER_KCC__
-	outpnum (*ptr);
-#else
-	{
-	/* Do not narrow to host IEEE float: the target has 27, not
-	** 24, significant bits.  The host-double encoder below rounds
-	** directly to the PDP-10 single-precision fraction. */
-	outpnum (host_pdp10_float_word_v1 (*(double *)ptr));
-	}
-#endif
+	outpnum (*ptr & (unsigned INT)0777777777777);
 	typ = 1;
 	}
+#ifdef __COMPILER_KCC__
     else if (tgmachuse.mapdbl)	/* If target mach fmt is different */
 	{
 	outmpdbl (ptr, 3, (flags & OF_CONST) != 0);
 	typ = 2;
 	}
-    else
-	{
-	outpnum (ptr[0]);
-	outnl ();
-	outtab ();
-	if (GAS_DIALECT)
-	    outstr (".word ");
-	if (flags & OF_CONST)
-	    outtab ();
-	outpnum (ptr[1]);
-	typ = 2;
-	}
+#endif
+    else {
+        outpnum(ptr[0] & (unsigned INT)0777777777777);
+        if (GAS_DIALECT && (flags & OF_CONST))
+            outc(',');
+        else {
+            outnl();
+            outtab();
+            if (GAS_DIALECT) outstr(".word ");
+            if (flags & OF_CONST) outtab();
+        }
+        outpnum(ptr[1] & (unsigned INT)0777777777777);
+        typ = 2;
+    }
     if (flags & OF_CONST)
 	outc (']');
 
-    /* Add a readable comment so humans can understand what the floating
-    ** constant is.  However, because this is slow, only do it when
-    ** we know the assembler output is going to stay around.
-    */
-    if (!delete)		/* If keeping asm file around, add comment */
-	{
-	fprintf (out, "\t; %.20g", * (double *)ptr);
-	}
     if (! (flags & OF_CONST))
 	outnl ();
     return typ;		/* Return # wds emitted */
 }
 
-static void		/* output exactly n digits octal unsigned int */
-outlpnum (unsigned INT n, int dig)
-{
-    if (dig > 1)
-	outlpnum (n >> 3, dig - 1);
-    putc ((n & 7) + '0', out);
-}
-
-#ifndef __COMPILER_KCC__
-static unsigned long
-host_float_bits (float * fp)
-{
-    unsigned char b[4];
-
-    if (sizeof (*fp) != 4)
-	int_error ("host_float_bits: unsupported host float size");
-    memcpy ((char *)b, (char *)fp, 4);
-    return host_u32_from_bytes (b);
-}
-
-static void
-host_pdp10_double_words (double d, unsigned INT * w1, unsigned INT * w2)
-{
-    unsigned INT fraction, high, low, mask35, mask36;
-    unsigned long lo32, hi32;
-    int exponent, negative;
-
-    host_double_bits (d, &lo32, &hi32);
-    exponent = (int)((hi32 >> 20) & 03777UL);
-    negative = (hi32 & (1UL << 31)) != 0;
-    /* Host subnormal doubles are below the minimum PDP-10 exponent. */
-    if (exponent == 0)
-	{
-	*w1 = 0;
-	*w2 = 0;
-	return;
-	}
-    if (exponent == 03777) {
-	/* PDP-10 D format has no infinity or NaN encoding.  Source
-	** constants and folded expressions can overflow the host format;
-	** diagnose them as user errors, not compiler internal failures. */
-	error ("Floating constant overflow (no PDP-10 nonfinite value)");
-	*w1 = *w2 = 0;
-	return;
-    }
-    exponent -= 894; /* IEEE excess-1023 to PDP-10 excess-128. */
-    if (exponent <= 0) {
-	*w1 = *w2 = 0;
-	return;
-    }
-    if (exponent > 0377) {
-	error ("Floating constant exponent exceeds PDP-10 D format");
-	*w1 = *w2 = 0;
-	return;
-    }
-
-    /* The IEEE double's 53-bit significand fits exactly in the
-    ** PDP-10 two-word 62-bit fraction.  Preserve the entire
-    ** significand rather than reconstructing it in 18-bit pieces:
-    ** the old emitter spilled bits into the sign-copy slot and
-    ** encoded -2^35+1 with a false high-word fraction.
-    */
-    fraction = ((unsigned INT)1 << 52)
-	| ((unsigned INT)(hi32 & 0xfffffUL) << 32)
-	| (unsigned INT)lo32;
-    fraction <<= 9;
-    mask35 = ((unsigned INT)1 << 35) - 1;
-    mask36 = ((unsigned INT)1 << 36) - 1;
-    high = ((unsigned INT)exponent << 27) | (fraction >> 35);
-    low = fraction & mask35;
-    if (negative) {
-	/* The D-format negative is a 71-bit two's complement:
-	** carry from the low 35 bits propagates into the high word.
-	** Bit 35 in the low storage word is the copied sign.
-	*/
-	low = (~low + 1) & mask35;
-	high = (~high + (low == 0)) & mask36;
-	low |= (unsigned INT)1 << 35;
-    }
-    *w1 = high;
-    *w2 = low;
-}
-#endif
-
 /* OUTMPDBL - Output mapped double-format constant
 **	This is also used by CCGEN for data.
 */
+#ifdef __COMPILER_KCC__
 static void
 outmpdbl (INT *ip, int which, int literal)
 /* 1 = first word, 2 = second word, 3 = both.
@@ -3513,8 +3378,6 @@ outmpdbl (INT *ip, int which, int literal)
  * still requires two separately emitted assembler data words.
  */
 {
-#ifdef  __COMPILER_KCC__		/* native floating point format */
-
     INT second;		/* 2nd word is the different one */
     INT exp;		/* Gotta derive new exponent */
 
@@ -3537,66 +3400,8 @@ outmpdbl (INT *ip, int which, int literal)
 	outstr (GAS_DIALECT && literal ? "," : "\n\t\t");
     if (which&02)
 	outpnum (second);	/* 2nd word has been mapped */
-#else			/* not native - assume IEEE as used by Turbo C */
-    /*
-     *	MSDOS version:
-     *		Convert float/double from MSDOS internal format
-     *				     to PDP-10 internal (hardware) format
-     */
-    unsigned INT value   = 0,
-		 second  = 0,
-		 exp     = 0,
-		 sign    = 0,
-		 outword = 0;
-
-    unsigned long lo32 = 0, hi32 = 0, f32 = 0;
-
-    if (which == 3)			/* double precision input */
-	{
-	unsigned INT word1, word2;
-	host_pdp10_double_words (*((double *)ip), &word1, &word2);
-	outpnum (word1);
-	outstr (GAS_DIALECT && literal ? "," : "\n\t\t");
-	outpnum (word2);
-	return;
-	}
-    else				/* floating point */
-	{
-	if (which == 2)
-	    ip++;			/* use 2nd wd instead of 1st */
-
-	f32 = host_float_bits ((float *)ip);
-	if (f32 == 0)
-	    {
-	    outpnum (0L);		/* special case: input = zero; */
-	    return;
-	    }
-	/*
-	 *	input is one long integer;
-	 *	First bit is sign; next 8 bits are exponent in XS 128.
-	 *	Remaining 23 bits are fraction with leading 1 implied.
-	 */
-	sign   = (f32 & (1UL << 31));
-	exp    = (f32 >> 23) & 0377;	    /* normalize exponent */
-	exp    = exp + 2;                   /* adjust to PDP-10 world  */
-	value  = (f32 & 037777777L);	    /* isolate fractional part */
-	value  = value  + 040000000L;	    /* add implied leading 1   */
-
-	if (sign)			/* if negative, */
-	    {
-	    value = ((unsigned int) -((int) value)) & 077777777L;	/*    take 2's complement of value */ // FW KCC-NT
-	    exp   = ~exp   & 0377;	/*    take 1's complement of exp   */
-	    }
-	/*
-	 *	Now output combined transformed parts in 2 18-bit chunks.
-	 */
-	outword = (sign | (exp << 23) | (value >> 1)) >> 14;
-	outpnum (outword);		/* high 18 bits of result */
-	outword = (value << 3);		/* remaining 15 bits, 0 terminated */
-	outlpnum (outword, 6);
-	}
-#endif
 }
+#endif
 
 /* BINEXP - count zero bits to right of rightmost 1 in word.
 **	Used for converting a power-of-2 value into a shift count.
