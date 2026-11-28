@@ -3131,8 +3131,8 @@ rrpre2(struct pcode * p, struct pcode * np)
 	** a PUSH.
 	*/
 		case P_PUSH:
-		    if (p != before(np))
-			break;	/* For now */
+		    if (p != before(np) || prevskips(p) || p->Preg != s)
+                    break; /* Must consume the unskipped high word. */
 
 	    /* Check out addressing mode, and forget it unless
 	    ** it's a plain vanilla REGIS, MINDEXED, or DCONST.
@@ -3156,8 +3156,9 @@ rrpre2(struct pcode * p, struct pcode * np)
 		    switch (p->Ptype)		/* Now fix up memory operand */
 			{
 			case PTA_REGIS:
-			    p->Pr2++;			/* MOVE R+1,R2+1 */
-						/* PUSH P,R2 */
+			    /* Push the high source, not the removed destination. */
+                            np->Pr2 = p->Pr2;
+                            p->Pr2++; /* MOVE R+1,R2+1 */
 			    break;
 			case PTA_MINDEXED:
 			    dropinstr(np);			/* Flush new instr */
