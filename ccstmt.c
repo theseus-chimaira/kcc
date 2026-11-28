@@ -4169,8 +4169,14 @@ parglist(struct symbol * s, struct type * ft)
 	    }
 	if (proto)
 	    {
-	    if (proto->Tproto == NULL && token == T_COMMA)
-		error("Number of args doesn't match function prototype");
+	    if (proto->Tproto == NULL && token == T_COMMA) {
+		/* An old-style definition supplies only diagnostic type
+		** information, not a prototype or an argument constraint. */
+		if (warnf)
+		    advise("Number of args doesn't match function def");
+		else
+		    error("Number of args doesn't match function prototype");
+	    }
 
 	    proto = proto->Tproto;
 	    }
