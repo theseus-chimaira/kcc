@@ -531,6 +531,18 @@ substatement_v35(void)
     return scopedstmt_v35(statement);
 }
 
+/* GNU C permits a label at the end of a compound statement.  Use the
+** existing empty-statement representation and leave the closing brace
+** for the compound parser, including its scope and VLA cleanup.
+*/
+static NODE *
+labelbody_v61e(void)
+{
+    if (clevkcc && token == T_RBRACE)
+        return NULL;
+    return statement();
+}
+
 static NODE *
 statement(void)
 {
@@ -600,7 +612,7 @@ statement(void)
 		nextoken();			/* skip over lab: */
 		nlabel = plabel(sym, 1);	/* get label symbol number */
                 vla_labeldef_v12(nlabel);
-		s = ndefl(N_LABEL, statement());	/* make label node */
+		s = ndefl(N_LABEL, labelbody_v61e()); /* make label node */
 		s->Nxfsym = nlabel;
 		return(s);			/* make no stmt label! */
 		}
@@ -1122,7 +1134,7 @@ casestmt(void)
 
     /* checked value and set in list of cases, parse rest of case statement */
     expect (T_COLON);			/* colon comes after expression */
-    this->Nleft = statement();		/* only parse after setting swcases */
+    this->Nleft = labelbody_v61e();	/* only parse after setting swcases */
     return this;			/* return with whole of case stmt */
 }
 
@@ -1146,7 +1158,7 @@ defaultstmt(void)
 
     expect(T_COLON);
     sw.swdefault = n = ndefop(Q_DEFAULT);
-    n->Nleft = statement();
+    n->Nleft = labelbody_v61e();
     return n;
 }
 
